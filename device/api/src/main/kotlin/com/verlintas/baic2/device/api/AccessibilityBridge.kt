@@ -68,4 +68,11 @@ interface AccessibilityBridge {
 
     /** True when a text input currently owns the input focus (or one exists). */
     fun editableFocused(): Boolean
+
+    /**
+     * Captures the current display through the accessibility screenshot API
+     * (API 30+, requires `canTakeScreenshot` in the service config). No
+     * runtime dialog and no MediaProjection involved; PNG bytes on success.
+     */
+    suspend fun captureScreen(): Result<ByteArray>
 }

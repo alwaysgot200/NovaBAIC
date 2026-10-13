@@ -1,0 +1,132 @@
+/*
+ * Copyright (C) 2026 Verlintas
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of BetterAIChat2.
+ *
+ * BetterAIChat2 is free software: you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * BetterAIChat2 is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+ * A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * BetterAIChat2. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.verlintas.baic2.floatball
+
+import com.verlintas.baic2.device.api.AccessibilityBridge
+import com.verlintas.baic2.device.api.ScreenshotProvider
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+
+/**
+ * 四级感知阶梯：a11y 文本 → a11y 截图（API 30+，无对话框）→
+ * MediaProjection（需授权）。每级先于下一级；文本路径命中时零截屏、
+ * 零闪烁、毫秒级。Shizuku `screencap` 备用级暂缓（exec 只回文本，
+ * 二进制需走文件中转，待上游 shell 桥支持字节输出后接入）。
+ */
+@Singleton
+class ScreenPerceiver @Inject constructor(
+    private val accessibility: AccessibilityBridge,
+    private val screenshotProvider: ScreenshotProvider,
+) {
+
+    sealed interface Perception {
+        /** 无障碍树文本足够丰富，直接作为问题内容。 */
+        data class Text(val text: String) : Perception
+
+        /** 像素帧（已过质检），交给 OCR。[viaProjection] 标记来源（投影帧用完即释放）。 */
+        data class Image(val bytes: ByteArray, val viaProjection: Boolean) : Perception
+
+        /** 投影未授权：需要用户确认（服务层走 FloatCaptureActivity）。 */
+        data object NeedsProjection : Perception
+
+        /** 全阶梯失败，[reason] 供文案映射。 */
+        data class Failed(val reason: String) : Perception
+    }
+
+    val accessibilityConnected: Boolean get() = accessibility.connected.value
+
+    /** 无障碍连接状态流（设置页徽章）。 */
+    val a11yConnected get() = accessibility.connected
+
+    /** 单击预热：只读无障碍文本（无副作用），双击到达即丢弃。 */
+    suspend fun readA11yText(): String? {
+        if (!accessibility.connected.value) return null
+        return withContext(Dispatchers.Default) { accessibility.screenText(MAX_NODES) }
+            .takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * 单次参谋的感知入口。[preheatedText] 为预热结果，命中即省去二次遍历。
+     */
+    suspend fun quickPerceive(preheatedText: String? = null): Perception {
+        if (accessibility.connected.value) {
+            val text = preheatedText ?: readA11yText()
+            if (!text.isNullOrBlank() && text.length >= MIN_TEXT_CHARS) {
+                return Perception.Text(text)
+            }
+            // 文本稀薄：当前帧大概率图片为主，走像素路径。
+            a11yScreenshotWithRetry()?.let { return it }
+        }
+        return projectionPerception()
+    }
+
+    /** 阶梯②：无障碍截图 API（同进程、无对话框、无投影指示灯）。 */
+    private suspend fun a11yScreenshotWithRetry(): Perception? {
+        repeat(2) { attempt ->
+            val result = accessibility.captureScreen()
+            val bytes = result.getOrNull()
+            if (bytes != null) {
+                val gray = withContext(Dispatchers.Default) { FrameQuality.grayFrame(bytes) }
+                if (gray != null && !FrameQuality.isBlank(gray)) {
+                    return Perception.Image(bytes, viaProjection = false)
+                }
+                android.util.Log.w(TAG, "a11y screenshot blank (attempt=$attempt)")
+                // 疑似黑/白过渡帧：等一拍重采一次。
+                if (attempt == 0) delay(RETRY_DELAY_MS)
+            } else {
+                android.util.Log.w(
+                    TAG,
+                    "a11y screenshot failed: ${result.exceptionOrNull()?.message}",
+                )
+                return null // API 不可用（<API 30 或被拒），直接降级
+            }
+        }
+        return null
+    }
+
+    /** 阶梯④：MediaProjection（调用方保证已授权或已走完授权流程）。 */
+    suspend fun projectionPerception(): Perception {
+        if (!screenshotProvider.ready.value) return Perception.NeedsProjection
+        repeat(2) { attempt ->
+            val bytes = screenshotProvider.capture().getOrNull()
+            if (bytes != null) {
+                val gray = withContext(Dispatchers.Default) { FrameQuality.grayFrame(bytes) }
+                if (gray != null && !FrameQuality.isBlank(gray)) {
+                    return Perception.Image(bytes, viaProjection = true)
+                }
+                if (attempt == 0) delay(RETRY_DELAY_MS)
+            } else {
+                return Perception.Failed("capture_failed")
+            }
+        }
+        return Perception.Failed(REASON_BLANK)
+    }
+
+    companion object {
+        private const val TAG = "ScreenPerceiver"
+        const val MIN_TEXT_CHARS = 30
+        const val MAX_NODES = 400
+        const val RETRY_DELAY_MS = 300L
+        const val REASON_BLANK = "blank_frame"
+    }
+}

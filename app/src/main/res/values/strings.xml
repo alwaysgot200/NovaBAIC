@@ -11,4 +11,75 @@
     <string name="dock_footer">本地优先 · 无遥测</string>
     <string name="dock_channel" translatable="false">dev</string>
 
+    <!-- 悬浮球 -->
+    <string name="float_notification_channel">悬浮球</string>
+    <string name="float_notification_title">BetterAIChat2 悬浮球</string>
+    <string name="float_notification_text">点击悬浮球快捷操作</string>
+    <string name="float_notification_show">显示悬浮球</string>
+    <string name="float_ball_hidden_hint">悬浮球已隐藏，可在通知栏恢复</string>
+    <!-- 悬浮球 · 扇形子球 -->
+    <string name="float_fan_ask">问答</string>
+    <string name="float_fan_main">主界面</string>
+    <string name="float_fan_settings">设置</string>
+    <string name="float_fan_hide">隐藏</string>
+    <string name="float_fan_about">关于</string>
+    <string name="float_fan_exit">退出</string>
+
+    <!-- 悬浮球 · 录制态 -->
+    <string name="float_recording_started">连续参谋已开启，双击悬浮球停止</string>
+    <string name="float_recording_stopped">连续参谋已停止</string>
+    <string name="float_recording_failed">屏幕捕获中断，已停止连续参谋</string>
+    <string name="float_recording_session_expired">达到时长上限，连续参谋已自动停止</string>
+
+    <!-- 悬浮球 · 设置页 -->
+    <string name="float_settings_title">老参谋设置</string>
+    <string name="float_settings_continuous">连续参谋</string>
+    <string name="float_settings_poll_hint">抓帧节奏：画面变化被发现的快慢；静止画面不产生任何开销</string>
+    <string name="float_settings_poll_slow">省电 2秒</string>
+    <string name="float_settings_poll_normal">标准 0.8秒</string>
+    <string name="float_settings_poll_fast">灵敏 0.5秒</string>
+    <string name="float_settings_session_hint">单次连续参谋的最长时长，到期自动停止</string>
+    <string name="float_settings_session_15">15 分钟</string>
+    <string name="float_settings_session_30">30 分钟</string>
+    <string name="float_settings_session_60">60 分钟</string>
+    <string name="float_settings_session_unlimited">不限</string>
+    <string name="float_settings_permissions">权限状态</string>
+    <string name="float_settings_perm_a11y">无障碍服务（单击毫秒级识屏的前提）</string>
+    <string name="float_settings_perm_overlay">悬浮窗权限</string>
+    <string name="float_settings_perm_projection">屏幕投影：单击/双击时按需弹窗授权，拍完即关</string>
+    <string name="float_settings_go_enable">去开启</string>
+    <string name="float_settings_granted">已开启</string>
+    <string name="float_settings_session">老参谋会话</string>
+    <string name="float_settings_open_session">在主界面打开</string>
+    <string name="float_settings_clear_session">清空会话消息</string>
+    <string name="float_settings_clear_confirm">确认清空老参谋的全部问答消息？</string>
+    <string name="float_settings_clear_yes">清空</string>
+    <string name="float_settings_clear_no">取消</string>
+    <string name="float_about_title">关于</string>
+    <string name="float_settings_keepalive_hint">保活建议：国产 ROM 请在系统设置中允许本应用后台自启/无限制。</string>
+    <string name="float_about_tagline">本地优先的 AI 对话客户端</string>
+    <string name="float_about_version">版本：%1$s（%2$d）</string>
+    <string name="float_about_package">包名：%1$s</string>
+    <string name="float_about_license">许可证：GPL-3.0-or-later</string>
+    <string name="float_about_copyright">Copyright © 2026 Verlintas</string>
+    <string name="float_about_ok">确定</string>
+    <string name="float_permission_title">需要悬浮窗权限</string>
+    <string name="float_permission_body">悬浮球是一个常驻屏幕最上层的快捷入口。请在接下来的页面中允许「显示在其他应用上层」。</string>
+    <string name="float_permission_grant">去开启悬浮窗权限</string>
+
+    <!-- 悬浮球 · 屏幕问答 -->
+    <string name="float_ask_conversation_title">老参谋</string>
+    <string name="float_ask_title">老参谋</string>
+    <string name="float_ask_close">✕ 关闭</string>
+    <string name="float_ask_status_ocr">正在识别屏幕文字…</string>
+    <string name="float_ask_thinking">正在思考…</string>
+    <string name="float_ask_no_text">屏幕上没有识别到文字。</string>
+    <string name="float_ask_denied">未获得屏幕录制授权，已取消屏幕问答</string>
+    <string name="float_ask_no_config">尚未配置 AI 服务，请先在应用中完成配置。</string>
+    <string name="float_ask_failed">出错了：%1$s</string>
+    <string name="float_ask_question_label">【屏幕内容】</string>
+    <string name="float_answer_label">【参谋】</string>
+    <string name="float_ask_blank">屏幕内容为空（可能息屏或该应用禁止截屏）</string>
+    <string name="float_ask_system">你是屏幕问答助手。用户给你一段由 OCR 从手机当前屏幕识别出的文本（可能有识别噪声，可能缺少排版）。请用简体中文简洁地回答：如果用户的问题与屏幕内容相关，就基于内容作答；否则概述屏幕要点。不要复述原文。</string>
+
 </resources>

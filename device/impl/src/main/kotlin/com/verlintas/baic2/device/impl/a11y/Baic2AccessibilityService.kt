@@ -20,8 +20,12 @@
 package com.verlintas.baic2.device.impl.a11y
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Bitmap
+import android.os.Build
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import dagger.hilt.android.AndroidEntryPoint
+import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -42,5 +46,49 @@ class Baic2AccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         bridge.detach(this)
         super.onDestroy()
+    }
+
+    /**
+     * Captures the current display via [AccessibilityService.takeScreenshot]
+     * (API 30+, requires `canTakeScreenshot` in the service config). No
+     * runtime dialog and no MediaProjection involved.
+     */
+    fun captureScreenCompat(onResult: (Result<ByteArray>) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            onResult(Result.failure(IllegalStateException("screenshot_requires_api_30")))
+            return
+        }
+        takeScreenshot(
+            Display.DEFAULT_DISPLAY,
+            mainExecutor,
+            object : TakeScreenshotCallback {
+                override fun onSuccess(screenshot: ScreenshotResult) {
+                    val bytes = runCatching {
+                        val hardware = Bitmap.wrapHardwareBuffer(
+                            screenshot.hardwareBuffer,
+                            screenshot.colorSpace,
+                        )
+                        val soft = hardware?.copy(Bitmap.Config.ARGB_8888, false)
+                        hardware?.recycle()
+                        screenshot.hardwareBuffer.close()
+                        soft?.let { bmp ->
+                            val out = ByteArrayOutputStream()
+                            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                            bmp.recycle()
+                            out.toByteArray()
+                        }
+                    }.getOrNull()
+                    if (bytes != null) {
+                        onResult(Result.success(bytes))
+                    } else {
+                        onResult(Result.failure(IllegalStateException("screenshot_decode_failed")))
+                    }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    onResult(Result.failure(IllegalStateException("screenshot_failed_$errorCode")))
+                }
+            },
+        )
     }
 }

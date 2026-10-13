@@ -167,6 +167,21 @@ class AndroidAccessibilityBridge @Inject constructor() : AccessibilityBridge {
         root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) != null || root.firstEditable() != null
     }.getOrDefault(false)
 
+    override suspend fun captureScreen(): Result<ByteArray> = withContext(Dispatchers.Main) {
+        val active = service
+            ?: return@withContext Result.failure(
+                IllegalStateException(
+                    "accessibility_not_enabled: ask the user to enable the BAIC2 accessibility service " +
+                        "in 设置 → 无障碍, then retry.",
+                ),
+            )
+        suspendCancellableCoroutine { continuation ->
+            active.captureScreenCompat { result ->
+                if (continuation.isActive) continuation.resume(result)
+            }
+        }
+    }
+
     override fun screenText(maxNodes: Int): String {
         val root = service?.rootInActiveWindow ?: return ""
         val lines = mutableListOf<String>()
