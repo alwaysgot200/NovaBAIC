@@ -35,6 +35,14 @@ val keystoreProperties = Properties().apply {
 fun signingValue(environment: String, property: String): String? =
     System.getenv(environment) ?: keystoreProperties.getProperty(property)
 
+// 开发环境预置密钥（local.properties 已被 gitignore）：dev.deepseekApiKey=sk-xxx
+// 仅注入 debug 构建；release 恒为空串，生产环境不受影响。
+val devProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val devDeepseekApiKey: String = devProperties.getProperty("dev.deepseekApiKey") ?: ""
+
 android {
     namespace = "com.verlintas.baic2"
     compileSdk = 37
@@ -64,7 +72,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "DEV_DEEPSEEK_API_KEY", "\"$devDeepseekApiKey\"")
+        }
         release {
+            buildConfigField("String", "DEV_DEEPSEEK_API_KEY", "\"\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

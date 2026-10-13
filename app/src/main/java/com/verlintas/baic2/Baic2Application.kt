@@ -41,9 +41,15 @@ class Baic2Application : Application() {
     @Inject
     lateinit var runRepository: RunRepository
 
+    @Inject
+    lateinit var devAgentSeeder: DevAgentSeeder
+
     override fun onCreate() {
         super.onCreate()
         runCatching { automationBootstrap.start() }
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { devAgentSeeder.seedIfNeeded() }
+        }
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { mcpManager.refresh() }
         }
