@@ -35,3 +35,6 @@ keystore.properties
 
 # Reference-only asset the owner dropped in for design study
 /Coupon Reveal.json
+
+# 老参谋冒烟截图 (测试产物)
+dev/smoke-*.png
