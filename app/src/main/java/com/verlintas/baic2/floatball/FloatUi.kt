@@ -24,6 +24,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -429,6 +430,18 @@ internal object FloatUi {
             setPadding(dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 8))
         }
 
+        // 联系人状态条（§7）：显示当前绑定联系人，点击打开画像管理页。
+        // 文案/点击由服务层随 ScreenAdvisor.activeContact 更新。
+        val statusBar = TextView(context).apply {
+            text = context.getString(R.string.float_profile_status_unbound)
+            setTextColor(0xCCFFFFFF.toInt())
+            textSize = 12.5f
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(context, 16), dp(context, 6), dp(context, 16), dp(context, 6))
+            setSingleLine(true)
+            ellipsize = TextUtils.TruncateAt.END
+        }
+
         val inputBar = buildInputBar(context, inputCallbacks)
 
         val root = LinearLayout(context).apply {
@@ -466,10 +479,11 @@ internal object FloatUi {
             }
             addView(header)
             addView(divider(context))
+            addView(statusBar)
             addView(transcriptContainer)
             addView(inputBar)
         }
-        return SplitPanel(root, handle, transcriptContainer, inputBar)
+        return SplitPanel(root, handle, transcriptContainer, inputBar, statusBar)
     }
 
     /** 分屏面板句柄：服务层操作所需的句柄集合。 */
@@ -478,6 +492,7 @@ internal object FloatUi {
         val handle: View,
         val transcriptContainer: FrameLayout,
         val inputBar: LinearLayout,
+        val statusBar: TextView,
     )
 
     /** 「新对话」同款输入行的行为接线（由服务层实现）。 */

@@ -58,6 +58,22 @@ class ScreenPerceiver @Inject constructor(
     /** 无障碍连接状态流（设置页徽章）。 */
     val a11yConnected get() = accessibility.connected
 
+    /** 前台包名（联系人识别 L1 的信号之一，读失败按未知处理）。 */
+    fun foregroundPackage(): String? =
+        runCatching { accessibility.foregroundPackage() }.getOrNull()
+
+    /** 活动窗口标题（IM 聊天页即对方/群名，联系人识别 L1 主信号）。 */
+    fun windowTitle(): String? =
+        runCatching { accessibility.windowTitle() }.getOrNull()
+
+    /** 输入框是否聚焦（IME 弹起判定；多屏滚动前置条件之一）。 */
+    fun editableFocused(): Boolean =
+        runCatching { accessibility.editableFocused() }.getOrDefault(false)
+
+    /** 发送返回键（收拢 IME 等）；无障碍不可用返回 false。 */
+    suspend fun pressBack(): Boolean =
+        runCatching { accessibility.pressKey("back").isSuccess }.getOrDefault(false)
+
     /** 触点预热：只读无障碍文本（无副作用），未确认长按即丢弃。 */
     suspend fun readA11yText(): String? {
         if (!accessibility.connected.value) return null

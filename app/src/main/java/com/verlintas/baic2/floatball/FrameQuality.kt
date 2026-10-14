@@ -130,6 +130,33 @@ internal object FrameQuality {
     }
 
     /**
+     * 只解析头块拿像素尺寸（不分载整图），供几何分区在掩膜前确定坐标系。
+     * 非图片字节返回 null。调用方须在 Dispatchers.Default 上。
+     */
+    fun bitmapSize(bytes: ByteArray): Pair<Int, Int>? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        return if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+            bounds.outWidth to bounds.outHeight
+        } else {
+            null
+        }
+    }
+
+    /**
+     * 底部系统带（手势条/三键导航/IME 候选栏）黑色掩膜（方案 §12.2 第 1 层）：
+     * 该区域是纯系统像素，物理切除最干净；顶部不掩膜——状态栏行 OCR 后按
+     * 包围盒丢弃，标题带还要留给联系人识别。输出 JPEG；无带可裁/失败返回原图。
+     * 调用方须在 Dispatchers.Default 上。
+     */
+    fun cropBands(bytes: ByteArray, width: Int, height: Int, bottomPx: Int): ByteArray {
+        if (bottomPx <= 0) return bytes
+        val bottom = bottomPx.coerceAtMost(height - 1)
+        if (bottom <= 0) return bytes
+        return maskRects(bytes, listOf(Rect(0, height - bottom, width, height)))
+    }
+
+    /**
      * OCR 文本相似度（字符二元组 Jaccard），用于连续模式丢弃重复内容。
      * 中文按字、英文按词均可被 2-gram 覆盖。
      */

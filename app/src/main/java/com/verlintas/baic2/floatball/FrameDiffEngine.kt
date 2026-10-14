@@ -20,6 +20,7 @@
 package com.verlintas.baic2.floatball
 
 import android.graphics.Rect
+import com.verlintas.baic2.device.api.AccessibilityBridge
 import com.verlintas.baic2.device.api.OcrProvider
 import com.verlintas.baic2.device.api.ScreenshotProvider
 import javax.inject.Inject
@@ -51,8 +52,11 @@ import kotlinx.coroutines.withContext
 class FrameDiffEngine @Inject constructor(
     private val screenshotProvider: ScreenshotProvider,
     private val ocrProvider: OcrProvider,
+    private val accessibility: AccessibilityBridge,
     private val advisor: ScreenAdvisor,
     private val prefs: AdvisorPrefs,
+    private val geometryProvider: ScreenGeometryProvider,
+    private val noiseRules: NoiseRules,
 ) {
 
     sealed interface Signal {
@@ -172,11 +176,10 @@ class FrameDiffEngine @Inject constructor(
                 }
 
                 candidate = null // 触发后重新蓄水
-                val masked = withContext(Dispatchers.Default) {
-                    FrameQuality.maskRects(current.bytes, maskProvider())
-                }
+                // 第 1 层：自身浮窗矩形 + 底部系统带一次位图掩膜；
+                // 第 2 层：OCR 后几何分流（状态栏/标题带）+ 行级正则（§12.2/§12.3）。
                 val text = withContext(Dispatchers.Default) {
-                    ocrProvider.recognizeText(masked).getOrNull()?.trim()
+                    recognizeCleanBody(current.bytes, maskProvider())
                 }
                 if (text.isNullOrEmpty()) {
                     // OCR 空结果（纯图页）：推进灰度基线，免得每 tick 重 OCR。
@@ -222,6 +225,40 @@ class FrameDiffEngine @Inject constructor(
     fun destroy() {
         stop()
         engineScope.cancel()
+    }
+
+    /**
+     * 连续帧的三层治理：自身浮窗 + 底部系统带合并成一次位图掩膜，OCR 后按
+     * 包围盒丢掉状态栏行、分流标题带，正文过行级正则库；拿不到几何尺寸时
+     * 退回「只掩浮窗 + 整页文本」的旧行为，保证不错杀。
+     */
+    private suspend fun recognizeCleanBody(bytes: ByteArray, overlayRects: List<Rect>): String? {
+        val size = FrameQuality.bitmapSize(bytes)
+        val geometry = size?.let { (width, height) ->
+            val imeOpen = runCatching {
+                accessibility.connected.value && accessibility.editableFocused()
+            }.getOrDefault(false)
+            geometryProvider.compute(width, height, imeOpen)
+        }
+        val mask = overlayRects.toMutableList()
+        if (geometry != null) {
+            mask += Rect(
+                0,
+                geometry.heightPx - geometry.bottomBandPx,
+                geometry.widthPx,
+                geometry.heightPx,
+            )
+        }
+        val masked = FrameQuality.maskRects(bytes, mask)
+        val lines = ocrProvider.recognize(masked).getOrNull()
+            ?: return ocrProvider.recognizeText(masked).getOrNull()?.trim()
+        if (geometry == null) {
+            return lines.joinToString("\n") { it.text.trim() }.takeIf { it.isNotBlank() }
+        }
+        val partition = OcrNoiseFilter.partition(lines, geometry)
+        return OcrNoiseFilter.clean(partition.bodyLines, noiseRules.get(), emptyList())
+            .joinToString("\n") { it.text.trim() }
+            .takeIf { it.isNotBlank() }
     }
 
     /** 触发时定格的候选帧。 */

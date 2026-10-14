@@ -174,6 +174,30 @@ class FloatBallService : Service() {
                 inputHandle?.refresh()
             }
         }
+        scope.launch {
+            // 联系人状态条：绑定显示主名，未绑定显示引导，点击进画像管理页。
+            screenAdvisor.activeContact.collect { contact ->
+                split?.statusBar?.text = if (contact != null) {
+                    getString(R.string.float_profile_status_bound, contact.displayName)
+                } else {
+                    getString(R.string.float_profile_status_unbound)
+                }
+            }
+        }
+    }
+
+    /** 打开联系人画像管理（§7 状态条入口；带当前联系人/会话便于直接改绑）。 */
+    private fun openProfileManager(contactId: Long) {
+        startActivity(
+            Intent(this, AdvisorProfileActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(AdvisorProfileActivity.EXTRA_CONTACT_ID, contactId)
+                val conversationId = screenAdvisor.transcript.value.conversationId
+                if (conversationId > 0) {
+                    putExtra(AdvisorProfileActivity.EXTRA_CONVERSATION_ID, conversationId)
+                }
+            },
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -319,6 +343,8 @@ class FloatBallService : Service() {
                             if (granted) runOneShot(null, settleMs = CONSENT_SETTLE_MS)
                         }
                         is ScreenAdvisor.Event.TurnStarted -> ensureSplit()
+                        // 与上一屏几乎相同：不展开面板，仅轻提示，避免误以为卡死。
+                        ScreenAdvisor.Event.Unchanged -> toast(R.string.float_screen_unchanged)
                         is ScreenAdvisor.Event.Failed -> ensureSplit() // 错误也要可见
                     }
                 }
@@ -565,6 +591,15 @@ class FloatBallService : Service() {
         splitParams = params
         // StateFlow 无新值不发射: 新视图创建后立即喂当前转录快照。
         transcript.render(screenAdvisor.transcript.value)
+        val active = screenAdvisor.activeContact.value
+        panel.statusBar.text = if (active != null) {
+            getString(R.string.float_profile_status_bound, active.displayName)
+        } else {
+            getString(R.string.float_profile_status_unbound)
+        }
+        panel.statusBar.setOnClickListener {
+            openProfileManager(screenAdvisor.activeContact.value?.contactId ?: -1L)
+        }
         inputHandle?.refresh()
         // 打开分屏=用户开始阅读：未读冒泡立即消失；阅读期间的新回合实时可见，
         // 不再计未读（turnCompletions 收集侧以 split != null 抑制）。

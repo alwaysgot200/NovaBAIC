@@ -5,21 +5,91 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的标签（必须指向 laocanmou 最新提交，如 v0.2.1）'
+        required: true
+        type: string
 
 permissions:
   contents: write
   actions: write
+
+# 发布流程不可取消：同一个标签只允许一条发布线，且绝不中断进行中的发布。
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   ANDROID_HOME: /usr/local/lib/android/sdk
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
 jobs:
-  release:
+  # 第一道门：标签必须打在 laocanmou 分支的最新提交上。
+  # GitHub 的 tag 推送事件无法按分支过滤，因此在作业内显式校验，
+  # 防止误把 main（上游镜像）或 laocanmou 的旧提交发布出去。
+  guard:
+    name: Verify tag is on laocanmou tip
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate tag
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$REF_NAME"
+          fi
+          case "$TAG" in
+            v[0-9]*) ;;
+            *)
+              echo "::error::版本标签必须以 v 加版本号开头（例如 v0.2.1），当前标签：$TAG"
+              exit 1
+              ;;
+          esac
+
+          git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG"
+          git fetch --quiet --depth=0 origin laocanmou
+
+          TAG_COMMIT="$(git rev-list -n1 "$TAG")"
+          TIP_COMMIT="$(git rev-parse origin/laocanmou)"
+          echo "标签 $TAG -> $TAG_COMMIT"
+          echo "origin/laocanmou 最新提交 -> $TIP_COMMIT"
+
+          if [ "$TAG_COMMIT" != "$TIP_COMMIT" ]; then
+            cat >&2 <<EOF
+          ::error::标签 $TAG 没有指向 laocanmou 分支的最新提交，拒绝发布。
+          请确认：1) laocanmou 已推送到远端；2) 在其最新提交上打标签；3) 标签与 app/build.gradle.kts 的 versionName 一致。
+          EOF
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  # 第二道门：完整构建。仓库检查、单测、lint、版本一致性、签名包全部通过后，
+  # 才把 APK 作为构件交给发布作业。
+  build:
+    name: Build signed release APK
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.guard.outputs.tag }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -42,26 +112,48 @@ jobs:
           tools/check-strings-sync.sh
           python3 tools/check-tool-schemas.py
 
-      - name: Check signing secrets
-        id: signing
+      - name: Verify versionName matches tag
         env:
-          KEYSTORE_BASE64: ${{ secrets.BAIC2_KEYSTORE_BASE64 }}
+          TAG: ${{ needs.guard.outputs.tag }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "Signing secrets are not configured; skipping the release."
+          set -euo pipefail
+          VN="$(sed -n 's/.*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
+          echo "APK versionName=$VN，发布标签=$TAG"
+          if [ "v$VN" != "$TAG" ]; then
+            echo "::error::标签 $TAG 与 app/build.gradle.kts 的 versionName=$VN 不一致，请先升版本号再打标签。"
+            exit 1
           fi
 
+      - name: Verify signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BAIC2_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.BAIC2_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BAIC2_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BAIC2_KEY_PASSWORD }}
+        run: |
+          set -eu
+          MISSING=()
+          [ -n "$KEYSTORE_BASE64" ] || MISSING+=("BAIC2_KEYSTORE_BASE64")
+          [ -n "$KEYSTORE_PASSWORD" ] || MISSING+=("BAIC2_KEYSTORE_PASSWORD")
+          [ -n "$KEY_ALIAS" ] || MISSING+=("BAIC2_KEY_ALIAS")
+          [ -n "$KEY_PASSWORD" ] || MISSING+=("BAIC2_KEY_PASSWORD")
+          if [ "${#MISSING[@]}" -ne 0 ]; then
+            echo "::error::缺少签名 Secrets：${MISSING[*]}。请在仓库 Settings → Secrets and variables → Actions 中配置后重跑。"
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: ./gradlew test
+
+      - name: Lint
+        run: ./gradlew :app:lintRelease
+
       - name: Decode release keystore
-        if: steps.signing.outputs.present == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.BAIC2_KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/baic2-release.keystore"
 
       - name: Build signed release
-        if: steps.signing.outputs.present == 'true'
         env:
           BAIC2_KEYSTORE_PATH: ${{ runner.temp }}/baic2-release.keystore
           BAIC2_KEYSTORE_PASSWORD: ${{ secrets.BAIC2_KEYSTORE_PASSWORD }}
@@ -69,19 +161,71 @@ jobs:
           BAIC2_KEY_PASSWORD: ${{ secrets.BAIC2_KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease
 
+      - name: Verify APK signature
+        run: |
+          set -euo pipefail
+          APK="$(ls app/build/outputs/apk/release/*.apk | head -n1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)"
+          "$APKSIGNER" verify --verbose "$APK"
+
+      - name: Verify APK version matches tag
+        env:
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: |
+          set -euo pipefail
+          APK="$(ls app/build/outputs/apk/release/*.apk | head -n1)"
+          AAPT2="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -n1)"
+          APK_VERSION="$("$AAPT2" dump badging "$APK" | sed -n "s/.* versionName='\([^']*\)'.*/\1/p" | head -n1)"
+          echo "成品 APK versionName=$APK_VERSION，发布标签=$TAG"
+          if [ "v$APK_VERSION" != "$TAG" ]; then
+            echo "::error::成品 APK 版本号 v$APK_VERSION 与发布标签 $TAG 不一致，拒绝发布。"
+            exit 1
+          fi
+
+      - name: Generate SHA-256 checksum
+        run: |
+          set -euo pipefail
+          cd app/build/outputs/apk/release
+          APK="$(ls *.apk | head -n1)"
+          sha256sum "$APK" > app-release.apk.sha256
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          if-no-files-found: error
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/*.sha256
+
+  # 第三道门：构建成功后才创建 GitHub Release 并刷新站点镜像。
+  publish:
+    name: Publish GitHub release
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk
+          path: release
+
       - name: Create GitHub release
-        if: steps.signing.outputs.present == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/release/*.apk
+          tag_name: ${{ needs.guard.outputs.tag }}
+          name: ${{ needs.guard.outputs.tag }}
+          files: |
+            release/*.apk
+            release/*.sha256
           generate_release_notes: true
           draft: false
-          prerelease: false
+          # 带连字符的语义化预发布标签（如 v0.2.1-rc1）标记为 prerelease。
+          prerelease: ${{ contains(needs.guard.outputs.tag, '-') }}
 
       # Release events created with GITHUB_TOKEN do not trigger other
       # workflows, so ask the site deployment to mirror the new APK.
       - name: Refresh the site mirror
-        if: steps.signing.outputs.present == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"

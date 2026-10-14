@@ -1,0 +1,64 @@
+{
+  "fields": [
+    { "key": "genderHint", "owner": "their", "group": "基本信息", "type": "enum", "label": "性别推测", "options": ["男", "女"] },
+    { "key": "ageRange", "owner": "their", "group": "基本信息", "type": "enum", "label": "年龄段", "options": ["20以下", "20-29", "30-39", "40-49", "50+"] },
+    { "key": "city", "owner": "their", "group": "基本信息", "type": "text", "label": "所在城市" },
+    { "key": "hometown", "owner": "their", "group": "基本信息", "type": "text", "label": "家乡" },
+
+    { "key": "occupation", "owner": "their", "group": "职业教育", "type": "text", "label": "职业" },
+    { "key": "position", "owner": "their", "group": "职业教育", "type": "text", "label": "职位" },
+    { "key": "company", "owner": "their", "group": "职业教育", "type": "text", "label": "公司" },
+    { "key": "industry", "owner": "their", "group": "职业教育", "type": "text", "label": "所在行业" },
+    { "key": "seniority", "owner": "their", "group": "职业教育", "type": "enum", "label": "资历层级", "options": ["新人", "执行层", "主管", "经理", "总监", "老板/决策人"] },
+    { "key": "education", "owner": "their", "group": "职业教育", "type": "enum", "label": "学历", "options": ["高中及以下", "大专", "本科", "硕士", "博士"] },
+    { "key": "school", "owner": "their", "group": "职业教育", "type": "text", "label": "院校" },
+    { "key": "major", "owner": "their", "group": "职业教育", "type": "text", "label": "专业" },
+    { "key": "hardSkills", "owner": "their", "group": "职业教育", "type": "tags", "label": "硬技能" },
+
+    { "key": "personality", "owner": "their", "group": "性格沟通", "type": "tags", "label": "性格标签" },
+    { "key": "commStyle", "owner": "their", "group": "性格沟通", "type": "enum", "label": "沟通风格", "options": ["直接干脆", "委婉客气", "理性分析", "热情健谈", "惜字如金"] },
+    { "key": "formality", "owner": "their", "group": "性格沟通", "type": "enum", "label": "称谓距离", "options": ["称您/正式", "称你/随意", "看场合"] },
+    { "key": "humorStyle", "owner": "their", "group": "性格沟通", "type": "enum", "label": "玩笑接受度", "options": ["接受玩笑", "只接受轻松", "保持严肃"] },
+
+    { "key": "interests", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "兴趣爱好" },
+    { "key": "recentTopics", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "近期关注话题" },
+
+    { "key": "relationType", "owner": "their", "group": "关系", "type": "enum", "label": "关系类型", "options": ["客户", "潜在客户", "同事", "上级", "合作方", "朋友", "家人", "暧昧对象", "其他"] },
+    { "key": "relationStage", "owner": "their", "group": "关系", "type": "text", "label": "关系阶段" },
+    { "key": "decisionRole", "owner": "their", "group": "关系", "type": "enum", "label": "采购角色", "options": ["决策人", "影响人", "执行人", "把关人", "未知"] },
+
+    { "key": "needs", "owner": "their", "group": "商机", "type": "textarea", "label": "核心需求", "memory": "fact" },
+    { "key": "painPoints", "owner": "their", "group": "商机", "type": "textarea", "label": "痛点", "memory": "fact" },
+    { "key": "budget", "owner": "their", "group": "商机", "type": "text", "label": "预算水平", "memory": "fact" },
+    { "key": "intentStage", "owner": "their", "group": "商机", "type": "enum", "label": "意向阶段", "options": ["破冰", "询盘", "比价", "犹豫", "促单", "成交", "售后"], "memory": "event" },
+    { "key": "objections", "owner": "their", "group": "商机", "type": "tags", "label": "主要顾虑", "memory": "fact" },
+    { "key": "timeline", "owner": "their", "group": "商机", "type": "text", "label": "采购时间窗", "memory": "fact" },
+
+    { "key": "commitments", "owner": "their", "group": "承诺与禁忌", "type": "textarea", "label": "承诺待办", "memory": "agreement" },
+    { "key": "nextMeeting", "owner": "their", "group": "承诺与禁忌", "type": "date", "label": "下次约定", "memory": "agreement" },
+    { "key": "taboos", "owner": "their", "group": "承诺与禁忌", "type": "textarea", "label": "雷区禁忌" },
+    { "key": "preferredTime", "owner": "their", "group": "承诺与禁忌", "type": "text", "label": "方便联系时间" },
+
+    { "key": "my_occupation", "owner": "my", "group": "我的职业", "type": "text", "label": "我的职业", "extract": false },
+    { "key": "my_position", "owner": "my", "group": "我的职业", "type": "text", "label": "我的职位", "extract": false },
+    { "key": "my_company", "owner": "my", "group": "我的职业", "type": "text", "label": "我的公司", "extract": false },
+    { "key": "my_industry", "owner": "my", "group": "我的职业", "type": "text", "label": "所在行业", "extract": false },
+    { "key": "my_product", "owner": "my", "group": "我的职业", "type": "textarea", "label": "我卖的产品或服务", "extract": false },
+    { "key": "my_hardSkills", "owner": "my", "group": "我的职业", "type": "tags", "label": "我的硬技能", "extract": false },
+    { "key": "my_education", "owner": "my", "group": "我的形象", "type": "enum", "label": "我的学历", "extract": false, "options": ["高中及以下", "大专", "本科", "硕士", "博士"] },
+    { "key": "my_personality", "owner": "my", "group": "我的形象", "type": "tags", "label": "我的性格标签", "extract": false },
+    { "key": "my_style", "owner": "my", "group": "我的形象", "type": "text", "label": "默认语言风格", "extract": false },
+    { "key": "my_taboo", "owner": "my", "group": "我的形象", "type": "textarea", "label": "我不能说的话", "extract": false },
+    { "key": "my_defaultGoal", "owner": "my", "group": "我的形象", "type": "textarea", "label": "我的默认业务目标", "extract": false }
+  ],
+  "stylePresets": [
+    "专业严谨",
+    "简洁直接",
+    "热情亲切",
+    "顾问式引导",
+    "朋友式轻松",
+    "先共情后建议",
+    "数据与事实优先",
+    "高情商委婉"
+  ]
+}

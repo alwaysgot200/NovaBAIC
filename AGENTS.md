@@ -115,6 +115,7 @@
 | `ScreenPerceiver.kt` | 感知阶梯：a11y 文本 → a11y 截图 → 投影，含帧质检与重试 | 只产数据（Text/Image/NeedsProjection/Failed） |
 | `FrameDiffEngine.kt` | 连续参谋差分循环：运动检测→静默→掩膜 OCR→去重→入队 | 节奏读 `AdvisorPrefs`，运行中可改 |
 | `FrameQuality.kt` | 灰度签名/空白帧检测/矩形掩膜/文本相似度（纯函数） | 无状态，调用方选后台线程 |
+| `AdvisorHistory.kt` | 发 LLM 前的瘦身历史组装（当前屏全文+近 2 屏缩写+旧屏一句占位/滚动摘要，纯函数） | 只改发送副本，落库原文不动 |
 | `FloatUi.kt` | 全部浮层视图工厂（三态球/扇形菜单/分屏面板） | **纯视觉，无业务状态**；手势由服务接线 |
 | `TranscriptView.kt` | 分屏转录渲染（观察 `ScreenAdvisor.transcript`，无自有状态） | 与主界面同一会话数据源 |
 | `FloatBallService.kt` | 瘦服务：状态机（Idle/OneShot/Recording）、手势路由、窗口增删、事件渲染 | 不写业务管道；投影经 Advisor 门面 |
@@ -132,7 +133,7 @@
 | --- | --- |
 | `app/src/main/AndroidManifest.xml` | 追加 `uses-permission`、`service`/`activity` 声明 |
 | `app/src/main/java/.../MainActivity.kt` | 悬浮窗权限门 + 冷启动自动隐藏 + 2 个 extra 常量；新逻辑一律挪到 floatball 包，不在此文件堆代码 |
-| `app/src/main/res/values/strings.xml` | 追加 `float_*` 前缀的键 |
+| `app/src/main/res/values/strings.xml` | 追加 `float_*` 前缀的键；品牌名（`app_name` 等）以本分支口径改值；可用同名键覆盖上游库资源（device:impl/feature:settings，app 资源合并优先级更高，勿改库文件） |
 | `gradle/wrapper/gradle-wrapper.properties` | 镜像与超时（本机网络所需） |
 
 不在白名单里的上游文件要改？先问三个问题：

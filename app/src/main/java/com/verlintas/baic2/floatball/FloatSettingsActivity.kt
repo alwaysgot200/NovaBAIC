@@ -241,6 +241,58 @@ private fun AdvisorSettingsScreen(
                     }
                 }
 
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = scheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable {
+                            context.startActivity(
+                                Intent(context, AdvisorProfileActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        Text(
+                            text = stringResource(R.string.float_settings_profiles),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = stringResource(R.string.float_settings_profiles_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = scheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable {
+                            context.startActivity(
+                                Intent(context, AdvisorPlaybookActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        Text(
+                            text = stringResource(R.string.float_settings_playbooks),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = stringResource(R.string.float_settings_playbooks_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 SectionLabel(stringResource(R.string.float_settings_session))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = {

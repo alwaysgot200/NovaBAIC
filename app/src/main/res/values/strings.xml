@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">BetterAIChat2</string>
+    <string name="app_name">老参谋</string>
 
     <string name="nav_chats">对话</string>
     <string name="nav_tasks">任务</string>
@@ -13,7 +13,7 @@
 
     <!-- 悬浮球 -->
     <string name="float_notification_channel">悬浮球</string>
-    <string name="float_notification_title">BetterAIChat2 悬浮球</string>
+    <string name="float_notification_title">老参谋悬浮球</string>
     <string name="float_notification_text">点击悬浮球快捷操作</string>
     <string name="float_notification_show">显示悬浮球</string>
     <string name="float_ball_hidden_hint">悬浮球已隐藏，可在通知栏恢复</string>
@@ -78,6 +78,7 @@
     <string name="float_ask_no_config">尚未配置 AI 服务，请先在应用中完成配置。</string>
     <string name="float_ask_failed">出错了：%1$s</string>
     <string name="float_ask_question_label">【屏幕内容】</string>
+    <string name="float_screen_unchanged">画面与上次几乎相同，未重复分析</string>
     <string name="float_answer_label">【参谋】</string>
     <string name="float_ask_blank">屏幕内容为空（可能息屏或该应用禁止截屏）</string>
     <string name="float_ask_error_timeout">等待回答超时，请检查网络后重试</string>
@@ -94,6 +95,81 @@
     <string name="float_voice_listening">正在聆听…</string>
     <string name="float_plus_to_main">附件请在完整对话中使用，已为你打开会话</string>
     <string name="float_ask_system">你是屏幕问答助手。用户给你一段由 OCR 从手机当前屏幕识别出的文本（可能有识别噪声，可能缺少排版）。请用简体中文简洁地回答：如果用户的问题与屏幕内容相关，就基于内容作答；否则概述屏幕要点。不要复述原文。</string>
+
+    <!-- 悬浮球 · 联系人画像（§7） -->
+    <string name="float_profile_status_bound">当前联系人：%1$s ▾</string>
+    <string name="float_profile_status_unbound">未绑定联系人 ▸ 点此管理画像</string>
+    <string name="float_profile_title">联系人画像</string>
+    <string name="float_profile_mine">我的人设</string>
+    <string name="float_profile_search_hint">搜索姓名或业务目标</string>
+    <string name="float_profile_empty">还没有联系人档案。在聊天界面发起一次屏幕参谋后会自动建立。</string>
+    <string name="float_profile_back">返回</string>
+    <string name="float_profile_gone">该档案不存在或已被合并。</string>
+    <string name="float_profile_type_person">单人</string>
+    <string name="float_profile_type_group">群聊</string>
+    <string name="float_profile_name">显示名（改名后旧名仍保留为别名）</string>
+    <string name="float_profile_goal">业务目标（仅老参谋可见，不会写入通用记忆）</string>
+    <string name="float_profile_style">对 TA 的语言风格</string>
+    <string name="float_profile_save">保存</string>
+    <string name="float_profile_saved">已保存</string>
+    <string name="float_profile_rebind_current">把当前参谋会话绑定到此人（切人修正）</string>
+    <string name="float_profile_bound_current">当前参谋会话已绑定此人</string>
+    <string name="float_profile_bind">绑定</string>
+    <string name="float_profile_conversations">关联会话</string>
+    <string name="float_profile_history_search">搜索此人全部会话</string>
+    <string name="float_profile_history_search_btn">搜索</string>
+    <string name="float_profile_no_results">无结果</string>
+    <string name="float_profile_add_field">添加</string>
+    <string name="float_profile_edit_field">编辑</string>
+    <string name="float_profile_clear">清除</string>
+    <string name="float_profile_cancel">取消</string>
+    <string name="float_profile_evidence">对话依据：%1$s</string>
+    <string name="float_profile_confirm">✓ 正确</string>
+    <string name="float_profile_reject">✕ 忽略</string>
+    <string name="float_profile_merge">合并联系人</string>
+    <string name="float_profile_merge_pick">选择要并入此人的档案</string>
+    <string name="float_profile_merge_confirm">合并</string>
+    <string name="float_profile_merge_fail_type">单人档案与群聊不能互相合并。</string>
+    <string name="float_profile_merge_fail_generic">合并失败，请重试。</string>
+    <string name="float_profile_merged_undo">已把「%1$s」并入「%2$s」</string>
+    <string name="float_profile_undo">撤销</string>
+    <string name="float_profile_style_custom">自定义风格（留空跟随我的默认风格）</string>
+    <string name="float_profile_danger">危险操作</string>
+    <string name="float_profile_forget">清除此人相关记忆</string>
+    <string name="float_profile_forget_title">清除相关记忆</string>
+    <string name="float_profile_forget_confirm">将软删除与「%1$s」相关的全部参谋记忆并阻止再次自动学习；联系人档案本身保留。确定？</string>
+    <string name="float_profile_forget_confirm_btn">清除记忆</string>
+    <string name="float_profile_forgot_done">已软删除 %1$d 条相关记忆</string>
+    <string name="float_profile_delete">删除此联系人档案</string>
+    <string name="float_profile_delete_title">删除档案</string>
+    <string name="float_profile_delete_confirm">删除「%1$s」的档案并解绑其全部会话（别名/字段/摘要一并从识别中消失，聊天记录保留在上游会话里）。确定？</string>
+    <string name="float_profile_delete_confirm_btn">删除档案</string>
+    <string name="float_profile_members">群成员</string>
+    <string name="float_profile_members_add_hint">按群内昵称登记成员</string>
+    <string name="float_profile_members_add">登记</string>
+    <string name="float_profile_members_empty">还没有登记成员；自动昵称识别在灰度前请先手动登记。</string>
+    <string name="float_profile_members_link">关联档案</string>
+    <string name="float_profile_members_unlink">取消关联</string>
+    <string name="float_profile_members_linked">已关联：%1$s</string>
+    <string name="float_profile_members_remove">移除</string>
+    <string name="float_profile_members_link_title">关联到已有单人档案</string>
+    <string name="float_profile_members_link_empty">还没有单人档案，先在单聊里发起一次参谋即可建立。</string>
+    <string name="float_playbook_entry">话术库</string>
+    <string name="float_playbook_title">话术库</string>
+    <string name="float_playbook_search">搜索场景 / 标签 / 话术内容</string>
+    <string name="float_playbook_add">新增自定义话术</string>
+    <string name="float_playbook_empty">没有匹配的话术。</string>
+    <string name="float_playbook_builtin">内置</string>
+    <string name="float_playbook_custom">自定义</string>
+    <string name="float_playbook_delete">删除</string>
+    <string name="float_playbook_field_category">分类（如：销售/职场/政务/情感）</string>
+    <string name="float_playbook_field_scenario">适用场景</string>
+    <string name="float_playbook_field_tags">标签（逗号分隔，如：报价,异议）</string>
+    <string name="float_playbook_field_content">话术正文</string>
+    <string name="float_settings_playbooks">话术库管理</string>
+    <string name="float_settings_playbooks_hint">浏览内置话术，增删自己的参考话术</string>
+    <string name="float_settings_profiles">联系人画像</string>
+    <string name="float_settings_profiles_hint">按人管理目标、人设、话术与 AI 草稿</string>
 
     <!-- 悬浮球 · 保活 -->
     <string name="float_keepalive_title">保活措施</string>
@@ -138,7 +214,7 @@
     <string name="float_keepalive_music_toggle">后台播放无声音乐（永久档可选组件）</string>
     <string name="float_keepalive_music_media_note">会出现常驻媒体通知与锁屏/下拉媒体控件，音频通路常开，⚡⚡⚡ 明显耗电</string>
     <string name="float_keepalive_music_channel">保活无声音乐</string>
-    <string name="float_keepalive_music_notification_title">BetterAIChat2 保活中</string>
+    <string name="float_keepalive_music_notification_title">老参谋保活中</string>
     <string name="float_keepalive_music_notification_text">无声音乐用于保持悬浮球存活</string>
     <string name="float_keepalive_section_retry">请求重试机制（次数 = 0 禁用，等待时间逐次递增）</string>
     <string name="float_keepalive_retry_times_label">最多重试</string>
@@ -163,5 +239,19 @@
     <string name="float_keepalive_auto_start_letv">乐视手机：自启动管理 → 允许应用自启动</string>
     <string name="float_keepalive_auto_start_zte">ZTE 手机：掌心管家 → 自启动管理 → 允许应用自启动</string>
     <string name="float_keepalive_auto_start_unknown">请在系统管家/安全中心中允许本应用「自启动」与「后台运行」，找不到入口时可点按直接打开应用详情页设置。</string>
+
+    <!-- 品牌统一为「老参谋」：以下键覆盖上游库（device:impl / feature:settings）
+         的同名资源。Android 资源合并中 app 优先级高于依赖库，无需改动上游文件；
+         合并上游时若库侧文案演进，只需在此追加/调整覆盖值。 -->
+    <!-- device:impl：无障碍/通知读取/屏幕投影在系统界面与前台通知中的名称 -->
+    <string name="a11y_label">老参谋界面自动化</string>
+    <string name="notifications_label">老参谋通知读取</string>
+    <string name="projection_title">老参谋屏幕捕获</string>
+    <!-- feature:settings：关于页品牌名与含旧品牌名的文案 -->
+    <string name="settings_brand_name">老参谋</string>
+    <string name="settings_licenses_hint">老参谋基于以下开源项目构建，感谢所有作者。</string>
+    <string name="settings_developer_note">老参谋遵循 GPL-3.0-or-later 许可。</string>
+    <string name="settings_about_copyright">© 2026 Verlintas · 老参谋</string>
+    <string name="settings_about_share_chooser">分享老参谋</string>
 
 </resources>

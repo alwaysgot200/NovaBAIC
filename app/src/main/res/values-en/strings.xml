@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">BetterAIChat2</string>
+    <string name="app_name">老参谋</string>
 
     <string name="nav_chats">Chats</string>
     <string name="nav_tasks">Tasks</string>
@@ -9,5 +9,19 @@
 
     <string name="dock_content_description">Open navigation</string>
     <string name="dock_footer">Local-first · no telemetry</string>
+
+    <!-- Brand unification: the brand name stays「老参谋」in every locale.
+         These override identically named resources from the device:impl and
+         feature:settings libraries (app resources win at merge time). -->
+    <string name="a11y_label">老参谋 UI automation</string>
+    <string name="notifications_label">老参谋 notification reader</string>
+    <string name="projection_title">老参谋 screen capture</string>
+    <string name="settings_brand_name">老参谋</string>
+    <string name="settings_licenses_hint">老参谋 is built on these open-source projects. Thanks to every author.</string>
+    <string name="settings_developer_note">老参谋 is licensed under GPL-3.0-or-later.</string>
+    <string name="settings_about_copyright">© 2026 Verlintas · 老参谋</string>
+    <string name="settings_about_share_chooser">Share 老参谋</string>
+    <string name="float_notification_title">老参谋 floating ball</string>
+    <string name="float_keepalive_music_notification_title">老参谋 keep-alive active</string>
 
 </resources>

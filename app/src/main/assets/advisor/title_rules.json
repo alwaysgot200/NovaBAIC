@@ -1,0 +1,14 @@
+{
+  "stripSuffixes": ["企业微信", "微信", "QQ"],
+  "tailPatterns": [
+    "[（(]\\s*\\d+\\s*(?:条新消息)?\\s*[)）]",
+    "•\\s*\\d+",
+    "(?:对方)?正在输入…?",
+    "对方正在输入\\.\\.\\.",
+    "连接中…?",
+    "[（(]\\s*\\d+\\s*[)）]\\s*$"
+  ],
+  "ambiguousSuffixes": ["微信", "QQ"],
+  "renameDistance": 2,
+  "note": "stripSuffixes 仅在完整标题匹配失败后按顺序尝试剥离再匹配（避免误伤名字本身叫“微信”的联系人）；ambiguousSuffixes 剥离后命中需轻提示。核心 NFKC/空白规则见 ContactNames。"
+}
