@@ -23,6 +23,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
@@ -36,7 +37,10 @@ import com.verlintas.baic2.core.model.ChatRole
  * 分屏浮窗的转录视图：渲染「老参谋」会话的消息流（与主界面同一会话、
  * 同一数据源；主界面里是完整 Compose 聊天界面，浮窗用轻量 TextView——
  * 服务窗口里 Compose 需要完整 SavedStateRegistry 宿主，得不偿失）。
- * 观察 [ScreenAdvisor.transcript] 即可，无自有业务状态。
+ *
+ * 自动发送的屏幕内容（带【屏幕内容】前缀）默认折叠为一行摘要，点按
+ * 展开/收起——省面积；手动输入的消息恒展开。观察 [ScreenAdvisor.transcript]
+ * 即可，无自有业务状态。
  */
 internal class TranscriptView(context: Context) : LinearLayout(context) {
 
@@ -51,8 +55,10 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
 
     /** 消息 id → 气泡，增量更新避免整树重建（流式时只更新最后一个）。 */
     private val bubbles = HashMap<Long, TextView>()
+
+    /** 自动屏幕消息的展开状态（默认折叠；会话期内保留用户选择）。 */
+    private val expanded = HashSet<Long>()
     private var streamingBubble: TextView? = null
-    private var lastRole: ChatRole? = null
 
     init {
         orientation = VERTICAL
@@ -75,36 +81,77 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
     }
 
     private fun upsertBubble(message: ChatMessage) {
-        val existing = bubbles[message.id]
-        if (existing != null) {
+        val existing = bubbles[message.id] ?: run {
+            val created = TextView(context).apply {
+                setTextColor(Color.WHITE)
+                textSize = if (message.role == ChatRole.USER) 12f else 14f
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat()
+                    setColor(
+                        if (message.role == ChatRole.USER) 0x22FFFFFF.toInt() else 0x332E5FD0.toInt(),
+                    )
+                }
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(dp(8), dp(6), dp(8), 0)
+                }
+            }
+            bubbles[message.id] = created
+            list.addView(created)
+            created
+        }
+
+        if (isAutoScreenMessage(message)) {
+            val open = message.id in expanded
+            existing.apply {
+                if (open) {
+                    text = decorate(message)
+                    maxLines = Int.MAX_VALUE
+                    ellipsize = null
+                } else {
+                    text = collapsedText(message)
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                }
+                // 折叠态整块可点；展开态点正文不误收，收起靠尾部「收起」。
+                setOnClickListener {
+                    if (message.id in expanded) expanded.remove(message.id) else expanded.add(message.id)
+                    upsertBubble(message)
+                }
+            }
+            // 展开态尾部补「收起」提示。
+            if (open) appendCollapseHint(existing, message)
+        } else {
             if (existing.text.toString() != message.content) existing.text = message.content
-            return
+            existing.maxLines = Int.MAX_VALUE
+            existing.ellipsize = null
+            existing.setOnClickListener(null)
+            existing.isClickable = false
         }
-        val bubble = TextView(context).apply {
-            text = decorate(message)
-            setTextColor(Color.WHITE)
-            textSize = if (message.role == ChatRole.USER) 12f else 14f
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(
-                    if (message.role == ChatRole.USER) 0x22FFFFFF.toInt() else 0x332E5FD0.toInt(),
-                )
-            }
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                setMargins(dp(8), dp(6), dp(8), 0)
-            }
+    }
+
+    private fun appendCollapseHint(bubble: TextView, message: ChatMessage) {
+        // 已在 expanded 集合：重建文本时附加收起行由 setOnClickListener 维持。
+        bubble.text = decorate(message) + "\n" + context.getString(R.string.float_bubble_collapse)
+        bubble.setOnClickListener {
+            expanded.remove(message.id)
+            upsertBubble(message)
         }
-        bubbles[message.id] = bubble
-        list.addView(bubble)
-        lastRole = message.role
+    }
+
+    private fun isAutoScreenMessage(message: ChatMessage): Boolean =
+        message.role == ChatRole.USER &&
+            message.content.startsWith(context.getString(R.string.float_ask_question_label))
+
+    /** 折叠摘要：前缀 + 字数 + 展开指示，一行内省面积。 */
+    private fun collapsedText(message: ChatMessage): String {
+        val length = message.content.length
+        return context.getString(R.string.float_bubble_collapsed, length)
     }
 
     private fun decorate(message: ChatMessage): String {
-        val prefix = context.getString(
-            if (message.role == ChatRole.USER) R.string.float_ask_question_label
-            else R.string.float_answer_label,
-        )
+        if (message.role == ChatRole.USER) return message.content
+        val prefix = context.getString(R.string.float_answer_label)
         return prefix + "\n" + message.content
     }
 
@@ -119,7 +166,6 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
             streamingBubble = TextView(context).apply {
                 setTextColor(Color.WHITE)
                 textSize = 14f
-                typeface = Typeface.DEFAULT_BOLD
                 setPadding(dp(10), dp(8), dp(10), dp(8))
                 background = GradientDrawable().apply {
                     cornerRadius = dp(12).toFloat()
@@ -148,19 +194,18 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
             ScreenAdvisor.Status.Idle -> ""
         }
         if (text.isEmpty()) return
-        if (bubbles[STATUS_KEY] == null) {
-            bubbles[STATUS_KEY] = TextView(context).apply {
-                id = generateViewId()
-                setTextColor(0xCCFFFFFF.toInt())
-                textSize = 13f
-                setPadding(dp(10), dp(8), dp(10), dp(8))
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                    setMargins(dp(8), dp(6), dp(8), 0)
-                }
-                list.addView(this)
+        val key = STATUS_KEY
+        val bubble = bubbles[key] ?: TextView(context).apply {
+            setTextColor(0xCCFFFFFF.toInt())
+            textSize = 13f
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(8), dp(6), dp(8), 0)
             }
+            bubbles[key] = this
+            list.addView(this)
         }
-        bubbles.getValue(STATUS_KEY).text = text
+        bubble.text = text
     }
 
     private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()

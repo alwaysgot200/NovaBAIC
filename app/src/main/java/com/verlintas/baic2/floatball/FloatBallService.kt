@@ -34,6 +34,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -43,11 +44,14 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.pm.PackageInfoCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.verlintas.baic2.EXTRA_EXIT
 import com.verlintas.baic2.EXTRA_FROM_FLOAT
 import com.verlintas.baic2.MainActivity
@@ -67,9 +71,10 @@ import kotlinx.coroutines.launch
  * 悬浮球前台服务：窗口增删、手势路由、状态机、把 [ScreenAdvisor] 的事件
  * 渲染到 [FloatUi] 视图。
  *
- * 状态机：Idle（蓝球）→ 单击=单次参谋（旋转环·锁定输入）→ 完成自动弹
- * 分屏；Idle → 双击=连续参谋（红球 + 差分循环 + 红点计数）；长按=六子球
- * 扇形菜单（仅 Idle）。任务期间（OneShot/Recording）长按被拒绝。
+ * 状态机：Idle（蓝球）→ 单击=六子球扇形菜单（仅 Idle，双击消歧后弹出）；
+ * 长按=单次参谋（变色·灰白蒙层·旋转环·锁定输入，完成自动弹分屏）；
+ * 双击=连续参谋（红球 + 差分循环 + 红点计数）。任务期间（OneShot）一切
+ * 手势忽略；录制态仅保留单击红球（分屏开合）与双击（停止），长按拒绝。
  */
 @AndroidEntryPoint
 class FloatBallService : Service() {
@@ -98,7 +103,16 @@ class FloatBallService : Service() {
 
     private var split: FloatUi.SplitPanel? = null
     private var splitParams: WindowManager.LayoutParams? = null
+
+    /** 键盘弹起前的用户面板高度（-1=当前未避让），键盘收起后还原。 */
+    private var splitHeightBeforeIme = -1
     private var transcriptView: TranscriptView? = null
+    private var inputHandle: FloatUi.InputBarHandle? = null
+
+    /** 展开的扇形几何（跟随主球移动时定位用）。 */
+    private var fanWidth = 0
+    private var fanHeight = 0
+    private var menuParams: WindowManager.LayoutParams? = null
 
     private var ballX = Int.MIN_VALUE
     private var ballY = Int.MIN_VALUE
@@ -146,6 +160,8 @@ class FloatBallService : Service() {
             // 转录面板跟随会话数据流刷新（分屏开着才渲染）。
             screenAdvisor.transcript.collect { state ->
                 transcriptView?.render(state)
+                // 思考态变化联动输入行发送/停止键外观。
+                inputHandle?.refresh()
             }
         }
     }
@@ -171,13 +187,15 @@ class FloatBallService : Service() {
         screenAdvisor.advisorScopeCancel()
         scope.cancel()
         FloatCaptureBridge.clear()
+        recognizer?.destroy()
+        recognizer = null
         removeAllOverlays()
         super.onDestroy()
     }
 
     // -------------------------------------------------------- gestures
 
-    /** 手势路由：单击确认/双击/长按交给 GestureDetector，拖动本地处理。 */
+    /** 手势路由：单击/双击/长按交给 GestureDetector，拖动本地处理。 */
     private fun attachBallGesture(view: FrameLayout, params: WindowManager.LayoutParams) {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
         var downRawX = 0f
@@ -191,7 +209,7 @@ class FloatBallService : Service() {
             object : GestureDetector.SimpleOnGestureListener() {
                 override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                     when (mode) {
-                        Mode.IDLE -> startOneShot()
+                        Mode.IDLE -> expandMenu()
                         Mode.RECORDING -> toggleSplit()
                         Mode.ONESHOT -> Unit // 忙碌：单击无效
                     }
@@ -208,8 +226,8 @@ class FloatBallService : Service() {
                 }
 
                 override fun onLongPress(e: MotionEvent) {
-                    // 任务期间拒绝长按，空闲才出扇形菜单。
-                    if (mode == Mode.IDLE) expandMenu()
+                    // 长按=单次参谋；OneShot/Recording 态长按拒绝。
+                    if (mode == Mode.IDLE) startOneShot()
                 }
             },
         )
@@ -223,7 +241,8 @@ class FloatBallService : Service() {
                     startX = params.x
                     startY = params.y
                     dragging = false
-                    // 单击预热：第一触点即开始读无障碍文本，摊销消歧延迟。
+                    // 长按预热：第一触点即开始读无障碍文本，与系统长按判定
+                    // 并行，长按确认后毫秒级进 LLM（拖动/抬起均自动丢弃）。
                     if (mode == Mode.IDLE) screenAdvisor.preheat()
                     true
                 }
@@ -242,6 +261,8 @@ class FloatBallService : Service() {
                             metrics.heightPixels - dp(FloatUi.BALL_SIZE_DP + FloatUi.MARGIN_DP),
                         )
                         runCatching { windowManager.updateViewLayout(view, params) }
+                        // 展开的扇形子球跟随主球移动。
+                        followMenu(params)
                     }
                     true
                 }
@@ -254,6 +275,9 @@ class FloatBallService : Service() {
 
     private fun startOneShot() {
         if (mode != Mode.IDLE) return
+        // 入口可能是长按主球，或扇形菜单「问答」子球：菜单（若开着）立即
+        // 撤除，不等收起动画——既防自身 UI 污染 OCR，也避免忙碌态可点菜单。
+        dismissMenuNow()
         mode = Mode.ONESHOT
         ball?.setMode(FloatUi.BallMode.BUSY, this)
         val preheated = screenAdvisor.consumePreheat()
@@ -311,7 +335,15 @@ class FloatBallService : Service() {
         } else {
             requestProjectionConsent { granted ->
                 if (granted) {
-                    mainHandler.postDelayed({ startRecordingLoop() }, CONSENT_SETTLE_MS)
+                    mainHandler.postDelayed({
+                        // 授权等待期用户可能已双击停止（或服务被重建）：授权
+                        // 晚到时绝不能在非 RECORDING 态拉起差分循环，立即释放投影。
+                        if (mode == Mode.RECORDING) {
+                            startRecordingLoop()
+                        } else {
+                            screenAdvisor.releaseProjection()
+                        }
+                    }, CONSENT_SETTLE_MS)
                 } else {
                     abortRecording()
                 }
@@ -370,9 +402,14 @@ class FloatBallService : Service() {
     private fun currentOverlayRects(): List<Rect> {
         val rects = mutableListOf<Rect>()
         val metrics = resources.displayMetrics
-        split?.let {
-            val height = splitParams?.height ?: 0
-            if (height > 0) rects.add(Rect(0, metrics.heightPixels - height, metrics.widthPixels, metrics.heightPixels))
+        split?.root?.let { root ->
+            // 用窗口真实屏坐标：键盘避让后面板被收高且 BOTTOM 落在键盘上沿，
+            // 不能再按 params.height/y 推算。
+            val location = IntArray(2)
+            root.getLocationOnScreen(location)
+            if (location[1] >= 0 && root.height > 0) {
+                rects.add(Rect(0, location[1], metrics.widthPixels, location[1] + root.height))
+            }
         }
         ballParams?.let {
             rects.add(Rect(it.x, it.y, it.x + dp(FloatUi.BALL_SIZE_DP), it.y + dp(FloatUi.BALL_SIZE_DP)))
@@ -436,8 +473,8 @@ class FloatBallService : Service() {
             ballY = metrics.heightPixels / 3
         }
         val params = overlayParams(
-            width = dp(FloatUi.BALL_SIZE_DP + 12),
-            height = dp(FloatUi.BALL_SIZE_DP + 12),
+            width = dp(FloatUi.BALL_SIZE_DP),
+            height = dp(FloatUi.BALL_SIZE_DP),
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = ballX
@@ -474,7 +511,11 @@ class FloatBallService : Service() {
             x = 0
             y = 0
         }
-        val panel = FloatUi.buildSplitPanel(this, onClose = { closeSplit(keepBall = false) })
+        val panel = FloatUi.buildSplitPanel(
+            this,
+            onClose = { closeSplit(keepBall = false) },
+            inputCallbacks = inputCallbacks,
+        )
         panel.handle.setOnTouchListener(makeResizeListener())
 
         // 正文区挂载轻量转录视图：与主界面同一个「老参谋」会话的数据流。
@@ -487,13 +528,237 @@ class FloatBallService : Service() {
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
+        // 输入行句柄（思考态刷新/语音追加）。
+        inputHandle = panel.inputBar.tag as? FloatUi.InputBarHandle
+
+        // 键盘跟随：overlay 不享受 Activity 式 resize。API30+ 系统会把 overlay
+        // 父框架按 IME 收缩，但比父框架高的窗口仍会探进键盘，因此按「窗口与
+        // 键盘的实时重叠量」收掉面板高度，输入行始终贴键盘上沿；键盘收拢逐帧
+        // 还原。焦点期间另起 100ms 校准 tick，兜底 overlay 丢失末帧 insets。
+        ViewCompat.setOnApplyWindowInsetsListener(panel.root) { _, insets ->
+            syncSplitIme(panel.root, insets)
+            insets
+        }
 
         windowManager.addView(panel.root, params)
         split = panel
         splitParams = params
         // StateFlow 无新值不发射: 新视图创建后立即喂当前转录快照。
         transcript.render(screenAdvisor.transcript.value)
+        inputHandle?.refresh()
         return panel
+    }
+
+    /** 输入框焦点变化：获得=窗口可聚焦并呼出键盘；获得/失去期间由 insets 驱动避让。 */
+    private fun setSplitWindowFocus(focused: Boolean) {
+        val p = splitParams ?: return
+        val root = split?.root ?: return
+        val imm = getSystemService(InputMethodManager::class.java)
+        if (focused) {
+            p.flags = p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            runCatching { windowManager.updateViewLayout(root, p) }
+            // overlay 成为 IME 目标后，父框架收缩与 insets 派发存在时序竞争：
+            // 最终态常常不再派发（键盘把父框架吃掉后重叠量恒为 0 的错觉），
+            // 焦点期间定时按根 insets + 窗口屏坐标校准，保证收敛。
+            startImeSyncLoop(root)
+        } else {
+            stopImeSyncLoop()
+            p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            inputHandle?.field?.let { field ->
+                imm?.hideSoftInputFromWindow(field.windowToken, 0)
+            }
+            // 失焦后 overlay 可能收不到 ime 隐藏的 insets 回调，主动复位一次。
+            restoreSplitImeLayout(root)
+            runCatching { windowManager.updateViewLayout(root, p) }
+        }
+    }
+
+    private var imeSyncing = false
+    private val imeSyncRunnable = object : Runnable {
+        override fun run() {
+            if (!imeSyncing) return
+            val root = split?.root
+            if (root == null) {
+                imeSyncing = false
+                return
+            }
+            ViewCompat.getRootWindowInsets(root)?.let { syncSplitIme(root, it) }
+            mainHandler.postDelayed(this, IME_SYNC_INTERVAL_MS)
+        }
+    }
+
+    private fun startImeSyncLoop(root: View) {
+        if (imeSyncing) return
+        imeSyncing = true
+        // 立即先校准一次，随后按固定节拍跟踪键盘起落与把手拖动。
+        ViewCompat.getRootWindowInsets(root)?.let { syncSplitIme(root, it) }
+        mainHandler.postDelayed(imeSyncRunnable, IME_SYNC_INTERVAL_MS)
+    }
+
+    private fun stopImeSyncLoop() {
+        imeSyncing = false
+        mainHandler.removeCallbacks(imeSyncRunnable)
+    }
+
+    /**
+     * 按 IME insets 调整分屏窗口，可随键盘动画逐帧调用；幂等且自收敛。
+     *
+     * API30+：父框架按 IME 收缩，但更高的 BOTTOM 锚定窗口仍探进键盘，insets
+     * 上报的 ime.bottom 就是探入量；高度减去探入量后重叠归零，输入行实时贴住
+     * 键盘上沿。API30 以下父框架不收缩：整体上移 y 并收高。键盘隐藏时还原
+     * [splitHeightBeforeIme]（用户拖出的分界线高度）。
+     */
+    private fun syncSplitIme(view: View, insets: WindowInsetsCompat) {
+        val p = splitParams ?: return
+        val imeType = WindowInsetsCompat.Type.ime()
+        val overlap = insets.getInsets(imeType).bottom
+        val imeShown = insets.isVisible(imeType) || overlap > 0
+        if (!imeShown) {
+            restoreSplitImeLayout(view)
+            return
+        }
+        val metrics = view.resources.displayMetrics
+        if (splitHeightBeforeIme < 0) splitHeightBeforeIme = p.height
+        val minHeight = dp(IME_MIN_PANEL_DP)
+            .coerceAtLeast((metrics.heightPixels * FloatUi.SPLIT_MIN_RATIO).toInt())
+        var changed = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // API30+：ime.bottom 即窗口底边探入键盘的重叠量。新高度 = 当前高度
+            // − 重叠量，重布局后重叠归零，输入行恰好停在键盘上沿（自收敛）。
+            val target = (view.height - overlap.coerceAtLeast(0))
+                .coerceIn(minHeight, splitHeightBeforeIme)
+            if (p.y != 0) {
+                p.y = 0
+                changed = true
+            }
+            if (p.height != target) {
+                p.height = target
+                changed = true
+            }
+        } else {
+            // API30 以下父框架不按 IME 收缩：整体上移键盘全高并收高。
+            val available = (metrics.heightPixels - overlap).coerceAtLeast(minHeight)
+            val target = minOf(splitHeightBeforeIme, available)
+            if (p.y != overlap) {
+                p.y = overlap
+                changed = true
+            }
+            if (p.height != target) {
+                p.height = target
+                changed = true
+            }
+        }
+        if (changed) runCatching { windowManager.updateViewLayout(view, p) }
+    }
+
+    /** 键盘隐藏后还原 y 与用户的分界线高度。 */
+    private fun restoreSplitImeLayout(view: View) {
+        val p = splitParams ?: return
+        var changed = false
+        if (p.y != 0) {
+            p.y = 0
+            changed = true
+        }
+        if (splitHeightBeforeIme >= 0 && p.height != splitHeightBeforeIme) {
+            p.height = splitHeightBeforeIme
+            changed = true
+        }
+        splitHeightBeforeIme = -1
+        if (changed) runCatching { windowManager.updateViewLayout(view, p) }
+    }
+
+    /** 输入行的行为接线：发送/语音/＋号/停止/焦点。 */
+    private val inputCallbacks = object : FloatUi.InputBarCallbacks {
+        override fun onSend(text: String) {
+            scope.launch { screenAdvisor.submitTurn(text) }
+        }
+
+        override fun onVoice() {
+            startVoiceInput()
+        }
+
+        override fun onPlus() {
+            showMainUi()
+            toast(R.string.float_plus_to_main)
+        }
+
+        override fun onStop() {
+            cancelActiveTurn()
+            inputHandle?.refresh()
+        }
+
+        override fun onInputFocus(focused: Boolean) {
+            setSplitWindowFocus(focused)
+        }
+
+        override fun onInputTouch() {
+            // 先切窗口可聚焦, 稍候窗口焦点落定再显式呼出键盘 (Android 12+
+            // overlay 不自动弹; 立即调用会被 WindowManager 拒绝)。
+            val field = inputHandle?.field ?: return
+            setSplitWindowFocus(true)
+            field.postDelayed({
+                field.requestFocus()
+                val imm = getSystemService(InputMethodManager::class.java) ?: return@postDelayed
+                imm.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
+            }, 150)
+        }
+
+        override fun isBusy(): Boolean =
+            askJob?.isActive == true || diffEngine.isRoundActive()
+    }
+
+    /** 思考中可打断：取消当前 LLM 回合（部分回答会保留入库）。 */
+    private fun cancelActiveTurn() {
+        askJob?.cancel()
+        askJob = null
+        diffEngine.cancelRound()
+    }
+
+    // --------------------------------------------------------- voice
+
+    private var recognizer: android.speech.SpeechRecognizer? = null
+
+    /** 语音输入：系统识别器，结果追加到输入框（可编辑后再发送）。 */
+    private fun startVoiceInput() {
+        if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
+            toast(R.string.float_voice_unavailable)
+            return
+        }
+        recognizer?.destroy()
+        val listener = object : android.speech.RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) = toast(R.string.float_voice_listening)
+            override fun onBeginningOfSpeech() = Unit
+            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() = Unit
+            override fun onError(error: Int) = Unit
+            override fun onPartialResults(partialResults: Bundle?) = Unit
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+
+            override fun onResults(results: Bundle?) {
+                val text = results
+                    ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    ?.trim()
+                    .orEmpty()
+                if (text.isNotEmpty()) {
+                    inputHandle?.field?.append(text)
+                    inputHandle?.field?.requestFocus()
+                }
+            }
+        }
+        recognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(listener)
+            startListening(
+                Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                        android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                    )
+                },
+            )
+        }
     }
 
     /** 上下拖动把手：调整分屏高度，即「上下分界线」。 */
@@ -510,12 +775,25 @@ class FloatBallService : Service() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val metrics = resources.displayMetrics
-                    val height = (startHeight + (downY - event.rawY)).toInt().coerceIn(
-                        (metrics.heightPixels * FloatUi.SPLIT_MIN_RATIO).toInt(),
-                        (metrics.heightPixels * FloatUi.SPLIT_MAX_RATIO).toInt(),
-                    )
+                    val minHeight = (metrics.heightPixels * FloatUi.SPLIT_MIN_RATIO).toInt()
+                    // 键盘跟随中可用高度只到键盘上沿，把手高度也钳制在此范围内。
+                    val root = split?.root
+                    val rootInsets = root?.let { ViewCompat.getRootWindowInsets(it) }
+                    val imeType = WindowInsetsCompat.Type.ime()
+                    val overlap = rootInsets
+                        ?.takeIf { it.isVisible(imeType) }
+                        ?.getInsets(imeType)?.bottom ?: 0
+                    val maxHeight = if (root != null && overlap > 0) {
+                        (root.height - overlap).coerceAtLeast(minHeight)
+                    } else {
+                        (metrics.heightPixels * FloatUi.SPLIT_MAX_RATIO).toInt()
+                    }
+                    val height = (startHeight + (downY - event.rawY)).toInt()
+                        .coerceIn(minHeight, maxHeight)
                     if (height != params.height) {
                         params.height = height
+                        // 键盘弹起时拖动也视作用户改分界线，键盘收起后还原到此值。
+                        if (splitHeightBeforeIme >= 0) splitHeightBeforeIme = height
                         runCatching { windowManager.updateViewLayout(split?.root, params) }
                     }
                     true
@@ -531,47 +809,86 @@ class FloatBallService : Service() {
         split?.let { runCatching { windowManager.removeView(it.root) } }
         split = null
         splitParams = null
+        splitHeightBeforeIme = -1
         transcriptView = null
+        inputHandle = null
         screenAdvisor.resetTransient()
         if (!keepBall) restoreBall()
     }
 
     // ------------------------------------------------------------- menu
 
-    /** 长按：悬浮球周围弹出 6 个子球（问答/主界面/设置/隐藏/关于/退出）。 */
+    /** 单击：朝屏幕中央的水平扇形弹出 6 个子球（问答/主界面/设置/隐藏/关于/退出）。 */
     private fun expandMenu() {
         if (menuView != null || ball == null) return
         val from = ballParams ?: return
 
         val metrics = resources.displayMetrics
-        val side = FloatUi.fanSidePx(this)
         val ballCenterX = from.x + dp(FloatUi.BALL_SIZE_DP) / 2
         val ballCenterY = from.y + dp(FloatUi.BALL_SIZE_DP) / 2
-        val params = overlayParams(width = side, height = side).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = (ballCenterX - side / 2).coerceIn(0, (metrics.widthPixels - side).coerceAtLeast(0))
-            y = (ballCenterY - side / 2).coerceIn(0, (metrics.heightPixels - side).coerceAtLeast(0))
+        // 或左或右：贴左半屏向右展开，贴右半屏向左展开，开口恒朝屏幕中央。
+        val facing = if (ballCenterX <= metrics.widthPixels / 2) {
+            FloatUi.FanFacing.RIGHT
+        } else {
+            FloatUi.FanFacing.LEFT
         }
-
-        val items = listOf(
-            FloatUi.FanItem(R.string.float_fan_ask) { startOneShot() },
-            FloatUi.FanItem(R.string.float_fan_main) { showMainUi() },
-            FloatUi.FanItem(R.string.float_fan_settings) { openFloatSettings() },
-            FloatUi.FanItem(R.string.float_fan_hide) { hideBall() },
-            FloatUi.FanItem(R.string.float_fan_about) { showAboutDialog() },
-            FloatUi.FanItem(R.string.float_fan_exit) { exitApp() },
+        val fan = FloatUi.buildFanMenu(
+            this,
+            items = listOf(
+                FloatUi.FanItem(R.string.float_fan_ask) { startOneShot() },
+                FloatUi.FanItem(R.string.float_fan_main) { showMainUi() },
+                FloatUi.FanItem(R.string.float_fan_settings) { openFloatSettings() },
+                FloatUi.FanItem(R.string.float_fan_hide) { hideBall() },
+                FloatUi.FanItem(R.string.float_fan_about) { showAboutDialog() },
+                FloatUi.FanItem(R.string.float_fan_exit) { exitApp() },
+            ),
+            facing = facing,
+            ballCenterX = ballCenterX,
+            ballCenterY = ballCenterY,
+            screenWidth = metrics.widthPixels,
+            screenHeight = metrics.heightPixels,
+            onDismiss = { collapseMenu() },
         )
-        val fan = FloatUi.buildFanMenu(this, items, onDismiss = { collapseMenu() })
+        fanWidth = fan.widthPx
+        fanHeight = fan.heightPx
+        val params = overlayParams(width = fanWidth, height = fanHeight).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = fan.windowX
+            y = fan.windowY
+        }
         windowManager.addView(fan.root, params)
         menuView = fan.root
+        menuParams = params
         fanMenu = fan
         fan.expand()
+    }
+
+    /** 拖动主球时，展开中的扇形菜单跟随球心（几何/窗口位置整体重算）。 */
+    private fun followMenu(ballParams: WindowManager.LayoutParams) {
+        val fan = fanMenu ?: return
+        val p = menuParams ?: return
+        val ballCenterX = ballParams.x + dp(FloatUi.BALL_SIZE_DP) / 2
+        val ballCenterY = ballParams.y + dp(FloatUi.BALL_SIZE_DP) / 2
+        fan.place(ballCenterX, ballCenterY)
+        p.x = fan.windowX
+        p.y = fan.windowY
+        runCatching { windowManager.updateViewLayout(fan.root, p) }
+    }
+
+    /** 立即撤除扇形菜单（无动画）：单次参谋启动时防 OCR 污染/忙碌态误触。 */
+    private fun dismissMenuNow() {
+        val view = menuView ?: return
+        menuView = null
+        fanMenu = null
+        menuParams = null
+        runCatching { windowManager.removeView(view) }
     }
 
     private fun collapseMenu() {
         val fan = fanMenu ?: return
         fanMenu = null
         menuView = null
+        menuParams = null
         fan.collapse()
         // 等收起动画走完再摘窗口。
         mainHandler.postDelayed({
@@ -726,6 +1043,7 @@ class FloatBallService : Service() {
         menuView?.let { runCatching { windowManager.removeView(it) } }
         menuView = null
         fanMenu = null
+        menuParams = null
     }
 
     private fun removeAllOverlays() {
@@ -733,6 +1051,7 @@ class FloatBallService : Service() {
         split?.let { runCatching { windowManager.removeView(it.root) } }
         split = null
         splitParams = null
+        splitHeightBeforeIme = -1
         transcriptView = null
     }
 
@@ -750,5 +1069,11 @@ class FloatBallService : Service() {
         const val ACTION_STOP_RECORDING = "com.verlintas.baic2.floatball.STOP_RECORDING"
         const val CONSENT_SETTLE_MS = 350L
         const val CONSENT_WATCHDOG_MS = 120_000L
+
+        /** 键盘弹起时分屏临时收窄的最小高度（dp），保证输入行与部分转录可见。 */
+        const val IME_MIN_PANEL_DP = 220
+
+        /** 焦点期键盘几何校准节拍（ms）：兜底 overlay 丢失末帧 insets 回调。 */
+        const val IME_SYNC_INTERVAL_MS = 100L
     }
 }

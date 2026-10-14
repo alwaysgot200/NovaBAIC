@@ -58,7 +58,7 @@ class ScreenPerceiver @Inject constructor(
     /** 无障碍连接状态流（设置页徽章）。 */
     val a11yConnected get() = accessibility.connected
 
-    /** 单击预热：只读无障碍文本（无副作用），双击到达即丢弃。 */
+    /** 触点预热：只读无障碍文本（无副作用），未确认长按即丢弃。 */
     suspend fun readA11yText(): String? {
         if (!accessibility.connected.value) return null
         return withContext(Dispatchers.Default) { accessibility.screenText(MAX_NODES) }

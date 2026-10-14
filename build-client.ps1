@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     NovaBAIC (BetterAIChat2) Android 客户端 构建 / 部署 / 日志工具 (Windows PowerShell 5.1+)
 
@@ -695,7 +695,7 @@ function Grant-DevicePermissions {
         return $false
     }
 
-    # 无障碍服务 (老参谋单击毫秒级识屏的前提; install/pm clear 后会被系统重置)。
+    # 无障碍服务 (老参谋长按毫秒级识屏的前提; install/pm clear 后会被系统重置)。
     # 部分模拟器在 App 进程不存在时 settings put 会被清空: 写入后读回校验,
     # 丢失则先启动 App 再重写一次。
     $a11yService = "$AppId/com.verlintas.baic2.device.impl.a11y.Baic2AccessibilityService"
@@ -711,7 +711,7 @@ function Grant-DevicePermissions {
         $check = ((& $Adb -s $Device shell settings get secure enabled_accessibility_services 2>$null) -join '')
     }
     if ($check -match [regex]::Escape($AppId)) {
-        Write-Host '无障碍服务已启用 (老参谋单击识屏就绪)。' -ForegroundColor Green
+        Write-Host '无障碍服务已启用 (老参谋长按识屏就绪)。' -ForegroundColor Green
     }
     else {
         Write-Host '无障碍服务授权失败, 请在 设置 -> 无障碍 手动开启 BAIC2 界面自动化。' -ForegroundColor Yellow
@@ -791,8 +791,75 @@ function Test-SplitVisible {
     return $false
 }
 
-# 老参谋冒烟: 冷启动 -> 授权 -> 等悬浮球 -> 单击触发屏幕问答 -> 等分屏浮窗 -> 截图。
-# 产物: dev\smoke-<时间>.png; 全程无交互。
+# 扇形菜单窗口是否可见 (大于悬浮球的 App overlay 块: 扇形窗口约 300x560)。
+function Test-FanMenuVisible {
+    param([Parameter(Mandatory = $true)][string] $Device)
+
+    foreach ($block in (Get-AppOverlayBlocks -Device $Device)) {
+        $m = [regex]::Match($block, 'mAttrs=\{\(\d+,\d+\)\((\d+)x(\d+)\)')
+        if ($m.Success -and [int] $m.Groups[1].Value -ge 250 -and [int] $m.Groups[2].Value -ge 300) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# 等待扇形菜单弹出, 超时返回 $false。
+function Wait-FanMenu {
+    param(
+        [Parameter(Mandatory = $true)][string] $Device,
+        [int] $TimeoutSec = 8
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-FanMenuVisible -Device $Device) { return $true }
+        Start-Sleep -Milliseconds 700
+    }
+    return $false
+}
+
+# 在设备上截屏并 pull 到工程 dev 目录 (PS 的 > 重定向会写坏 PNG 二进制)。
+function Save-DeviceScreenshot {
+    param(
+        [Parameter(Mandatory = $true)][string] $Device,
+        [Parameter(Mandatory = $true)][string] $Suffix
+    )
+    $out = Join-Path $ProjectDir ("dev\smoke-{0}-{1:yyyyMMdd-HHmmss}.png" -f $Suffix, (Get-Date))
+    & $Adb -s $Device shell screencap -p /sdcard/baic2-smoke.png 2>$null | Out-Null
+    & $Adb -s $Device pull /sdcard/baic2-smoke.png $out 2>$null | Out-Null
+    & $Adb -s $Device shell rm /sdcard/baic2-smoke.png 2>$null | Out-Null
+    return $out
+}
+
+# 等待无障碍服务绑定完成 (settings put 后 AMS 绑定需要数秒), 15s 超时。
+function Wait-A11yBound {
+    param([Parameter(Mandatory = $true)][string] $Device)
+
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+        $d = (& $Adb -s $Device shell dumpsys accessibility 2>$null) -join "`n"
+        if ($d -match 'Bound services:\{Service') { return $true }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
+# 自动完成系统的「共享屏幕」投影授权框 (下拉选整个屏幕 -> 下一步)。
+function Complete-ProjectionConsent {
+    param([Parameter(Mandatory = $true)][string] $Device)
+
+    & $Adb -s $Device shell input tap 360 580
+    Start-Sleep -Milliseconds 800
+    & $Adb -s $Device shell input tap 237 730
+    Start-Sleep -Milliseconds 800
+    & $Adb -s $Device shell input tap 563 974
+    Start-Sleep -Seconds 2
+}
+
+# 老参谋冒烟: 冷启动 -> 授权 -> 等悬浮球 -> 单击验证扇形菜单 -> 收起 ->
+# 长按触发屏幕问答 -> 等分屏浮窗 -> 截图。
+# 产物: dev\smoke-menu-<时间>.png + dev\smoke-<时间>.png; 全程无交互。
+# 文本路径无授权框; 像素/投影路径会自动完成系统授权框。
 function Do-AdvisorSmoke {
     param([Parameter(Mandatory = $true)][string] $Device)
 
@@ -803,6 +870,9 @@ function Do-AdvisorSmoke {
     Start-App $Device
     Start-Sleep -Seconds 3
     Grant-DevicePermissions -Device $Device | Out-Null
+    if (-not (Wait-A11yBound -Device $Device)) {
+        Write-Host '警告: 无障碍服务 15s 内未绑定, 长按将走投影授权路径。' -ForegroundColor Yellow
+    }
 
     Write-Host '等待悬浮球窗口 ...' -ForegroundColor Cyan
     $ball = Get-BallCenter -Device $Device
@@ -810,32 +880,57 @@ function Do-AdvisorSmoke {
         Write-Host '冒烟失败: 30s 内未见悬浮球 overlay 窗口。' -ForegroundColor Red
         return $false
     }
-    Write-Host ("悬浮球就绪, 单击 ({0},{1}) 触发屏幕问答 ..." -f $ball.X, $ball.Y) -ForegroundColor Cyan
     & $Adb -s $Device logcat -c 2>$null
-    & $Adb -s $Device shell input tap $ball.X $ball.Y
 
-    # 等分屏浮窗出现 (App overlay 中宽度为 fillx 的块), 最长 40s。
+    # 1) 单击 = 扇形菜单。
+    Write-Host ("悬浮球就绪, 单击 ({0},{1}) 验证扇形菜单 ..." -f $ball.X, $ball.Y) -ForegroundColor Cyan
+    & $Adb -s $Device shell input tap $ball.X $ball.Y
+    $menuSeen = Wait-FanMenu -Device $Device
+    if ($menuSeen) {
+        $menuShot = Save-DeviceScreenshot -Device $Device -Suffix 'menu'
+        Write-Host "扇形菜单已弹出, 截图 $menuShot" -ForegroundColor Green
+    }
+    else {
+        Write-Host '警告: 单击后未见扇形菜单窗口 (继续长按流程)。' -ForegroundColor Yellow
+    }
+    # 再点球心(扇形顶点空白区=窗口空白)收起菜单, 等收回动画走完。
+    & $Adb -s $Device shell input tap $ball.X $ball.Y
+    Start-Sleep -Seconds 1
+
+    # 2) 长按 = 单次参谋。adb 注入模拟不了真双击, 长按用原位 swipe 持按 600ms。
+    Write-Host ("长按 ({0},{1}) 600ms 触发屏幕问答 ..." -f $ball.X, $ball.Y) -ForegroundColor Cyan
+    & $Adb -s $Device shell input swipe $ball.X $ball.Y $ball.X $ball.Y 600
+
+    # 等分屏浮窗出现; 若走投影路径, 中途自动完成系统授权框。
     $deadline = (Get-Date).AddSeconds(40)
     $splitSeen = $false
+    $consentTried = $false
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 3
         if (Test-SplitVisible -Device $Device) { $splitSeen = $true; break }
+        if (-not $consentTried) {
+            $dump = (& $Adb -s $Device shell dumpsys window windows 2>$null) -join "`n"
+            if ($dump -match '共享屏幕|与.*BetterAIChat2.*共享|Share screen with') {
+                Write-Host '检测到投影授权框, 自动完成 ...' -ForegroundColor Cyan
+                Complete-ProjectionConsent -Device $Device
+                $consentTried = $true
+            }
+        }
     }
     Start-Sleep -Seconds 3
-    $out = Join-Path $ProjectDir ("dev\smoke-{0:yyyyMMdd-HHmmss}.png" -f (Get-Date))
-    # PS 的 > 重定向会把二进制按文本编码写坏, 走 设备截图 + adb pull 保证 PNG 完整
-    & $Adb -s $Device shell screencap -p /sdcard/baic2-smoke.png 2>$null | Out-Null
-    & $Adb -s $Device pull /sdcard/baic2-smoke.png $out 2>$null | Out-Null
-    & $Adb -s $Device shell rm /sdcard/baic2-smoke.png 2>$null | Out-Null
-    if ($splitSeen) {
-        Write-Host "冒烟通过: 分屏浮窗已出现, 截图 $out" -ForegroundColor Green
+    $out = Save-DeviceScreenshot -Device $Device -Suffix 'split'
+    if ($menuSeen -and $splitSeen) {
+        Write-Host "冒烟通过: 扇形菜单 + 分屏浮窗均已出现, 截图 $out" -ForegroundColor Green
+    }
+    elseif ($splitSeen) {
+        Write-Host "冒烟部分通过: 分屏已现但菜单未确认, 截图 $out 供人工检查。" -ForegroundColor Yellow
     }
     else {
         Write-Host "冒烟未确认分屏 (可能走授权框/文本路径失败), 截图 $out 供人工检查。" -ForegroundColor Yellow
     }
     $log = ((& $Adb -s $Device logcat -d -b crash 2>$null) -join "`n")
     if ($log -match 'FATAL EXCEPTION') { Write-Host '注意: crash buffer 有 FATAL, 请排查!' -ForegroundColor Red }
-    return $splitSeen
+    return ($menuSeen -and $splitSeen)
 }
 
 # 触发连续参谋 (与悬浮球双击同一状态机入口): 先授权投影, 再进入差分循环。
@@ -1115,7 +1210,7 @@ function Show-Help {
   stop                  停止 App
   clear-data            清除 App 数据 (随后自动重新授予权限; 密钥下次首启自动重置)
   grant                 重新授予运行时权限 (通知/相机/麦克风/联系人/定位/悬浮窗/存储/无障碍)
-  smoke                 老参谋冒烟: 授权+冷启动+单击悬浮球+等分屏+截图 (dev\smoke-*.png)
+  smoke                 老参谋冒烟: 授权+冷启动+单击验菜单+长按问屏+等分屏+截图 (dev\smoke-*.png)
   record                触发连续参谋 (首次需在设备上确认投影授权)
   record-stop           快速双击悬浮球停止连续参谋
   start-emu             启动第一个 AVD (无设备时)

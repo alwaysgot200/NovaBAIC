@@ -62,7 +62,7 @@ import kotlinx.coroutines.withContext
  * 「老参谋」的大脑。会话管道与主界面聊天同构：OCR/无障碍文本作为用户
  * 消息写入持久化「老参谋」会话，由同一个 [AgentLoop] 以 Chat 模式作答。
  *
- * 单次（单击）与连续（双击）共用 [submitTurn] 的串行队列；每完成一回合
+ * 单次（长按）与连续（双击）共用 [submitTurn] 的串行队列；每完成一回合
  * 发出 [turnCompletions]（服务层据此点亮红点徽章）。感知本身委托
  * [ScreenPerceiver] 四级阶梯。不含任何窗口/UI 逻辑。
  */
@@ -117,7 +117,7 @@ class ScreenAdvisor @Inject constructor(
     @Volatile
     private var preheatedText: String? = null
 
-    /** LLM 串行队列：连续模式差分注入与单击共用，永不并发。 */
+    /** LLM 串行队列：连续模式差分注入与单次参谋共用，永不并发。 */
     private val turnMutex = Mutex()
 
     // ------------------------------------------------------ projection
@@ -139,7 +139,7 @@ class ScreenAdvisor @Inject constructor(
 
     // --------------------------------------------------------- preheat
 
-    /** 单击第一击抬起立即预热：只读无障碍文本，双击到达即丢弃。 */
+    /** 触点落下即预热（长按第一触点）：只读无障碍文本，未走长按即丢弃。 */
     fun preheat() {
         if (preheatJob?.isActive == true || preheatedText != null) return
         preheatJob = advisorScope.launch {
@@ -167,7 +167,7 @@ class ScreenAdvisor @Inject constructor(
         when (val perception = perceiver.quickPerceive(preheated)) {
             is Perception.Text -> {
                 emit(Event.TurnStarted(perception.text))
-                submitTurn(perception.text)
+                submitTurn(autoScreenContent(perception.text))
             }
 
             is Perception.Image -> {
@@ -181,7 +181,7 @@ class ScreenAdvisor @Inject constructor(
                     emit(Event.Failed(REASON_NO_TEXT))
                 } else {
                     emit(Event.TurnStarted(text))
-                    submitTurn(text)
+                    submitTurn(autoScreenContent(text))
                 }
             }
 
@@ -195,6 +195,10 @@ class ScreenAdvisor @Inject constructor(
     }
 
     // ---------------------------------------------------- shared turns
+
+    /** 自动屏幕消息的统一标记：转录视图据此折叠，主界面据此识别来源。 */
+    fun autoScreenContent(text: String): String =
+        context.getString(R.string.float_ask_question_label) + "\n" + text
 
     /**
      * 写入用户消息并跑一个 LLM 回合（串行）。单次与连续共用；

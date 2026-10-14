@@ -161,10 +161,17 @@ class FrameDiffEngine @Inject constructor(
     fun stop() {
         loopJob?.cancel()
         loopJob = null
-        roundJob?.cancel()
-        roundJob = null
+        cancelRound()
         lastOcrText = null
     }
+
+    /** 停止当前正在进行的 LLM 回合（输入行「停止」键；循环本身继续）。 */
+    fun cancelRound() {
+        roundJob?.cancel()
+        roundJob = null
+    }
+
+    fun isRoundActive(): Boolean = roundJob?.isActive == true
 
     fun destroy() {
         stop()

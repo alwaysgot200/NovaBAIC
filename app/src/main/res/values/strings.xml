@@ -44,9 +44,9 @@
     <string name="float_settings_session_60">60 分钟</string>
     <string name="float_settings_session_unlimited">不限</string>
     <string name="float_settings_permissions">权限状态</string>
-    <string name="float_settings_perm_a11y">无障碍服务（单击毫秒级识屏的前提）</string>
+    <string name="float_settings_perm_a11y">无障碍服务（长按毫秒级识屏的前提）</string>
     <string name="float_settings_perm_overlay">悬浮窗权限</string>
-    <string name="float_settings_perm_projection">屏幕投影：单击/双击时按需弹窗授权，拍完即关</string>
+    <string name="float_settings_perm_projection">屏幕投影：长按/双击时按需弹窗授权，拍完即关</string>
     <string name="float_settings_go_enable">去开启</string>
     <string name="float_settings_granted">已开启</string>
     <string name="float_settings_session">老参谋会话</string>
@@ -80,6 +80,16 @@
     <string name="float_ask_question_label">【屏幕内容】</string>
     <string name="float_answer_label">【参谋】</string>
     <string name="float_ask_blank">屏幕内容为空（可能息屏或该应用禁止截屏）</string>
+    <string name="float_bubble_collapsed">【屏幕内容】已发送 %1$d 字 ▸ 点击展开</string>
+    <string name="float_bubble_collapse">▾ 收起</string>
+    <string name="float_input_hint">问问「老参谋」…</string>
+    <string name="float_input_send">发送</string>
+    <string name="float_input_stop">停止</string>
+    <string name="float_input_voice">语音输入</string>
+    <string name="float_input_plus">更多（在完整对话中）</string>
+    <string name="float_voice_unavailable">此设备不支持语音识别</string>
+    <string name="float_voice_listening">正在聆听…</string>
+    <string name="float_plus_to_main">附件请在完整对话中使用，已为你打开会话</string>
     <string name="float_ask_system">你是屏幕问答助手。用户给你一段由 OCR 从手机当前屏幕识别出的文本（可能有识别噪声，可能缺少排版）。请用简体中文简洁地回答：如果用户的问题与屏幕内容相关，就基于内容作答；否则概述屏幕要点。不要复述原文。</string>
 
 </resources>
