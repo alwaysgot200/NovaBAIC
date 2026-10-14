@@ -148,6 +148,11 @@
   主线程只做视图更新
 - ❌ 不绕过 `ScreenAdvisor` 直接调 provider/ocr（服务层保持薄）
 - ❌ 不把 OCR/截屏结果落盘或发遥测——本地优先红线
+- ❌ **临时截图/中间产物一律放 `tests/tempImg/`（唯一合法位置），严禁放进 `dev/`
+  或其他源码目录**。包括但不限于：adb 截屏、冒烟/验收证据图、uiautomator dump
+  中转的 png。`tests/tempImg/` 已在 `.gitignore`（不进版本库），任务结束后随手
+  清理；需要长期保留的证据图也放该目录，文档引用统一写 `tests/tempImg/xxx.png`。
+  `dev/` 只放可复用的开发脚本（如 mock server），不放任何二进制产物
 
 ---
 
@@ -199,6 +204,23 @@ adb logcat -d | grep -E "FATAL|AndroidRuntime"   # 必须为空
 涉及 `core:model`/`core:engine` 的（本分支不应有）还须过单测：
 `./gradlew :core:model:test :core:engine:test`。
 
+### 6.1 Android 版本适配事实（用户侧口径见 README「设备与系统要求」）
+
+SDK：`minSdk 26 / targetSdk 36 / compileSdk 37`。写保活/悬浮窗相关代码时必须按行判断，
+不允许假设「大家都在最新版」：
+
+| 版本 | 关键约束 | 本分支对策 |
+| --- | --- | --- |
+| 8.0–11（26–30） | 前台服务/后台启动最宽松 | 直启 FGS |
+| 12（31+） | 后台启动受限；精确闹钟是 `SCHEDULE_EXACT_ALARM`/`USE_EXACT_ALARM` 运行时能力 | `KeepAliveUtils` 检查 canScheduleExactAlarms 并引导设置 |
+| 13（33+） | 通知运行时权限 | 设置页内联 `POST_NOTIFICATIONS` 请求 |
+| 14（34+） | FGS 类型强制声明与按类型启动；MediaProjection 一授权一投影 | Manifest 声明 `foregroundServiceType`；截屏拍完即关（§8 教训 2） |
+| 15+（35+） | 仅有 SAW 不再允许后台启 FGS，需「此刻存在可见 overlay」 | `KeepAliveManager.reviveServiceIfNeeded()` 三级降级：电池白名单/闹钟豁免直启 → 先挂占位 overlay 再启 → 放弃 |
+
+其余红线：BOOT 黑名单含 `mediaPlayback`，`KeepAliveMusicService` 绝不从开机广播启动；
+电池优化白名单与精确闹钟是两个独立豁免，不可互相假设；force-stop 后任何保活都失效，
+UI 文案不得承诺「永久存活」。国产 ROM 自启跳转表在 `KeepAliveUtils.AUTO_START_TABLE`。
+
 ---
 
 ## 7. Git 与上游合并协议
@@ -249,3 +271,7 @@ git mergetool / 手工解决
    与双击同一状态机入口），`record-stop` 停止。
 8. **PowerShell 的 `>` 重定向会写坏二进制**（adb exec-out screencap | png
    被 CRLF 破坏）——截图一律 `screencap /sdcard + adb pull`（smoke 命令已内置）。
+9. **临时截图只能进 `tests/tempImg/`**（见 §4.3 禁令）。`build-client.ps1` 的
+   截图函数就落在这里并被 `.gitignore` 忽略；手动 adb pull、证据图、像素分析
+   中转 png 一律同址。曾因随手把一批 evidence-*.png 放进 `dev/` 污染开发脚本
+   目录，已全部迁移——别再犯。

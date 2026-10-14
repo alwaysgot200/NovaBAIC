@@ -15,6 +15,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
@@ -94,6 +97,48 @@
             android:name=".floatball.FloatSettingsActivity"
             android:exported="false"
             android:label="@string/float_settings_title" />
+
+        <!-- 老参谋保活：开机/更新自启（受保护广播，exported 必须 true） -->
+        <receiver
+            android:name=".keepalive.KeepAliveBootReceiver"
+            android:enabled="true"
+            android:exported="true"
+            tools:ignore="IntentFilterExportedReceiver">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 心跳兜底闹钟（应用内事件，不导出） -->
+        <receiver
+            android:name=".keepalive.KeepAliveAlarmReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.verlintas.baic2.keepalive.action.HEARTBEAT_ALARM" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 心跳 JobService（周期下限 15 分钟，由系统排程） -->
+        <service
+            android:name=".keepalive.KeepAliveHeartbeatJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- 可选无声音乐：仅前台开启或闹钟/白名单路径复活，绝不从 BOOT 启动 -->
+        <service
+            android:name=".keepalive.KeepAliveMusicService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- 保活设置页 -->
+        <activity
+            android:name=".keepalive.KeepAliveSettingsActivity"
+            android:exported="false"
+            android:label="@string/float_keepalive_title" />
     </application>
 
 </manifest>

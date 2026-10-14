@@ -185,10 +185,15 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
         val text = when (val status = state.status) {
             is ScreenAdvisor.Status.OcrRunning -> context.getString(R.string.float_ask_status_ocr)
             is ScreenAdvisor.Status.Thinking -> context.getString(R.string.float_ask_thinking)
+            is ScreenAdvisor.Status.Retrying ->
+                context.getString(R.string.float_ask_retrying, status.attempt, status.total)
             is ScreenAdvisor.Status.Error -> when (status.reason) {
                 "no_text" -> context.getString(R.string.float_ask_no_text)
                 "no_config" -> context.getString(R.string.float_ask_no_config)
                 "blank_frame" -> context.getString(R.string.float_ask_blank)
+                "first_text_timeout" -> context.getString(R.string.float_ask_error_timeout)
+                "no_response" -> context.getString(R.string.float_ask_error_no_response)
+                "network" -> context.getString(R.string.float_ask_error_network)
                 else -> context.getString(R.string.float_ask_failed, status.reason)
             }
             ScreenAdvisor.Status.Idle -> ""

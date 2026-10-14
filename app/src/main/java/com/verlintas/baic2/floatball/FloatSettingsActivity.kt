@@ -213,6 +213,33 @@ private fun AdvisorSettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onSurfaceVariant,
                 )
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = scheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable {
+                            context.startActivity(
+                                Intent(
+                                    context,
+                                    com.verlintas.baic2.keepalive.KeepAliveSettingsActivity::class.java,
+                                ),
+                            )
+                        },
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        Text(
+                            text = stringResource(R.string.float_keepalive_entry),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = stringResource(R.string.float_keepalive_entry_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                }
 
                 SectionLabel(stringResource(R.string.float_settings_session))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

@@ -56,6 +56,7 @@ import com.verlintas.baic2.EXTRA_EXIT
 import com.verlintas.baic2.EXTRA_FROM_FLOAT
 import com.verlintas.baic2.MainActivity
 import com.verlintas.baic2.R
+import com.verlintas.baic2.keepalive.KeepAliveManager
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlin.math.abs
@@ -87,6 +88,9 @@ class FloatBallService : Service() {
 
     @Inject
     lateinit var advisorPrefs: AdvisorPrefs
+
+    @Inject
+    lateinit var keepAliveManager: KeepAliveManager
 
     private enum class Mode { IDLE, ONESHOT, RECORDING }
 
@@ -137,8 +141,12 @@ class FloatBallService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         windowManager = getSystemService(WindowManager::class.java)
+        // 保活降级路径可能先挂了占位 overlay，正式球出现前摘除。
+        keepAliveManager.removePlaceholderOverlay()
         startInForeground()
+        keepAliveManager.onServiceCreated()
         showBall()
         registerReceiver(
             screenOffReceiver,
@@ -148,9 +156,11 @@ class FloatBallService : Service() {
             },
         )
         scope.launch {
-            // 每个完成的 LLM 回合点亮一次红点（连续模式的用户信号）。
+            // 未读徽章：只有「连续模式 + 分屏未打开（用户没在看）」时完成的
+            // LLM 回合才计入；分屏开着时回答实时可见=已读，不计数。开/合分屏
+            // 时在 ensureSplit/closeSplit 维护计数清零。
             screenAdvisor.turnCompletions.collect {
-                if (mode == Mode.RECORDING) {
+                if (mode == Mode.RECORDING && split == null) {
                     completionCount++
                     ball?.setBadge(completionCount)
                 }
@@ -169,6 +179,8 @@ class FloatBallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_SHOW_BALL -> if (ball == null && mode != Mode.ONESHOT) showBall()
+            // 通知权限刚授予后，重挂前台通知让常驻提示立即可见。
+            ACTION_REPOST_NOTIFICATION -> startInForeground()
             // 免双击入口（通知栏自动化/测试）：与双击同一状态机路径。
             ACTION_START_RECORDING -> if (mode == Mode.IDLE && ball != null) startRecording()
             ACTION_STOP_RECORDING -> if (mode == Mode.RECORDING) stopRecording()
@@ -179,7 +191,15 @@ class FloatBallService : Service() {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // 主任务被划掉：服务与浮层继续存活；永久档确保心跳/闹钟链仍在。
+        keepAliveManager.onTaskRemoved()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
+        // 调度刻意保留：START_STICKY 与心跳负责把服务拉回；显式退出另走 exitApp。
+        isRunning = false
         unregisterReceiver(screenOffReceiver)
         mainHandler.removeCallbacksAndMessages(null)
         askJob?.cancel()
@@ -546,6 +566,10 @@ class FloatBallService : Service() {
         // StateFlow 无新值不发射: 新视图创建后立即喂当前转录快照。
         transcript.render(screenAdvisor.transcript.value)
         inputHandle?.refresh()
+        // 打开分屏=用户开始阅读：未读冒泡立即消失；阅读期间的新回合实时可见，
+        // 不再计未读（turnCompletions 收集侧以 split != null 抑制）。
+        completionCount = 0
+        ball?.setBadge(0)
         return panel
     }
 
@@ -910,11 +934,14 @@ class FloatBallService : Service() {
         collapseMenu()
         startActivity(
             Intent(this, MainActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
-                )
+                var flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                // 方案 §6.5：开启「最近任务隐藏」时，新拉起的主任务一并排除。
+                if (keepAliveManager.isRecentsExclusionEnabled()) {
+                    flags = flags or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                }
+                addFlags(flags)
                 putExtra(EXTRA_FROM_FLOAT, true)
             },
         )
@@ -960,6 +987,9 @@ class FloatBallService : Service() {
     }
 
     private fun exitApp() {
+        // 显式退出：心跳/闹钟不再复活本服务。
+        keepAliveManager.onUserExit()
+        isRunning = false
         removeAllOverlays()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -1061,10 +1091,16 @@ class FloatBallService : Service() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private companion object {
+    companion object {
+        /** 服务存活旗标（onCreate/onDestroy 维护），供心跳拉活判断。 */
+        @JvmField
+        @Volatile
+        var isRunning: Boolean = false
+
         const val CHANNEL_ID = "float_ball"
         const val NOTIFICATION_ID = 1001
         const val ACTION_SHOW_BALL = "com.verlintas.baic2.floatball.SHOW_BALL"
+        const val ACTION_REPOST_NOTIFICATION = "com.verlintas.baic2.floatball.REPOST_NOTIFICATION"
         const val ACTION_START_RECORDING = "com.verlintas.baic2.floatball.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.verlintas.baic2.floatball.STOP_RECORDING"
         const val CONSENT_SETTLE_MS = 350L

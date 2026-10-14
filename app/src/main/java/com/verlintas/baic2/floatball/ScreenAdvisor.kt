@@ -35,6 +35,7 @@ import com.verlintas.baic2.core.model.ProviderConfig
 import com.verlintas.baic2.device.api.OcrProvider
 import com.verlintas.baic2.device.api.ScreenshotProvider
 import com.verlintas.baic2.floatball.ScreenPerceiver.Perception
+import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -44,6 +45,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,11 +55,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 /**
  * 「老参谋」的大脑。会话管道与主界面聊天同构：OCR/无障碍文本作为用户
@@ -77,6 +82,7 @@ class ScreenAdvisor @Inject constructor(
     private val agentLoop: AgentLoop,
     private val perceiver: ScreenPerceiver,
     private val prefs: AdvisorPrefs,
+    private val keepAlivePrefs: KeepAlivePrefs,
 ) {
 
     /** 面板渲染所需的一切：会话消息 + 正在流式的回答 + 阶段状态。 */
@@ -91,6 +97,8 @@ class ScreenAdvisor @Inject constructor(
         data object Idle : Status
         data object OcrRunning : Status
         data object Thinking : Status
+        /** 零文本失败后的第 [attempt]/[total] 次重试等待中。 */
+        data class Retrying(val attempt: Int, val total: Int) : Status
         data class Error(val reason: String) : Status
     }
 
@@ -203,8 +211,11 @@ class ScreenAdvisor @Inject constructor(
     /**
      * 写入用户消息并跑一个 LLM 回合（串行）。单次与连续共用；
      * 失败也返回（不抛），错误已写入 transcript 状态。
+     *
+     * @param backgroundTurn 连续（差分）模式的后台回合：重试预算强制收窄
+     * （1 次重试 / 8 秒首字超时），避免坏网络堵死差分队列；单次参谋走用户设置。
      */
-    suspend fun submitTurn(content: String) {
+    suspend fun submitTurn(content: String, backgroundTurn: Boolean = false) {
         val question = content.trim().take(MAX_SCREEN_CHARS)
         if (question.isEmpty()) return
         val conversationId = ensureConversation()
@@ -218,12 +229,23 @@ class ScreenAdvisor @Inject constructor(
         )
         _transcript.updateStatus(Status.Thinking)
         turnMutex.withLock {
-            runAdvisorTurn(conversationId)
+            runAdvisorTurn(conversationId, backgroundTurn)
         }
     }
 
-    /** 与 ChatViewModel 的聊天轮同构：AgentLoop 产出、仓储落库。 */
-    private suspend fun runAdvisorTurn(conversationId: Long) {
+    /** 一次尝试的结果：成功 / 零文本失败（可重试）/ 已有部分输出失败（不重试）。 */
+    private sealed interface TurnOutcome {
+        data object Done : TurnOutcome
+        data class ZeroOutputFailure(val reason: String) : TurnOutcome
+        data class PartialOutputFailure(val reason: String, val partial: String) : TurnOutcome
+    }
+
+    /**
+     * 与 ChatViewModel 的聊天轮同构：AgentLoop 产出、仓储落库。
+     * 零文本失败（首字超时/连接失败/零文本 Failed）按递增间隔重试；
+     * 已见文本（含思考过程）后失败绝不重试，保存 partial 并报错。
+     */
+    private suspend fun runAdvisorTurn(conversationId: Long, tightRetry: Boolean) {
         val config: ProviderConfig = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
             ?: run {
                 _transcript.updateStatus(Status.Error(REASON_NO_CONFIG))
@@ -250,23 +272,98 @@ class ScreenAdvisor @Inject constructor(
             now = System.currentTimeMillis(),
         )
 
-        val live = StringBuilder()
+        val ka = keepAlivePrefs.state.value
+        val maxRetries = if (tightRetry) TIGHT_RETRY_TIMES else ka.retryTimes
+        val firstTextTimeoutMs =
+            (if (tightRetry) TIGHT_RETRY_TIMEOUT_SEC else ka.retryTimeoutSec) * 1000L
+        val delayBaseSec = ka.retryDelaySec.coerceAtLeast(1).toLong()
+
         try {
-            agentLoop.run(
-                config = config,
-                mode = AppMode.CHAT,
-                customSystemPrompt = ADVISOR_STYLE,
-                history = history,
-                conversationId = conversationId,
-                memoryContext = memoryContext,
-                triggerMessageId = question.id,
-            ).collect { event ->
-                when (event) {
-                    is AgentEvent.TextDelta -> {
-                        live.append(event.text)
-                        _transcript.update { it.copy(streaming = live.toString()) }
+            var attempt = 0
+            while (true) {
+                val outcome = collectAdvisorOnce(
+                    config = config,
+                    conversationId = conversationId,
+                    history = history,
+                    memoryContext = memoryContext,
+                    triggerMessageId = question.id,
+                    firstTextTimeoutMs = firstTextTimeoutMs,
+                )
+                when (outcome) {
+                    is TurnOutcome.Done -> return
+                    is TurnOutcome.PartialOutputFailure -> {
+                        if (outcome.partial.isNotBlank()) {
+                            conversationRepository.append(
+                                ChatMessage(
+                                    conversationId = conversationId,
+                                    role = ChatRole.ASSISTANT,
+                                    content = outcome.partial,
+                                    createdAt = System.currentTimeMillis(),
+                                ),
+                            )
+                        }
+                        _transcript.updateStatus(Status.Error(outcome.reason))
+                        return
                     }
-                    is AgentEvent.AssistantMessage -> {
+                    is TurnOutcome.ZeroOutputFailure -> {
+                        if (attempt >= maxRetries) {
+                            _transcript.updateStatus(Status.Error(outcome.reason))
+                            return
+                        }
+                        attempt++
+                        _transcript.updateStatus(Status.Retrying(attempt, maxRetries))
+                        // 递增等待：第 n 次重试前等 base × n（5、10、15…），
+                        // 可取消 delay 不占线程，turnMutex 内安全。
+                        delay(delayBaseSec * 1000L * attempt)
+                    }
+                }
+            }
+        } finally {
+            _transcript.update { it.copy(streaming = null) }
+        }
+    }
+
+    /**
+     * 两阶段收集：首个文本事件（TextDelta/ThinkingDelta/AssistantMessage）
+     * 在 [firstTextTimeoutMs] 内必须到达，之后流式总时长不限。超时即取消并
+     * 丢弃整条上游 flow——防止迟到回答在重试后重复落库。
+     */
+    private suspend fun collectAdvisorOnce(
+        config: ProviderConfig,
+        conversationId: Long,
+        history: List<ChatMessage>,
+        memoryContext: String?,
+        triggerMessageId: Long,
+        firstTextTimeoutMs: Long,
+    ): TurnOutcome = kotlinx.coroutines.coroutineScope {
+        val events: ReceiveChannel<AgentEvent> = agentLoop.run(
+            config = config,
+            mode = AppMode.CHAT,
+            customSystemPrompt = ADVISOR_STYLE,
+            history = history,
+            conversationId = conversationId,
+            memoryContext = memoryContext,
+            triggerMessageId = triggerMessageId,
+        ).produceIn(this)
+
+        val live = StringBuilder()
+        var sawText = false
+        var completed = false
+        var failureReason: String? = null
+
+        suspend fun handle(event: AgentEvent) {
+            when (event) {
+                is AgentEvent.TextDelta -> {
+                    sawText = true
+                    live.append(event.text)
+                    _transcript.update { it.copy(streaming = live.toString()) }
+                }
+                // 推理模型的思考过程也算「活信号」：思考超过首字超时不应误重试。
+                is AgentEvent.ThinkingDelta -> sawText = true
+                is AgentEvent.AssistantMessage -> {
+                    sawText = true
+                    if (event.message.content.isNotBlank()) {
+                        completed = true
                         conversationRepository.append(
                             event.message.copy(
                                 conversationId = conversationId,
@@ -276,31 +373,95 @@ class ScreenAdvisor @Inject constructor(
                         live.setLength(0)
                         _transcript.update { it.copy(streaming = null, status = Status.Idle) }
                         _turnCompletions.tryEmit(Unit)
-                    }
-                    is AgentEvent.Failed -> {
+                    } else if (live.isNotBlank()) {
+                        // 末条消息为空但已有流式文本：以累积文本为准落库，
+                        // 不写空气泡、不丢已生成内容。
+                        completed = true
+                        conversationRepository.append(
+                            ChatMessage(
+                                conversationId = conversationId,
+                                role = ChatRole.ASSISTANT,
+                                content = live.toString(),
+                                createdAt = System.currentTimeMillis(),
+                            ),
+                        )
                         live.setLength(0)
-                        _transcript.updateStatus(Status.Error(event.error.message))
+                        _transcript.update { it.copy(streaming = null, status = Status.Idle) }
+                        _turnCompletions.tryEmit(Unit)
+                    } else {
+                        // 空消息且此前没有任何输出：按零文本失败处理（可重试）。
+                        failureReason = failureReason ?: REASON_NO_RESPONSE
                     }
-                    else -> Unit
+                }
+                is AgentEvent.Failed -> failureReason = event.error.message
+                else -> Unit
+            }
+        }
+
+        // 阶段 1：等首个文本事件（RoundStarted/ToolCall 等不算活信号）。
+        // 注意 TimeoutCancellationException 是 CancellationException 的子类，
+        // 必须先于后者 catch，否则超时会被误当外部取消向上抛。
+        try {
+            withTimeout(firstTextTimeoutMs) {
+                while (true) {
+                    val result = events.receiveCatching()
+                    if (result.isClosed) break
+                    handle(result.getOrThrow())
+                    if (sawText) break
                 }
             }
+        } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+            events.cancel()
+            return@coroutineScope TurnOutcome.ZeroOutputFailure(REASON_FIRST_TEXT_TIMEOUT)
+        } catch (cancelled: CancellationException) {
+            events.cancel()
+            throw cancelled
+        } catch (error: Exception) {
+            events.cancel()
+            return@coroutineScope if (sawText) {
+                TurnOutcome.PartialOutputFailure(error.message ?: "unknown", live.toString())
+            } else {
+                TurnOutcome.ZeroOutputFailure(error.message ?: REASON_NETWORK)
+            }
+        }
+
+        if (!sawText) {
+            return@coroutineScope TurnOutcome.ZeroOutputFailure(
+                failureReason ?: REASON_NO_RESPONSE,
+            )
+        }
+
+        // 阶段 2：已有文本，剩余流式不再限时，多长都等完。
+        try {
+            for (event in events) handle(event)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            val partial = live.toString()
-            if (partial.isNotBlank()) {
+            return@coroutineScope TurnOutcome.PartialOutputFailure(
+                error.message ?: "unknown",
+                live.toString(),
+            )
+        }
+
+        val reason = failureReason
+        when {
+            completed -> TurnOutcome.Done
+            reason != null -> TurnOutcome.PartialOutputFailure(reason, live.toString())
+            // 兜底：上游有文本流出却没给 AssistantMessage 收尾，保住已生成内容。
+            live.isNotBlank() -> {
                 conversationRepository.append(
                     ChatMessage(
                         conversationId = conversationId,
                         role = ChatRole.ASSISTANT,
-                        content = partial,
+                        content = live.toString(),
                         createdAt = System.currentTimeMillis(),
                     ),
                 )
+                _transcript.update { it.copy(streaming = null, status = Status.Idle) }
+                _turnCompletions.tryEmit(Unit)
+                TurnOutcome.Done
             }
-            _transcript.updateStatus(Status.Error(error.message ?: "unknown"))
-        } finally {
-            _transcript.update { it.copy(streaming = null) }
+            else -> TurnOutcome.ZeroOutputFailure(REASON_NO_RESPONSE)
         }
     }
 
@@ -361,6 +522,16 @@ class ScreenAdvisor @Inject constructor(
     private companion object {
         const val REASON_NO_TEXT = "no_text"
         const val REASON_NO_CONFIG = "no_config"
+
+        /** 零文本失败原因（展示层映射成中文文案；均允许重试）。 */
+        const val REASON_FIRST_TEXT_TIMEOUT = "first_text_timeout"
+        const val REASON_NETWORK = "network"
+        const val REASON_NO_RESPONSE = "no_response"
+
+        /** 连续（差分）参谋的强制重试预算：坏网络下不堵死帧队列。 */
+        const val TIGHT_RETRY_TIMES = 1
+        const val TIGHT_RETRY_TIMEOUT_SEC = 8
+
         const val MAX_SCREEN_CHARS = 6_000
         const val HISTORY_MESSAGES = 16
         const val PRIMED_NOTES = 4

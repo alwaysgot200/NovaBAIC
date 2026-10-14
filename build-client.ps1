@@ -818,13 +818,15 @@ function Wait-FanMenu {
     return $false
 }
 
-# 在设备上截屏并 pull 到工程 dev 目录 (PS 的 > 重定向会写坏 PNG 二进制)。
+# 在设备上截屏并 pull 到 tests\tempImg 目录 (git 不受控; PS 的 > 重定向会写坏 PNG 二进制)。
 function Save-DeviceScreenshot {
     param(
         [Parameter(Mandatory = $true)][string] $Device,
         [Parameter(Mandatory = $true)][string] $Suffix
     )
-    $out = Join-Path $ProjectDir ("dev\smoke-{0}-{1:yyyyMMdd-HHmmss}.png" -f $Suffix, (Get-Date))
+    $imgDir = Join-Path $ProjectDir "tests\tempImg"
+    New-Item -ItemType Directory -Force -Path $imgDir | Out-Null
+    $out = Join-Path $imgDir ("smoke-{0}-{1:yyyyMMdd-HHmmss}.png" -f $Suffix, (Get-Date))
     & $Adb -s $Device shell screencap -p /sdcard/baic2-smoke.png 2>$null | Out-Null
     & $Adb -s $Device pull /sdcard/baic2-smoke.png $out 2>$null | Out-Null
     & $Adb -s $Device shell rm /sdcard/baic2-smoke.png 2>$null | Out-Null
@@ -858,7 +860,7 @@ function Complete-ProjectionConsent {
 
 # 老参谋冒烟: 冷启动 -> 授权 -> 等悬浮球 -> 单击验证扇形菜单 -> 收起 ->
 # 长按触发屏幕问答 -> 等分屏浮窗 -> 截图。
-# 产物: dev\smoke-menu-<时间>.png + dev\smoke-<时间>.png; 全程无交互。
+# 产物: tests\tempImg\smoke-menu-<时间>.png + smoke-<时间>.png; 全程无交互。
 # 文本路径无授权框; 像素/投影路径会自动完成系统授权框。
 function Do-AdvisorSmoke {
     param([Parameter(Mandatory = $true)][string] $Device)
@@ -1210,7 +1212,7 @@ function Show-Help {
   stop                  停止 App
   clear-data            清除 App 数据 (随后自动重新授予权限; 密钥下次首启自动重置)
   grant                 重新授予运行时权限 (通知/相机/麦克风/联系人/定位/悬浮窗/存储/无障碍)
-  smoke                 老参谋冒烟: 授权+冷启动+单击验菜单+长按问屏+等分屏+截图 (dev\smoke-*.png)
+  smoke                 老参谋冒烟: 授权+冷启动+单击验菜单+长按问屏+等分屏+截图 (tests\tempImg\smoke-*.png)
   record                触发连续参谋 (首次需在设备上确认投影授权)
   record-stop           快速双击悬浮球停止连续参谋
   start-emu             启动第一个 AVD (无设备时)

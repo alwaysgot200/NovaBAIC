@@ -19,6 +19,8 @@ captures/
 *.ipr
 *.iws
 .vscode/
+# Eclipse/JDT 风格编译输出（历史上误提交过 core/*/bin）
+bin/
 
 # Kotlin
 .kotlin/
@@ -33,8 +35,8 @@ keystore_pass.txt
 secrets.properties
 keystore.properties
 
+# 临时测试产物（模拟器截图等），整个目录不受 git 控制
+/tests/tempImg/
+
 # Reference-only asset the owner dropped in for design study
 /Coupon Reveal.json
-
-# 老参谋冒烟截图 (测试产物)
-dev/smoke-*.png

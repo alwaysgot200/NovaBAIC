@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 老参谋标识背景：品牌蓝斜向渐变 + 左上柔光 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path android:pathData="M0,0 h108 v108 h-108 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="0"
+                android:endX="108" android:endY="108">
+                <item android:offset="0" android:color="#FF16397F" />
+                <item android:offset="0.55" android:color="#FF2E5FD0" />
+                <item android:offset="1" android:color="#FF1E4497" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <path android:pathData="M26,14 m-34,0 a34,34 0 1 0 68,0 a34,34 0 1 0 -68,0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="26" android:centerY="14"
+                android:gradientRadius="34">
+                <item android:offset="0" android:color="#33FFFFFF" />
+                <item android:offset="1" android:color="#00FFFFFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

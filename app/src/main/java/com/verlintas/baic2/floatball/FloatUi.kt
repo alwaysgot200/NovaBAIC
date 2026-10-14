@@ -31,6 +31,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.verlintas.baic2.R
@@ -44,8 +45,6 @@ import com.verlintas.baic2.R
 internal object FloatUi {
 
     const val BALL_SIZE_DP = 56
-    const val BALL_LABEL = "AI"
-    const val REC_LABEL = "●"
     const val MARGIN_DP = 8
 
     /** 扇形子球：子球直径 / 轨道半径（子球中心距主球中心 = 2 倍主球直径）。 */
@@ -74,17 +73,20 @@ internal object FloatUi {
     /** 可拖动的悬浮球；触摸手势由服务层绑定。窗口尺寸=视觉尺寸（中心即可点击）。 */
     fun buildBall(context: Context): BallView {
         val size = dp(context, BALL_SIZE_DP)
-        val label = TextView(context).apply {
-            text = BALL_LABEL
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
+        // 与应用图标共用同一矢量 logo；矢量内容占视口约 52%，故 logo 视图
+        // 放大到 72dp 居中（父容器裁剪），使羽扇在 56dp 球内视觉占比约 2/3。
+        // 圆形底色单独由 56dp 的圆盘承担，避免底色随 logo 放大溢出球体。
+        val logoSize = dp(context, 72)
+        val disc = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(BALL_COLOR)
                 setStroke(dp(context, 1), 0x33FFFFFF)
             }
+        }
+        val logo = ImageView(context).apply {
+            setImageResource(R.drawable.ic_logo_advisor)
+            scaleType = ImageView.ScaleType.FIT_CENTER
         }
         val spinner = View(context).apply {
             background = android.graphics.drawable.ShapeDrawable(
@@ -119,7 +121,10 @@ internal object FloatUi {
         val root = FrameLayout(context).apply {
             // 不设 elevation: overlay 的 surfaceInsets 会让触摸坐标与视觉
             // 整体偏移 (阴影像素被计入窗口), 立体感由描边承担。
-            addView(label, FrameLayout.LayoutParams(size, size))
+            addView(disc, FrameLayout.LayoutParams(size, size))
+            addView(logo, FrameLayout.LayoutParams(logoSize, logoSize).apply {
+                gravity = Gravity.CENTER
+            })
             addView(scrim, FrameLayout.LayoutParams(size, size))
             addView(spinner, FrameLayout.LayoutParams(size, size))
             addView(badge)
@@ -130,13 +135,13 @@ internal object FloatUi {
             height = dp(context, 20)
             setMargins(0, dp(context, 1), dp(context, 1), 0)
         }
-        return BallView(root, label, scrim, spinner, badge)
+        return BallView(root, disc, scrim, spinner, badge)
     }
 
     /** 悬浮球句柄：服务层按状态机切换外观。 */
     class BallView(
         val root: FrameLayout,
-        private val label: TextView,
+        private val disc: View,
         private val scrim: View,
         private val spinner: View,
         private val badge: TextView,
@@ -149,16 +154,14 @@ internal object FloatUi {
                     spinning = false
                     spinner.visibility = View.GONE
                     scrim.visibility = View.GONE
-                    (label.background as? GradientDrawable)?.setColor(BALL_COLOR)
-                    label.text = BALL_LABEL
+                    (disc.background as? GradientDrawable)?.setColor(BALL_COLOR)
                     badge.visibility = View.GONE
                 }
                 BallMode.BUSY -> {
                     spinning = true
-                    (label.background as? GradientDrawable)?.setColor(BUSY_COLOR)
+                    (disc.background as? GradientDrawable)?.setColor(BUSY_COLOR)
                     scrim.visibility = View.VISIBLE
                     spinner.visibility = View.VISIBLE
-                    label.text = BALL_LABEL
                     badge.visibility = View.GONE
                     spinLoop()
                 }
@@ -166,9 +169,8 @@ internal object FloatUi {
                     spinning = false
                     spinner.visibility = View.GONE
                     scrim.visibility = View.GONE
-                    (label.background as? GradientDrawable)?.setColor(RECORD_COLOR)
-                    label.text = REC_LABEL
-                    badge.visibility = View.GONE
+                    (disc.background as? GradientDrawable)?.setColor(RECORD_COLOR)
+                    // 徽章可见性只由 setBadge() 按未读数管理，切换录制态不清零。
                 }
             }
         }
