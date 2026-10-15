@@ -33,7 +33,7 @@ import kotlinx.serialization.json.Json
  * 纪律：
  * - 只对 person 档案萃取（群聊不跑）；
  * - 节流由 [maybeExtract] 按 session_bindings.lastExtractAt + 回合配对数执行，
- *   默认每 5 个「屏幕+回复」配对至多一次；
+ *   间隔由 AdvisorPrefs 传入（默认每 5 个「屏幕+回复」配对至多一次）；
  * - 模型只产出**草稿**（confirmed=0）：confirmed/user 值在
  *   [ContactRepository.applyDraft] 内拒绝覆盖；
  * - 单次最多落 [MAX_DRAFTS] 条；字段目录只取 persona_schema 中
@@ -52,14 +52,21 @@ class PersonaExtractor @Inject constructor(
     /**
      * 节流满足时跑一次萃取并写草稿；返回实际新落库的草稿数。
      * 未到节流点 / 非 person / 无配置返回 0；调用方无需额外兜底。
+     *
+     * @param everyTurns 距上次萃取至少新增多少个完整回合才再跑（设置页可调）。
      */
-    suspend fun maybeExtract(contactId: Long, conversationId: Long, turns: List<Turn>): Int {
+    suspend fun maybeExtract(
+        contactId: Long,
+        conversationId: Long,
+        turns: List<Turn>,
+        everyTurns: Int = DEFAULT_EVERY_TURNS,
+    ): Int {
         val profile = contacts.profile(contactId) ?: return 0
         if (profile.contactType != CONTACT_TYPE_PERSON) return 0
 
         val since = contacts.binding(conversationId)?.lastExtractAt ?: 0L
         val fresh = turns.filter { it.at > since }
-        if (fresh.size < EXTRACT_EVERY_TURNS) return 0
+        if (fresh.size < everyTurns.coerceAtLeast(1)) return 0
 
         val config = runCatching { agentRepository.resolveConfig(null) }.getOrNull() ?: return 0
         val extractable = schemas.get().theirFields.filter { it.extract }
@@ -169,8 +176,11 @@ class PersonaExtractor @Inject constructor(
     )
 
     private companion object {
-        const val EXTRACT_EVERY_TURNS = 5
-        const val MAX_FED_TURNS = 6
+        /** 默认萃取节流（调用方未显式传参时；正常链路由 AdvisorPrefs 决定）。 */
+        const val DEFAULT_EVERY_TURNS = 5
+        // 萃取素材屏数 6→4：萃取只看最近新增量（节流已是每 3/5/10 屏），
+        // 4 个新屏足以捕捉画像变化，输入 token 再减三分之一。
+        const val MAX_FED_TURNS = 4
         const val MAX_DRAFTS = 5
         const val SCREEN_CHARS = 600
         const val REPLY_CHARS = 300

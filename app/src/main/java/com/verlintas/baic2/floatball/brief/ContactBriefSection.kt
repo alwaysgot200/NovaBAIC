@@ -29,14 +29,15 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * 「交往脉络 + 转折铁律」提示词段的纯函数渲染器（设计文档 §6.5–6.6）。
+ * 「交往脉络」提示词段的纯函数渲染器（设计文档 §6.5–6.6，v4 §8.1）。
  *
- * 输入全部是已经按联系人收敛过的数据（recallByEntity / ContactMemoryReader /
- * ContactHistoryGateway 的产物），渲染本身不做任何检索，也不含
- * Android 依赖。输出拼在 customSystemPrompt 末尾、与上游 memoryContext
- * 分轨——目标/人设/话术等业务区块由 v3 P2 的 ChatBriefBuilder 负责，
- * 本渲染器只管「带日期的历史事实 + 时序铁律」。整段（含段头与铁律）
- * 不超过 SECTION_MAX 字。
+ * 输入全部是已经按联系人收敛、且由调用方跨段去重过的数据（recallByEntity /
+ * ContactMemoryReader / ContactHistoryGateway 的产物），渲染本身不做任何
+ * 检索，也不含 Android 依赖。输出拼在 customSystemPrompt 中、与上游
+ * memoryContext 分轨——目标/人设/话术等业务区块由 ChatBriefBuilder 负责。
+ * v4 起「转折铁律」上移归并进系统提示词首位的【规约总纲】（共享/绑定
+ * 回合统一生效），本渲染器只管「带日期的历史事实」，整段不超过
+ * SECTION_MAX 字。
  */
 internal object ContactBriefSection {
 
@@ -48,10 +49,10 @@ internal object ContactBriefSection {
     private const val SECTION_MAX = 600
 
     /**
-     * @param entityNotes recallByEntity 按人直取的笔记。
+     * @param entityNotes recallByEntity 按人直取的笔记（调用方已去重）。
      * @param dueNotes 按人只读取出的窗内承诺/约见（AGREEMENT/PLAN，到期置顶）。
      * @param dealFacts 更早会话里的报价/合同等成交要件，可空。
-     * @return 提示词段落；数据全空时仍返回转折铁律（绑定联系人即需要时序约束）。
+     * @return 提示词段落；三类数据全空时返回 null（时序约束由全局总纲承载）。
      */
     fun render(
         contact: ContactRef,
@@ -59,21 +60,19 @@ internal object ContactBriefSection {
         dueNotes: List<Note>,
         dealFacts: List<DealFact>,
         now: Long = System.currentTimeMillis(),
-    ): String {
+    ): String? {
+        if (entityNotes.isEmpty() && dueNotes.isEmpty() && dealFacts.isEmpty()) return null
         val sb = StringBuilder()
         sb.append("【与").append(contact.displayName).append("的交往脉络】")
         sb.append("（均为历史时点事实，仅供参考，不代表对方此刻态度）\n")
 
-        // 行预算预扣转折铁律：铁律始终追加在末尾，必须算进 SECTION_MAX，
-        // 否则整段会超出 600 字契约（token 预算失准）。
         var used = sb.length
-        val lineBudget = SECTION_MAX - TURNING_RULE.length
         fun appendLine(line: String) {
-            if (used >= lineBudget) return
-            val bounded = if (line.length <= lineBudget - used) {
+            if (used >= SECTION_MAX) return
+            val bounded = if (line.length <= SECTION_MAX - used) {
                 line
             } else {
-                line.take((lineBudget - used).coerceAtLeast(0))
+                line.take((SECTION_MAX - used).coerceAtLeast(0))
             }
             sb.append(bounded)
             used += bounded.length
@@ -105,7 +104,6 @@ internal object ContactBriefSection {
             }
         }
 
-        sb.append(TURNING_RULE)
         return sb.toString()
     }
 
@@ -126,11 +124,4 @@ internal object ContactBriefSection {
         NoteKind.AGREEMENT -> "承诺"
         NoteKind.SUMMARY -> "小结"
     }
-
-    /** 时序铁律：解决「旧摘要让模型对已转意的客户继续逼单」。 */
-    private val TURNING_RULE =
-        "【转折铁律】脉络只代表当时。当前屏幕出现与脉络矛盾的信号时" +
-            "（尤其拒绝/犹豫转为意向、同意购买），一律以当前屏幕为准并立即顺应：" +
-            "停止说服、辩解或逼单，转入型号、数量、付款方式、交付时间的闭环确认；" +
-            "脉络中谈过的报价、承诺仍然有效，成交回复须与之自洽，不要凭空改价或食言。"
 }

@@ -45,6 +45,10 @@ import kotlinx.coroutines.withContext
  * 最新一帧（合并），上一回合 LLM 一结束，下一帧**立即**送出，形成连续的
  * OCR→LLM→OCR→LLM。
  *
+ * 省电：① 静止时投影镜像复用同一字节数组（引用相等即跳 PNG 解码）；
+ * ② 连续静止时抓帧间隔自适应倍增（上限读 AdvisorPrefs），一检测到运动
+ * 立即恢复最快档。
+ *
  * 自身浮窗（分屏面板/悬浮球）由服务层通过 [maskProvider] 提供已知矩形，
  * OCR 前涂黑——几何掩膜零误判。
  */
@@ -124,10 +128,17 @@ class FrameDiffEngine @Inject constructor(
             var baseline: FrameQuality.GrayFrame? = null
             var candidate: Candidate? = null
             var motionAtMs = 0L
+            // 投影缓存复用检测：屏幕无新帧时上游返回同一个 ByteArray 实例，
+            // 引用相同即像素相同，直接复用上帧签名，跳过整次 PNG 解码。
+            var lastRawBytes: ByteArray? = null
+            // 自适应降频：连续静止拍数到阈值后把抓帧间隔倍增到设置上限，
+            // 一旦检测到画面运动，下一拍立即恢复最快档。
+            var intervalMs = prefs.state.value.pollIntervalMs
+            var staticTicks = 0
 
             while (true) {
-                val interval = prefs.state.value.pollIntervalMs
-                delay(interval)
+                val baseInterval = prefs.state.value.pollIntervalMs
+                delay(intervalMs)
                 if (paused) continue
 
                 val maxSession = prefs.state.value.maxSessionMs
@@ -141,7 +152,12 @@ class FrameDiffEngine @Inject constructor(
                     onSignal(Signal.Failed("projection_lost"))
                     return@launch
                 }
-                val frame = FrameQuality.grayFrame(bytes)
+                val frame = if (lastRawBytes != null && bytes === lastRawBytes && baseline != null) {
+                    baseline
+                } else {
+                    FrameQuality.grayFrame(bytes)
+                }
+                lastRawBytes = bytes
                 if (frame == null || FrameQuality.isBlank(frame)) continue
 
                 val previous = baseline
@@ -151,14 +167,26 @@ class FrameDiffEngine @Inject constructor(
                 val motion = FrameQuality.blockDiff(previous.blocks, frame.blocks)
                 val now = System.currentTimeMillis()
                 if (motion > CHANGE_THRESHOLD) {
-                    // 画面在动：候选帧作废，记录运动时间。
+                    // 画面在动：候选帧作废，记录运动时间；降频立即复位。
                     motionAtMs = now
                     candidate = null
+                    staticTicks = 0
+                    intervalMs = baseInterval
                     continue
                 }
+                // 静止：按设置上限升档降频（每 BACKOFF_TICKS_PER_STEP 拍
+                // 倍增一档），拉长下一拍间隔，省解码/投影镜像开销。
+                staticTicks++
+                val cap = prefs.state.value.idleBackoffMultiplier
+                val multiplier = if (cap <= 1) {
+                    1
+                } else {
+                    (1 shl (staticTicks / BACKOFF_TICKS_PER_STEP)).coerceAtMost(cap)
+                }
+                intervalMs = baseInterval * multiplier
                 // 静止：从运动结束起算，稳定满静默窗才触发。
                 val motionAnchor = if (motionAtMs == 0L) now else motionAtMs
-                if (now - motionAnchor < interval * STABLE_TICKS) continue
+                if (now - motionAnchor < intervalMs * STABLE_TICKS) continue
                 if (candidate == null) {
                     android.util.Log.d(TAG, "stable, candidate armed (motion=$motion)")
                     candidate = Candidate(bytes, frame)
@@ -187,7 +215,9 @@ class FrameDiffEngine @Inject constructor(
                     continue
                 }
                 val last = lastOcrText
-                if (last != null && FrameQuality.textSimilarity(last, text) > DEDUP_SIMILARITY) {
+                if (last != null &&
+                    FrameQuality.textSimilarity(last, text) >= prefs.state.value.ocrDedupSimilarity
+                ) {
                     android.util.Log.d(TAG, "ocr dedup hit, len=${text.length}")
                     lastOcrGray = frame
                     continue
@@ -270,11 +300,11 @@ class FrameDiffEngine @Inject constructor(
         /** 8×8 分块平均亮度差超过该值视为"画面在动"。 */
         const val CHANGE_THRESHOLD = 0.035f
 
-        /** 静默窗 = 抓帧间隔 × 该系数（约两个周期）。 */
+        /** 静默窗 = 当前抓帧间隔 × 该系数（约两个周期）。 */
         const val STABLE_TICKS = 2
 
-        /** OCR 文本相似度高于该值视为重复内容。 */
-        const val DEDUP_SIMILARITY = 0.8
+        /** 每连续静止这么多拍，抓帧间隔向上倍增一档（2x→4x，封顶读设置）。 */
+        const val BACKOFF_TICKS_PER_STEP = 2
 
         /** 与上次已 OCR 帧的灰度差低于该值视为同一内容，不重发 LLM。
          *  取 0.02：状态栏时钟跳字等微小局部变化（实测均值 ≈0.01）被挡掉，

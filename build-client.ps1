@@ -63,9 +63,6 @@ $GradleExtraArgs = @('--console=plain')
 # 模拟器冷启动超时 (秒), 首次开机可能较慢
 $BootTimeoutSec = 300
 
-# 开发密钥在 local.properties 的键名 (debug 构建注入, 详见 DevAgentSeeder)
-$DevKeyProperty = 'dev.deepseekApiKey'
-
 # 保证 adb 输出 (exec-out 文本) 在 PS 5.1 下按 UTF-8 解码
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -97,6 +94,19 @@ $SdkRoot = Get-SdkRoot
 $Adb = if ($SdkRoot) { Join-Path $SdkRoot 'platform-tools\adb.exe' } else { 'adb' }
 $Emulator = if ($SdkRoot) { Join-Path $SdkRoot 'emulator\emulator.exe' } else { 'emulator' }
 
+# 预热 adb server: 首次执行任意 adb 命令时, adb 原生会连吐两行
+# ("daemon not running; starting now ..." + "daemon started successfully")。
+# 这里在脚本最前面静默拉起, 仅在本次确实新启动了 server 时打印一行干净的确认;
+# server 已在运行则完全静默。
+function Initialize-AdbServer {
+    $out = (& $Adb start-server 2>&1 | Out-String)
+    if ($out -match 'starting now') {
+        Write-Host '* daemon started successfully at tcp:5037' -ForegroundColor DarkGray
+    }
+}
+
+Initialize-AdbServer
+
 function Get-AvdList {
     if (-not (Test-Path $Emulator)) { return }
     $list = & $Emulator -list-avds 2>$null
@@ -104,21 +114,6 @@ function Get-AvdList {
     # 直接让数组元素逐个流出函数 (不要用一元逗号包裹, 否则调用方拿到嵌套数组);
     # 需要数组语义的调用方用 @(Get-AvdList) 包裹。
     @($list | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
-}
-
-# ======================== 开发密钥状态 ========================
-
-# 读取 local.properties 的 dev.deepseekApiKey, 返回 (已配置, 掩码预览)。
-# 仅用于菜单提示, 掩码显示避免整串密钥留在屏幕/截图里。
-function Get-DevKeyStatus {
-    $props = Join-Path $ProjectDir 'local.properties'
-    if (-not (Test-Path $props)) { return $false, '' }
-    $line = (Get-Content $props -ErrorAction SilentlyContinue | Where-Object { $_ -match ("^\s*{0}\s*=" -f [regex]::Escape($DevKeyProperty)) } | Select-Object -First 1)
-    if (-not $line) { return $false, '' }
-    $val = ($line -split '=', 2)[1].Trim()
-    if (-not $val) { return $false, '' }
-    $masked = if ($val.Length -gt 12) { $val.Substring(0, 8) + '...' + $val.Substring($val.Length - 4) } else { '***' }
-    return $true, $masked
 }
 
 # ======================== Release 签名预检 ========================
@@ -260,8 +255,50 @@ function Get-LdPorts {
 
 # ======================== 基础函数 ========================
 
+# 启用 Windows conhost 的 ANSI/VT 转义处理 (老版本 conhost 默认关闭,
+# 不关的话 ESC 序列会被原样打印成乱码; Windows Terminal / PSReadLine 环境通常已开)。
+# 非控制台主机或受限环境调用失败时静默忽略, 后续退化为 Clear-Host。
+function Enable-VirtualTerminal {
+    if ($Host.Name -ne 'ConsoleHost') { return }
+    try {
+        if (-not ('Win32.ConsoleNative' -as [type])) {
+            Add-Type -Namespace Win32 -Name ConsoleNative -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern System.IntPtr GetStdHandle(int nStdHandle);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern bool GetConsoleMode(System.IntPtr hConsoleHandle, out uint lpMode);
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern bool SetConsoleMode(System.IntPtr hConsoleHandle, uint dwMode);
+'@
+        }
+        $handle = [Win32.ConsoleNative]::GetStdHandle(-11)
+        $mode = [uint32] 0
+        if ([Win32.ConsoleNative]::GetConsoleMode($handle, [ref]$mode)) {
+            # 0x0004 = ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            [Win32.ConsoleNative]::SetConsoleMode($handle, $mode -bor 0x0004) | Out-Null
+        }
+    }
+    catch { }
+}
+
+Enable-VirtualTerminal
+
+# 清屏: 系统自带 Clear-Host 在长行折行时会留残字, 且不清滚动回溯
+# (旧画面往上滚到历史里, 全选复制时新旧画面叠在一起)。
+# 改用 ANSI: ESC[2J 清可见区, ESC[3J 清滚动回溯, ESC[H 光标回原点。
+# 不识别 ANSI 的主机退化为 Clear-Host。
+function Clear-Screen {
+    try {
+        $esc = [char] 27
+        Write-Host "$esc[2J$esc[3J$esc[H" -NoNewline
+    }
+    catch {
+        Clear-Host
+    }
+}
+
 function Write-Header {
-    Clear-Host
+    Clear-Screen
     Write-Host '========================================='
     Write-Host '   NovaBAIC 构建 / 部署 / 联调工具 (PS1)'
     Write-Host '========================================='
@@ -274,13 +311,6 @@ function Write-Header {
         $avdCount = @(Get-AvdList).Count
         $ldNote = if (Get-LdPlayerDir) { ' | 雷电模拟器: 已检测' } else { '' }
         Write-Host " 当前设备: 无 (可用 AVD: $avdCount 个$ldNote)" -ForegroundColor Yellow
-    }
-    $hasKey, $masked = Get-DevKeyStatus
-    if ($hasKey) {
-        Write-Host " DeepSeek 开发密钥: 已配置 ($masked), debug 构建首启自动预置" -ForegroundColor DarkGray
-    }
-    else {
-        Write-Host " DeepSeek 开发密钥: 未配置 (local.properties 加 $DevKeyProperty=sk-xxx)" -ForegroundColor DarkYellow
     }
 }
 
@@ -1074,6 +1104,7 @@ function Show-DeviceMenu {
         Write-Host ' 0) 返回主菜单'
         Write-Host '========================================='
         $sel = Read-Host '选择 (0 返回)'
+        if ($null -eq $sel) { return }  # stdin EOF, 避免空转死循环
         switch ($sel) {
             '1' {
                 $device = Ensure-Device
@@ -1123,6 +1154,7 @@ function Show-AdvancedMenu {
         Write-Host ' 0) 返回主菜单'
         Write-Host '========================================='
         $sel = Read-Host '选择 (0 返回)'
+        if ($null -eq $sel) { return }  # stdin EOF, 避免空转死循环
         switch ($sel) {
             '1' { Do-Clean }
             '2' { Do-RebuildDebug }
@@ -1155,18 +1187,18 @@ function Show-AdvancedMenu {
 function Show-MainMenu {
     while ($true) {
         Write-Header
-        Write-Host ' -- 日常 (高频) --' -ForegroundColor Cyan
         Write-Host ' 1) 一键运行: 增量编译安装 + 授权 + 启动 + 全量日志  (回车默认, 等同 Android Studio Run)'
         Write-Host ' 2) 仅看日志: App 全量'
-        Write-Host ' -- 构建 / 测试 --' -ForegroundColor Cyan
         Write-Host ' 3) 构建 Debug APK (仅打包, 不安装)'
         Write-Host ' 4) 单元测试 (:app:testDebugUnitTest)'
-        Write-Host ' -- 其他 --' -ForegroundColor Cyan
         Write-Host ' 5) 设备 (adb reverse / 模拟器 / 停止 / 清数据 / 授权)'
         Write-Host ' 6) 高级 (clean / 全量重建 / Release / APK 目录)'
         Write-Host ' 0) 退出'
         Write-Host '========================================='
         $choice = Read-Host '输入数字并回车 (0 退出)'
+        # stdin 到达 EOF (管道输入结束等非交互场景) 时 Read-Host 返回 $null,
+        # 直接进 switch 会在 default 分支空转死循环; 按退出处理。
+        if ($null -eq $choice) { break }
         if ($choice -eq '') { $choice = '1' }
 
         switch ($choice) {

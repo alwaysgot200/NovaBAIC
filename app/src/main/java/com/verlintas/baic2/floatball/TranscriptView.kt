@@ -14,21 +14,25 @@
  * A PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * BetterAIChat2. If not, see <https://www.gnu.org/licenses/>.
+ * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
 package com.verlintas.baic2.floatball
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.verlintas.baic2.R
 import com.verlintas.baic2.core.model.ChatMessage
 import com.verlintas.baic2.core.model.ChatRole
@@ -39,10 +43,14 @@ import com.verlintas.baic2.core.model.ChatRole
  * 服务窗口里 Compose 需要完整 SavedStateRegistry 宿主，得不偿失）。
  *
  * 自动发送的屏幕内容（带【屏幕内容】前缀）默认折叠为一行摘要，点按
- * 展开/收起——省面积；手动输入的消息恒展开。观察 [ScreenAdvisor.transcript]
- * 即可，无自有业务状态。
+ * 展开/收起——省面积；手动输入的消息恒展开。参谋回复（ASSISTANT）气泡
+ * 右上角带复制按钮，复制**纯回复正文**（不带【参谋】前缀，粘进 IM 即可用）。
+ * 观察 [ScreenAdvisor.transcript] 即可，无自有业务状态。
  */
 internal class TranscriptView(context: Context) : LinearLayout(context) {
+
+    /** 一条气泡的句柄：[container] 挂入列表，[text] 承载正文更新。 */
+    private class Bubble(val container: View, val text: TextView)
 
     private val list = LinearLayout(context).apply {
         orientation = VERTICAL
@@ -54,7 +62,7 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
     }
 
     /** 消息 id → 气泡，增量更新避免整树重建（流式时只更新最后一个）。 */
-    private val bubbles = HashMap<Long, TextView>()
+    private val bubbles = HashMap<Long, Bubble>()
 
     /** 自动屏幕消息的展开状态（默认折叠；会话期内保留用户选择）。 */
     private val expanded = HashSet<Long>()
@@ -72,7 +80,7 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
         // 移除已消失的消息（清空会话）。
         val ids = visible.mapTo(HashSet()) { it.id }
         bubbles.keys.filterNot(ids::contains).toList().forEach { stale ->
-            bubbles.remove(stale)?.let { list.removeView(it) }
+            bubbles.remove(stale)?.let { list.removeView(it.container) }
         }
         visible.forEach { message -> upsertBubble(message) }
         renderStreaming(state.streaming)
@@ -82,30 +90,17 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
 
     private fun upsertBubble(message: ChatMessage) {
         val existing = bubbles[message.id] ?: run {
-            val created = TextView(context).apply {
-                setTextColor(Color.WHITE)
-                textSize = if (message.role == ChatRole.USER) 12f else 14f
-                setPadding(dp(10), dp(8), dp(10), dp(8))
-                background = GradientDrawable().apply {
-                    cornerRadius = dp(12).toFloat()
-                    setColor(
-                        if (message.role == ChatRole.USER) 0x22FFFFFF.toInt() else 0x332E5FD0.toInt(),
-                    )
-                }
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                    setMargins(dp(8), dp(6), dp(8), 0)
-                }
-            }
+            val created = buildBubble(message)
             bubbles[message.id] = created
-            list.addView(created)
+            list.addView(created.container)
             created
         }
 
         if (isAutoScreenMessage(message)) {
             val open = message.id in expanded
-            existing.apply {
+            existing.text.apply {
                 if (open) {
-                    text = decorate(message)
+                    text = message.content
                     maxLines = Int.MAX_VALUE
                     ellipsize = null
                 } else {
@@ -120,23 +115,99 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                 }
             }
             // 展开态尾部补「收起」提示。
-            if (open) appendCollapseHint(existing, message)
+            if (open) {
+                existing.text.text =
+                    message.content + "\n" + context.getString(R.string.float_bubble_collapse)
+                existing.text.setOnClickListener {
+                    expanded.remove(message.id)
+                    upsertBubble(message)
+                }
+            }
         } else {
-            if (existing.text.toString() != message.content) existing.text = message.content
-            existing.maxLines = Int.MAX_VALUE
-            existing.ellipsize = null
-            existing.setOnClickListener(null)
-            existing.isClickable = false
+            if (existing.text.text.toString() != message.content) existing.text.text = message.content
+            existing.text.maxLines = Int.MAX_VALUE
+            existing.text.ellipsize = null
+            existing.text.setOnClickListener(null)
+            existing.text.isClickable = false
         }
     }
 
-    private fun appendCollapseHint(bubble: TextView, message: ChatMessage) {
-        // 已在 expanded 集合：重建文本时附加收起行由 setOnClickListener 维持。
-        bubble.text = decorate(message) + "\n" + context.getString(R.string.float_bubble_collapse)
-        bubble.setOnClickListener {
-            expanded.remove(message.id)
-            upsertBubble(message)
+    /**
+     * 气泡构建：用户消息（含自动屏幕消息）是单 TextView；参谋回复是
+     * FrameLayout——正文 + 右上角复制小按钮。背景/内边距统一在容器上。
+     */
+    private fun buildBubble(message: ChatMessage): Bubble {
+        val isUser = message.role == ChatRole.USER
+        val bubbleColor = if (isUser) 0x22FFFFFF.toInt() else 0x332E5FD0.toInt()
+        val body = TextView(context).apply {
+            setTextColor(Color.WHITE)
+            textSize = if (isUser) 12f else 14f
+            maxLines = Int.MAX_VALUE
         }
+        if (isUser) {
+            body.background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(bubbleColor)
+            }
+            body.setPadding(dp(10), dp(8), dp(10), dp(8))
+            body.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(8), dp(6), dp(8), 0)
+            }
+            return Bubble(body, body)
+        }
+
+        // 参谋回复：右侧给复制按钮留位，避免压住首行文字。
+        body.setPadding(dp(10), dp(8), dp(34), dp(8))
+        val container = FrameLayout(context).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(bubbleColor)
+            }
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(8), dp(6), dp(8), 0)
+            }
+            addView(
+                body,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            addView(buildCopyButton(message.content))
+        }
+        return Bubble(container, body)
+    }
+
+    /** 参谋回复右上角的复制按钮：常态半透明白，按下全亮；复制纯回复正文。 */
+    private fun buildCopyButton(content: String): ImageView =
+        ImageView(context).apply {
+            setImageResource(R.drawable.fb_ic_copy)
+            alpha = 0.55f
+            contentDescription = context.getString(R.string.float_copy_desc)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            layoutParams = FrameLayout.LayoutParams(dp(26), dp(26)).apply {
+                gravity = Gravity.TOP or Gravity.END
+                topMargin = dp(2)
+                marginEnd = dp(2)
+            }
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> view.alpha = 1f
+                    android.view.MotionEvent.ACTION_UP,
+                    android.view.MotionEvent.ACTION_CANCEL,
+                    -> view.alpha = 0.55f
+                }
+                false // 仍交给 click 处理
+            }
+            setOnClickListener { copyReply(content) }
+        }
+
+    private fun copyReply(content: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        if (clipboard == null) return
+        clipboard.setPrimaryClip(ClipData.newPlainText("advisor_reply", content))
+        Toast.makeText(context, R.string.float_copy_done, Toast.LENGTH_SHORT).show()
     }
 
     private fun isAutoScreenMessage(message: ChatMessage): Boolean =
@@ -147,12 +218,6 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
     private fun collapsedText(message: ChatMessage): String {
         val length = message.content.length
         return context.getString(R.string.float_bubble_collapsed, length)
-    }
-
-    private fun decorate(message: ChatMessage): String {
-        if (message.role == ChatRole.USER) return message.content
-        val prefix = context.getString(R.string.float_answer_label)
-        return prefix + "\n" + message.content
     }
 
     private fun renderStreaming(streaming: String?) {
@@ -200,17 +265,20 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
         }
         if (text.isEmpty()) return
         val key = STATUS_KEY
-        val bubble = bubbles[key] ?: TextView(context).apply {
-            setTextColor(0xCCFFFFFF.toInt())
-            textSize = 13f
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                setMargins(dp(8), dp(6), dp(8), 0)
+        val holder = bubbles[key] ?: run {
+            val created = TextView(context).apply {
+                setTextColor(0xCCFFFFFF.toInt())
+                textSize = 13f
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(dp(8), dp(6), dp(8), 0)
+                }
             }
-            bubbles[key] = this
-            list.addView(this)
+            bubbles[key] = Bubble(created, created)
+            list.addView(created)
+            bubbles[key]!!
         }
-        bubble.text = text
+        holder.text.text = text
     }
 
     private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()

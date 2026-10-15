@@ -31,8 +31,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -45,7 +47,9 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -122,6 +126,9 @@ class FloatBallService : Service() {
     private var ballY = Int.MIN_VALUE
 
     private var askJob: Job? = null
+
+    /** 输入行手动发送的回合（区别于长按单次 askJob / 连续模式 diffEngine）。 */
+    private var manualJob: Job? = null
     private var consentPending = false
 
     /** 同意授权后的去向：单次重跑 or 进入录制。 */
@@ -167,6 +174,17 @@ class FloatBallService : Service() {
             }
         }
         scope.launch {
+            // 连续模式 token 预算耗尽：当前回合已完整落库后自动停录。
+            screenAdvisor.budgetExceeded.collect {
+                if (mode == Mode.RECORDING) {
+                    mainHandler.post {
+                        toast(R.string.float_token_budget_exhausted)
+                        stopRecording()
+                    }
+                }
+            }
+        }
+        scope.launch {
             // 转录面板跟随会话数据流刷新（分屏开着才渲染）。
             screenAdvisor.transcript.collect { state ->
                 transcriptView?.render(state)
@@ -181,6 +199,16 @@ class FloatBallService : Service() {
                     getString(R.string.float_profile_status_bound, contact.displayName)
                 } else {
                     getString(R.string.float_profile_status_unbound)
+                }
+            }
+        }
+        scope.launch {
+            // 即时方向 chip：选中态/文案联动；下拉菜单打开期间 AI 建议到达，
+            // 就地重建菜单（loading 行换成建议列表）。
+            screenAdvisor.direction.collect { st ->
+                split?.let { renderDirectionChip(it.directionChip, st) }
+                if (directionPopupKind == DirectionPopupKind.MENU && st.suggestions.isNotEmpty()) {
+                    showDirectionMenu()
                 }
             }
         }
@@ -343,7 +371,8 @@ class FloatBallService : Service() {
                             if (granted) runOneShot(null, settleMs = CONSENT_SETTLE_MS)
                         }
                         is ScreenAdvisor.Event.TurnStarted -> ensureSplit()
-                        // 与上一屏几乎相同：不展开面板，仅轻提示，避免误以为卡死。
+                        // 与上一屏几乎相同：不展开面板，仅轻提示；flow 结束后
+                        // finishOneShot 立即结束单次模式、恢复蓝球。
                         ScreenAdvisor.Event.Unchanged -> toast(R.string.float_screen_unchanged)
                         is ScreenAdvisor.Event.Failed -> ensureSplit() // 错误也要可见
                     }
@@ -359,11 +388,19 @@ class FloatBallService : Service() {
         }
     }
 
-    /** 单次结束：恢复蓝球（分屏留着展示结果）。 */
+    /**
+     * 单次结束：恢复蓝球（分屏留着展示结果）。
+     * 注意「画面重复」这类不开分屏即结束的路径：球实例仍挂着，restoreBall
+     * 不会重建它，必须在这里显式复位外观，否则旋转态永远停不下来。
+     */
     private fun finishOneShot() {
         if (mode == Mode.ONESHOT) {
             mode = Mode.IDLE
+            ball?.setMode(FloatUi.BallMode.NORMAL, this)
             restoreBall()
+            // askJob 收尾晚于 transcript 末次 Idle 发射：不补这一下，输入行
+            // 发送/停止键会停在「停止」方块上（末次刷新时 Job 仍 active）。
+            inputHandle?.refresh()
         }
     }
 
@@ -373,6 +410,8 @@ class FloatBallService : Service() {
         if (mode != Mode.IDLE) return
         mode = Mode.RECORDING
         completionCount = 0
+        // 新的录制会话：清零会话级 token 计数（累计总量不受影响）。
+        screenAdvisor.resetSessionUsage()
         ball?.setMode(FloatUi.BallMode.RECORDING, this)
         closeSplit(keepBall = true) // 录制开始前撤掉自身分屏
         hideAllOverlays()
@@ -560,6 +599,8 @@ class FloatBallService : Service() {
         val panel = FloatUi.buildSplitPanel(
             this,
             onClose = { closeSplit(keepBall = false) },
+            onDirection = { showDirectionMenu() },
+            onAuto = { toast(R.string.float_split_auto_soon) },
             inputCallbacks = inputCallbacks,
         )
         panel.handle.setOnTouchListener(makeResizeListener())
@@ -600,6 +641,7 @@ class FloatBallService : Service() {
         panel.statusBar.setOnClickListener {
             openProfileManager(screenAdvisor.activeContact.value?.contactId ?: -1L)
         }
+        renderDirectionChip(panel.directionChip, screenAdvisor.direction.value)
         inputHandle?.refresh()
         // 打开分屏=用户开始阅读：未读冒泡立即消失；阅读期间的新回合实时可见，
         // 不再计未读（turnCompletions 收集侧以 split != null 抑制）。
@@ -730,7 +772,22 @@ class FloatBallService : Service() {
     /** 输入行的行为接线：发送/语音/＋号/停止/焦点。 */
     private val inputCallbacks = object : FloatUi.InputBarCallbacks {
         override fun onSend(text: String) {
-            scope.launch { screenAdvisor.submitTurn(text) }
+            // 保留 Job：手动回合期间发送键要变「停止」，且停止要能真正取消。
+            manualJob?.cancel()
+            manualJob = scope.launch {
+                try {
+                    screenAdvisor.submitTurn(text)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    // 与单次参谋同口径：异常落到 Error 状态，不能让键停在思考态。
+                    screenAdvisor.reportUnexpected(error.message ?: "unknown")
+                } finally {
+                    manualJob = null
+                    // transcript 末次 Idle 发射可能早于 Job 真正结束，补一次复位。
+                    inputHandle?.refresh()
+                }
+            }
         }
 
         override fun onVoice() {
@@ -763,14 +820,27 @@ class FloatBallService : Service() {
             }, 150)
         }
 
-        override fun isBusy(): Boolean =
-            askJob?.isActive == true || diffEngine.isRoundActive()
+        override fun isBusy(): Boolean {
+            // 忙碌的唯一语义=有回合在跑：OCR/思考/重试等待/流式输出（单次参谋、
+            // 连续模式、输入行手动发送三条路径都汇入 transcript 状态），再 OR
+            // 各路径 Job 尚在的收尾窗口。只看 Job 会在末次 Idle 发射后停在停止态。
+            val state = screenAdvisor.transcript.value
+            return state.streaming != null ||
+                state.status is ScreenAdvisor.Status.OcrRunning ||
+                state.status is ScreenAdvisor.Status.Thinking ||
+                state.status is ScreenAdvisor.Status.Retrying ||
+                askJob?.isActive == true ||
+                manualJob?.isActive == true ||
+                diffEngine.isRoundActive()
+        }
     }
 
     /** 思考中可打断：取消当前 LLM 回合（部分回答会保留入库）。 */
     private fun cancelActiveTurn() {
         askJob?.cancel()
         askJob = null
+        manualJob?.cancel()
+        manualJob = null
         diffEngine.cancelRound()
     }
 
@@ -865,6 +935,9 @@ class FloatBallService : Service() {
     private fun closeSplit(keepBall: Boolean) {
         askJob?.cancel()
         askJob = null
+        manualJob?.cancel()
+        manualJob = null
+        dismissDirectionPopup()
         split?.let { runCatching { windowManager.removeView(it.root) } }
         split = null
         splitParams = null
@@ -875,9 +948,135 @@ class FloatBallService : Service() {
         if (!keepBall) restoreBall()
     }
 
+    // -------------------------------------------------------- direction
+
+    /** 当前浮层类型：区分建议菜单（非聚焦）与自定义输入（聚焦弹键盘）。 */
+    private enum class DirectionPopupKind { NONE, MENU, INPUT }
+
+    private var directionPopup: PopupWindow? = null
+    private var directionPopupKind = DirectionPopupKind.NONE
+
+    private fun renderDirectionChip(chip: TextView, st: ScreenAdvisor.DirectionState) {
+        val label = st.selected?.let { getString(R.string.float_dir_set, it) }
+        FloatUi.bindDirectionChip(chip, label)
+    }
+
+    /**
+     * 「方向」下拉：菜单用非聚焦 PopupWindow（不抢面板焦点、点外部消失）；
+     * 打开即触发 AI 拟定（有缓存直接用），拟定完成时由 direction 收集侧
+     * 重建本菜单。浮层挂在分屏 overlay 的 token 上，show 失败静默不弹窗。
+     */
+    private fun showDirectionMenu() {
+        val anchor = split?.directionChip ?: return
+        val st = screenAdvisor.direction.value
+        screenAdvisor.suggestDirections()
+        dismissDirectionPopup()
+
+        val content = FloatUi.buildDirectionMenu(
+            this,
+            suggestions = st.suggestions,
+            loading = st.loading,
+            hasSelected = st.selected != null,
+            onPick = { item ->
+                screenAdvisor.setDirection(item)
+                dismissDirectionPopup()
+            },
+            onCustom = { showDirectionInput() },
+            onClear = {
+                screenAdvisor.clearDirection()
+                dismissDirectionPopup()
+            },
+        )
+        val popup = PopupWindow(
+            content,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            false,
+        ).apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            isOutsideTouchable = true
+            elevation = dp(10).toFloat()
+            setOnDismissListener {
+                if (directionPopup === this) {
+                    directionPopup = null
+                    directionPopupKind = DirectionPopupKind.NONE
+                }
+            }
+        }
+        directionPopup = popup
+        directionPopupKind = DirectionPopupKind.MENU
+        val shown = runCatching {
+            popup.showAsDropDown(anchor, 0, dp(4), Gravity.START)
+        }.isSuccess
+        if (!shown) {
+            directionPopup = null
+            directionPopupKind = DirectionPopupKind.NONE
+        }
+    }
+
+    /**
+     * 自定义方向输入：聚焦 PopupWindow（独立窗口拿 IME 焦点，无需改分屏
+     * overlay 的 NOT_FOCUSABLE flag），确定/取消后关闭。
+     */
+    private fun showDirectionInput() {
+        val anchor = split?.directionChip ?: return
+        dismissDirectionPopup()
+
+        val content = FloatUi.buildDirectionInput(
+            this,
+            initial = screenAdvisor.direction.value.selected.orEmpty(),
+            onCancel = { dismissDirectionPopup() },
+            onConfirm = { value ->
+                screenAdvisor.setDirection(value)
+                dismissDirectionPopup()
+            },
+        )
+        val popup = PopupWindow(
+            content,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT,
+            true,
+        ).apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            isOutsideTouchable = true
+            elevation = dp(10).toFloat()
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            setOnDismissListener {
+                if (directionPopup === this) {
+                    directionPopup = null
+                    directionPopupKind = DirectionPopupKind.NONE
+                }
+            }
+        }
+        directionPopup = popup
+        directionPopupKind = DirectionPopupKind.INPUT
+        val shown = runCatching {
+            popup.showAsDropDown(anchor, 0, dp(4), Gravity.START)
+        }.isSuccess
+        if (!shown) {
+            directionPopup = null
+            directionPopupKind = DirectionPopupKind.NONE
+            return
+        }
+        // 聚焦态 PopupWindow 拿到窗口焦点后，让输入框获焦并呼出键盘。
+        val field = content.tag as? EditText
+        content.post {
+            field?.requestFocus()
+            val imm = getSystemService(InputMethodManager::class.java)
+            imm?.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
+    private fun dismissDirectionPopup() {
+        val popup = directionPopup ?: return
+        directionPopup = null
+        directionPopupKind = DirectionPopupKind.NONE
+        runCatching { popup.dismiss() }
+    }
+
     // ------------------------------------------------------------- menu
 
-    /** 单击：朝屏幕中央的水平扇形弹出 6 个子球（问答/主界面/设置/隐藏/关于/退出）。 */
+    /** 单击：朝屏幕中央的水平扇形弹出 6 个子球（问答/主界面/设置/自动/关于/退出）。 */
     private fun expandMenu() {
         if (menuView != null || ball == null) return
         val from = ballParams ?: return
@@ -897,7 +1096,11 @@ class FloatBallService : Service() {
                 FloatUi.FanItem(R.string.float_fan_ask) { startOneShot() },
                 FloatUi.FanItem(R.string.float_fan_main) { showMainUi() },
                 FloatUi.FanItem(R.string.float_fan_settings) { openFloatSettings() },
-                FloatUi.FanItem(R.string.float_fan_hide) { hideBall() },
+                // 「自动」= AI 自动接管聊天与屏幕，本期只占位，不实现；
+                // 悬浮球常驻，不再提供手动隐藏（不想显示请走「退出」）。
+                FloatUi.FanItem(R.string.float_split_auto) {
+                    toast(R.string.float_split_auto_soon)
+                },
                 FloatUi.FanItem(R.string.float_fan_about) { showAboutDialog() },
                 FloatUi.FanItem(R.string.float_fan_exit) { exitApp() },
             ),
@@ -1009,18 +1212,6 @@ class FloatBallService : Service() {
         dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
     }
 
-    /** 隐藏悬浮球（子球「隐藏」）：通知栏「显示悬浮球」或冷启动恢复。 */
-    private fun hideBall() {
-        collapseMenu()
-        ballParams?.let {
-            ballX = it.x
-            ballY = it.y
-        }
-        ball?.root?.let { runCatching { windowManager.removeView(it) } }
-        ball = null
-        toast(R.string.float_ball_hidden_hint)
-    }
-
     private fun exitApp() {
         // 显式退出：心跳/闹钟不再复活本服务。
         keepAliveManager.onUserExit()
@@ -1113,6 +1304,7 @@ class FloatBallService : Service() {
 
     private fun removeAllOverlays() {
         hideAllOverlays()
+        dismissDirectionPopup()
         split?.let { runCatching { windowManager.removeView(it.root) } }
         split = null
         splitParams = null

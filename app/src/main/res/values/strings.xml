@@ -16,12 +16,10 @@
     <string name="float_notification_title">老参谋悬浮球</string>
     <string name="float_notification_text">点击悬浮球快捷操作</string>
     <string name="float_notification_show">显示悬浮球</string>
-    <string name="float_ball_hidden_hint">悬浮球已隐藏，可在通知栏恢复</string>
     <!-- 悬浮球 · 扇形子球 -->
     <string name="float_fan_ask">问答</string>
     <string name="float_fan_main">主界面</string>
     <string name="float_fan_settings">设置</string>
-    <string name="float_fan_hide">隐藏</string>
     <string name="float_fan_about">关于</string>
     <string name="float_fan_exit">退出</string>
 
@@ -34,15 +32,57 @@
     <!-- 悬浮球 · 设置页 -->
     <string name="float_settings_title">老参谋设置</string>
     <string name="float_settings_continuous">连续参谋</string>
-    <string name="float_settings_poll_hint">抓帧节奏：画面变化被发现的快慢；静止画面不产生任何开销</string>
+    <string name="float_settings_poll_hint">抓帧节奏：发现画面变化的快慢；停在同一屏时会自动降频省电，画面一动立即恢复</string>
     <string name="float_settings_poll_slow">省电 2秒</string>
     <string name="float_settings_poll_normal">标准 0.8秒</string>
     <string name="float_settings_poll_fast">灵敏 0.5秒</string>
+    <string name="float_settings_backoff_hint">静止降频：停在同一屏时把抓帧间隔放慢以省电；倍数越大越省电，但画面变化后的反应略慢</string>
+    <string name="float_settings_backoff_off">关闭</string>
+    <string name="float_settings_backoff_2x">标准 2×</string>
+    <string name="float_settings_backoff_4x">省电 4×</string>
     <string name="float_settings_session_hint">单次连续参谋的最长时长，到期自动停止</string>
     <string name="float_settings_session_15">15 分钟</string>
     <string name="float_settings_session_30">30 分钟</string>
     <string name="float_settings_session_60">60 分钟</string>
     <string name="float_settings_session_unlimited">不限</string>
+    <string name="float_settings_background">后台智能（会产生额外的模型调用）</string>
+    <string name="float_settings_digest">自动滚动摘要</string>
+    <string name="float_settings_digest_hint">每隔数个屏幕回合，后台调用一次模型把更早的聊天压成摘要；关闭可省流量</string>
+    <string name="float_settings_extract">自动萃取客户画像（仅已绑定联系人）</string>
+    <string name="float_settings_extract_hint">每隔数个屏幕回合，后台调用一次模型从聊天提取画像草稿；关闭可省流量</string>
+    <string name="float_settings_every_n_turns">每 %1$d 回合</string>
+
+    <!-- 悬浮球 · 设置页 · 参谋回答与 Token -->
+    <string name="float_settings_tokens">参谋回答与 Token</string>
+    <string name="float_settings_memory_hint">记忆模式：手动参谋与追问时模型可自主检索/写入记忆；连续看屏的自动回合默认走精简通道（不带工具、每回合约省数千 token），记忆仍会自动带上</string>
+    <string name="float_settings_memory_auto">智能推荐</string>
+    <string name="float_settings_memory_full">始终增强</string>
+    <string name="float_settings_memory_lean">始终精简</string>
+    <string name="float_settings_answer_hint">回答长度：短回答的输出 token 更少；需要详细话术时再调大</string>
+    <string name="float_settings_answer_concise">简洁</string>
+    <string name="float_settings_answer_standard">标准</string>
+    <string name="float_settings_answer_detailed">详细</string>
+    <string name="float_settings_dedup_hint">去重灵敏度：越严格越不容易重复发问、越省 token；宽松档宁可多问也不漏内容</string>
+    <string name="float_settings_dedup_loose">宽松（多问）</string>
+    <string name="float_settings_dedup_standard">标准</string>
+    <string name="float_settings_dedup_strict">严格（省 token）</string>
+    <string name="float_settings_budget_hint">连续参谋 Token 预算：本次录制累计用量达到上限后自动停止，避免无人看管时消耗过多</string>
+    <string name="float_settings_budget_none">不限</string>
+    <string name="float_settings_budget_20k">2 万</string>
+    <string name="float_settings_budget_50k">5 万</string>
+    <string name="float_settings_budget_100k">10 万</string>
+    <string name="float_settings_usage_title">用量统计</string>
+    <string name="float_settings_usage_total">累计：输入 %1$d · 输出 %2$d · %3$d 回合</string>
+    <string name="float_settings_usage_session">本次连续参谋：%1$d tokens</string>
+    <string name="float_settings_usage_clear">清零统计</string>
+    <string name="float_settings_balance_line">DeepSeek 余额：%1$s</string>
+    <string name="float_settings_balance_value_fmt">¥%1$s</string>
+    <string name="float_settings_balance_unavailable_fmt">¥%1$s（账户不可用）</string>
+    <string name="float_settings_balance_unknown">--</string>
+    <string name="float_settings_balance_refresh">刷新余额</string>
+    <string name="float_settings_balance_refreshing">刷新中…</string>
+    <string name="float_token_budget_exhausted">连续参谋 Token 预算已用完，已自动停止</string>
+
     <string name="float_settings_permissions">权限状态</string>
     <string name="float_settings_perm_a11y">无障碍服务（长按毫秒级识屏的前提）</string>
     <string name="float_settings_perm_overlay">悬浮窗权限</string>
@@ -86,6 +126,7 @@
     <string name="float_ask_error_network">网络连接失败，请检查网络后重试</string>
     <string name="float_bubble_collapsed">【屏幕内容】已发送 %1$d 字 ▸ 点击展开</string>
     <string name="float_bubble_collapse">▾ 收起</string>
+    <string name="float_bubble_usage">本轮 token：输入 %1$d · 输出 %2$d</string>
     <string name="float_input_hint">问问「老参谋」…</string>
     <string name="float_input_send">发送</string>
     <string name="float_input_stop">停止</string>
@@ -95,6 +136,29 @@
     <string name="float_voice_listening">正在聆听…</string>
     <string name="float_plus_to_main">附件请在完整对话中使用，已为你打开会话</string>
     <string name="float_ask_system">你是屏幕问答助手。用户给你一段由 OCR 从手机当前屏幕识别出的文本（可能有识别噪声，可能缺少排版）。请用简体中文简洁地回答：如果用户的问题与屏幕内容相关，就基于内容作答；否则概述屏幕要点。不要复述原文。</string>
+
+    <!-- 悬浮球 · 分屏顶栏（紧凑单行 + 即时方向 + 自动占位） -->
+    <string name="float_ask_close_x">✕</string>
+    <string name="float_split_drag_desc">上下拖动调整分屏高度</string>
+    <string name="float_split_auto">自动</string>
+    <string name="float_split_auto_soon">AI 自动聊天即将上线</string>
+    <string name="float_dir_chip">方向 ▾</string>
+    <string name="float_dir_set">方向：%1$s ▾</string>
+    <string name="float_dir_loading">AI 拟定中…</string>
+    <string name="float_dir_custom">✎ 自定义…</string>
+    <string name="float_dir_clear">✕ 清除方向</string>
+    <string name="float_dir_input_hint">本次聊天的即时方向（如：先问出预算）</string>
+    <string name="float_dir_input_confirm">确定</string>
+    <string name="float_dir_input_cancel">取消</string>
+    <string name="float_copy_desc">复制回复</string>
+    <string name="float_copy_done">已复制</string>
+    <string-array name="float_dir_fallback">
+        <item>摸清对方诉求</item>
+        <item>推进报价</item>
+        <item>化解顾虑</item>
+        <item>促成下次行动</item>
+        <item>维持关系</item>
+    </string-array>
 
     <!-- 悬浮球 · 联系人画像（§7） -->
     <string name="float_profile_status_bound">当前联系人：%1$s ▾</string>

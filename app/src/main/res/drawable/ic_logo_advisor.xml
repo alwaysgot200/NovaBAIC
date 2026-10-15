@@ -2,6 +2,11 @@
 <!--
   ~ 老参谋品牌标识：白羽扇（军师参谋意象）+ AI 星光。
   ~ 应用自适应图标前景层与悬浮球共用本文件，保持单一 logo 来源。
+  ~ 2026-10 重绘（放大、简化）：扇面占视口约 68%（旧版约 52%），
+  ~ 五片羽尖、三根扇骨、单颗大星，去掉小尺寸下不可见的细碎结构，
+  ~ 保证 56dp 悬浮球内剪影仍一眼可辨。
+  ~ 注意：dev/render-brand-assets.py 中的几何数据须与本文件保持一致，
+  ~ 改动后重跑该脚本同步全部位图素材。
   -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
@@ -10,71 +15,63 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 扇面：七片白羽组成的扇贝，外缘带羽尖起伏 -->
+    <!-- 扇柄（先绘，压在扇面与铆钉之下） -->
     <path
-        android:pathData="M45.54,68.92 L25.81,61.74
-            Q26.98,56.40 31.02,52.72
-            Q33.95,48.10 39.00,46.02
-            Q43.33,42.68 48.79,42.46
-            Q54.00,40.80 59.21,42.46
-            Q64.67,42.68 69.00,46.02
-            Q74.05,48.10 76.98,52.72
-            Q81.02,56.40 82.19,61.74
-            L62.46,68.92
-            Q54.00,82.40 45.54,68.92 Z">
+        android:pathData="M51.6,66.4 L56.4,66.4 L56.4,84.2 a2.4,2.4 0 0 1 -4.8,0 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="linear"
-                android:startX="54" android:startY="41"
-                android:endX="54" android:endY="82">
-                <item android:offset="0" android:color="#FFFFFFFF" />
-                <item android:offset="1" android:color="#FFCBDDF8" />
-            </gradient>
-        </aapt:attr>
-    </path>
-
-    <!-- 扇骨：自扇轴向扇缘辐射 -->
-    <path
-        android:strokeColor="#334B86C8"
-        android:strokeWidth="0.9"
-        android:strokeLineCap="round"
-        android:pathData="M54,72 L32.55,54.00 M54,72 L40.00,47.75
-            M54,72 L54.00,44.00 M54,72 L68.00,47.75 M54,72 L75.45,54.00" />
-
-    <!-- 两侧保护骨 -->
-    <path
-        android:strokeColor="#E6F1FF"
-        android:strokeWidth="1.3"
-        android:strokeLineCap="round"
-        android:pathData="M54,72 L25.81,61.74 M54,72 L82.19,61.74" />
-
-    <!-- 扇柄 -->
-    <path
-        android:pathData="M51.8,73.2 h4.4 a2.2,2.2 0 0 1 2.2,2.2 v7.4 a2.6,2.6 0 0 1 -5.2,0 v-7.4 a1.4,1.4 0 0 1 -1.4,-1.4 Z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:type="linear"
-                android:startX="54" android:startY="73"
-                android:endX="54" android:endY="85">
+                android:startX="54" android:startY="66"
+                android:endX="54" android:endY="87">
                 <item android:offset="0" android:color="#FFEAC571" />
                 <item android:offset="1" android:color="#FFB9872F" />
             </gradient>
         </aapt:attr>
     </path>
 
+    <!-- 扇面：七片白羽沿凸圆弧浅起伏，小尺寸下读作完整扇贝 -->
+    <path
+        android:pathData="M46.0,64.1 L18.3,54.0
+            Q23.8,48.4 26.4,40.9
+            Q33.6,37.9 38.9,32.1
+            Q46.8,32.2 54.0,29.0
+            Q61.2,32.2 69.1,32.1
+            Q74.4,37.9 81.6,40.9
+            Q84.2,48.4 89.7,54.0
+            L62.0,64.1 Q54.0,68.8 46.0,64.1 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54" android:startY="29"
+                android:endX="54" android:endY="69">
+                <item android:offset="0" android:color="#FFFFFFFF" />
+                <item android:offset="1" android:color="#FFD0E0F9" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- 两侧保护骨（白亮边，强化扇贝外轮廓） -->
+    <path
+        android:strokeColor="#F2F8FF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M54,67 L18.3,54.0 M54,67 L89.7,54.0" />
+
+    <!-- 三根主扇骨：自扇轴向羽尖辐射 -->
+    <path
+        android:strokeColor="#4D4B86C8"
+        android:strokeWidth="1.25"
+        android:strokeLineCap="round"
+        android:pathData="M54,67 L38.9,32.1 M54,67 L54,29 M54,67 L69.1,32.1" />
+
     <!-- 扇轴铆钉 -->
-    <path android:pathData="M54,72 m-2.7,0 a2.7,2.7 0 1 0 5.4,0 a2.7,2.7 0 1 0 -5.4,0 Z"
+    <path android:pathData="M54,67 m-3.4,0 a3.4,3.4 0 1 0 6.8,0 a3.4,3.4 0 1 0 -6.8,0 Z"
         android:fillColor="#F2CE74" />
-    <path android:pathData="M54,72 m-1.45,0 a1.45,1.45 0 1 0 2.9,0 a1.45,1.45 0 1 0 -2.9,0 Z"
+    <path android:pathData="M54,67 m-1.75,0 a1.75,1.75 0 1 0 3.5,0 a1.75,1.75 0 1 0 -3.5,0 Z"
         android:fillColor="#8A5E1C" />
 
-    <!-- AI 星光（大） -->
+    <!-- AI 星光（单颗，四角星，放大醒目） -->
     <path
         android:fillColor="#FF9FECFF"
-        android:pathData="M75.6,30.2 L77.1,33.8 L80.7,35.3 L77.1,36.8 L75.6,40.4 L74.1,36.8 L70.5,35.3 L74.1,33.8 Z" />
-
-    <!-- AI 星光（小） -->
-    <path
-        android:fillColor="#CC9FECFF"
-        android:pathData="M32.6,45.4 L33.4,47.2 L35.2,48.0 L33.4,48.8 L32.6,50.6 L31.8,48.8 L30.0,48.0 L31.8,47.2 Z" />
+        android:pathData="M79.5,24.2 L81.2,28.3 L85.3,30.0 L81.2,31.7 L79.5,35.8 L77.8,31.7 L73.7,30.0 L77.8,28.3 Z" />
 </vector>

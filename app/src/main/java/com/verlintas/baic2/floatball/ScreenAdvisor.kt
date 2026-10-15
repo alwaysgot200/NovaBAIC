@@ -32,12 +32,16 @@ import com.verlintas.baic2.core.engine.AuxiliaryTasks
 import com.verlintas.baic2.core.model.AppMode
 import com.verlintas.baic2.core.model.ChatMessage
 import com.verlintas.baic2.core.model.ChatRole
+import com.verlintas.baic2.core.model.CoreMemory
 import com.verlintas.baic2.core.model.MemoryPrompt
 import com.verlintas.baic2.core.model.MemoryText
+import com.verlintas.baic2.core.model.Note
+import com.verlintas.baic2.core.model.NoteKind
 import com.verlintas.baic2.core.model.ProviderConfig
 import com.verlintas.baic2.device.api.OcrProvider
 import com.verlintas.baic2.device.api.ScreenshotProvider
 import com.verlintas.baic2.floatball.ScreenPerceiver.Perception
+import com.verlintas.baic2.floatball.advisor.AdvisorResponder
 import com.verlintas.baic2.floatball.advisor.ChatBriefBuilder
 import com.verlintas.baic2.floatball.advisor.PersonaExtractor
 import com.verlintas.baic2.floatball.brief.ContactBriefSection
@@ -45,6 +49,7 @@ import com.verlintas.baic2.floatball.contact.ContactDirectory
 import com.verlintas.baic2.floatball.contact.ContactHistoryGateway
 import com.verlintas.baic2.floatball.contact.ContactMemoryReader
 import com.verlintas.baic2.floatball.contact.ContactRef
+import com.verlintas.baic2.floatball.contact.DealFact
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -54,7 +59,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -102,6 +109,7 @@ class ScreenAdvisor @Inject constructor(
     private val noiseRules: NoiseRules,
     private val chatBriefBuilder: ChatBriefBuilder,
     private val personaExtractor: PersonaExtractor,
+    private val responder: AdvisorResponder,
 ) {
 
     /** 面板渲染所需的一切：会话消息 + 正在流式的回答 + 阶段状态。 */
@@ -110,7 +118,12 @@ class ScreenAdvisor @Inject constructor(
         val messages: List<ChatMessage> = emptyList(),
         val streaming: String? = null,
         val status: Status = Status.Idle,
+        /** 最近一个完成回合的模型上报用量（面板小字；新回合开始清空）。 */
+        val lastUsage: TurnTokens? = null,
     )
+
+    /** 单回合 token 用量（模型 Usage；个别供应商不上报则为 0）。 */
+    data class TurnTokens(val input: Long, val output: Long)
 
     sealed interface Status {
         data object Idle : Status
@@ -141,11 +154,41 @@ class ScreenAdvisor @Inject constructor(
     val turnCompletions: SharedFlow<Unit> = _turnCompletions.asSharedFlow()
 
     /**
+     * 连续模式 token 预算耗尽：后台回合完成后若本次会话用量达到设置上限，
+     * 发出一次请求，服务层据此自动停止录制（不打断正在进行的回合）。
+     */
+    private val _budgetExceeded = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+    val budgetExceeded: SharedFlow<Unit> = _budgetExceeded.asSharedFlow()
+
+    /** 连续参谋开录前由服务层调用：清零本次会话级 token 计数。 */
+    fun resetSessionUsage() = prefs.resetSessionUsage()
+
+    /**
      * 最近一次参谋解析到的联系人（null=未识别/重名/模糊近邻，走共享会话）。
      * 分屏状态条据此显示「🎯 名称 ▾ / 未绑定 ▸」，只在每次 prepare 时更新。
      */
     private val _activeContact = MutableStateFlow<ContactRef?>(null)
     val activeContact: StateFlow<ContactRef?> = _activeContact.asStateFlow()
+
+    /**
+     * 即时「方向」状态（分屏顶栏 chip 渲染用）。[key] 随当前会话切换：
+     * 绑定联系人 = `c:<contactId>`，共享会话 = `shared`；[suggestions]
+     * 在用户点开下拉时按需由 AI 拟定并在回合内缓存。全部仅内存
+     * （2026-10-15 方案 §2/§6 决策 B），服务重启即清空，不做持久化。
+     */
+    data class DirectionState(
+        val key: String = DIRECTION_KEY_SHARED,
+        val selected: String? = null,
+        val suggestions: List<String> = emptyList(),
+        val loading: Boolean = false,
+    )
+
+    private val _direction = MutableStateFlow(DirectionState())
+    val direction: StateFlow<DirectionState> = _direction.asStateFlow()
+
+    private val directionSelected = HashMap<String, String>()
+    private val directionSuggestions = HashMap<String, List<String>>()
+    private var directionJob: Job? = null
 
     private val advisorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var observeJob: Job? = null
@@ -178,6 +221,114 @@ class ScreenAdvisor @Inject constructor(
 
     fun releaseProjection() {
         runCatching { screenshotProvider.release() }
+    }
+
+    // -------------------------------------------------------- direction
+
+    /**
+     * 切换当前会话对应的即时方向（prepareTurn 解析完联系人后调用）：
+     * 装载该 key 已选方向与缓存建议；key 未变不重置。
+     */
+    private fun switchDirection(key: String) {
+        if (_direction.value.key == key) return
+        directionJob?.cancel()
+        _direction.value = DirectionState(
+            key = key,
+            selected = directionSelected[key],
+            suggestions = directionSuggestions[key].orEmpty(),
+        )
+    }
+
+    /**
+     * 用户打开「方向」下拉时调用：AI 建议为空则现场拟定（同一 key
+     * 已有建议或正在生成时直接复用，不重复消耗）。生成失败给静态兜底项，
+     * 菜单始终可用。
+     */
+    fun suggestDirections() {
+        val st = _direction.value
+        if (st.loading || st.suggestions.isNotEmpty()) return
+        directionJob?.cancel()
+        _direction.update { it.copy(loading = true) }
+        directionJob = advisorScope.launch {
+            val key = st.key
+            // 弱网下 provider 流可能长时间不结束也不报错：超时按失败处理，
+            // 落静态兜底项，保证下拉菜单不会永远停在「拟定中」。
+            val generated = runCatching {
+                withTimeout(DIRECTION_TIMEOUT_MS) { generateDirections() }
+            }.getOrNull().orEmpty()
+            val list = generated.ifEmpty {
+                context.resources.getStringArray(R.array.float_dir_fallback).toList()
+            }
+            directionSuggestions[key] = list
+            _direction.update {
+                if (it.key == key) it.copy(loading = false, suggestions = list) else it
+            }
+        }
+    }
+
+    /** 设定即时方向（自定义输入或点选建议）；只影响之后的回合。 */
+    fun setDirection(text: String) {
+        val value = text.trim().take(FloatUi.DIRECTION_MAX_CHARS)
+        if (value.isBlank()) return
+        val key = _direction.value.key
+        directionSelected[key] = value
+        _direction.update { it.copy(selected = value) }
+    }
+
+    /** 清除即时方向，回到仅按长期目标参谋。 */
+    fun clearDirection() {
+        directionSelected.remove(_direction.value.key)
+        _direction.update { it.copy(selected = null) }
+    }
+
+    /**
+     * 即时方向 AI 拟定：素材 = 当前屏正文 + 联系人长期目标 + 滚动摘要，
+     * 走 [AuxiliaryTasks] 一次性小任务（不手搓 HTTP）。三者全空时返回
+     * 空列表，由调用方落静态兜底。
+     */
+    private suspend fun generateDirections(): List<String> {
+        val config = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
+            ?: return emptyList()
+        val contact = _activeContact.value
+        val goal = contact?.goal.orEmpty()
+        val digest = contact?.let { c ->
+            runCatching { contactDirectory.digest(c.contactId) }.getOrNull()?.digest
+        } ?: prefs.screenDigest()
+        val lastScreen = _transcript.value.messages
+            .asReversed()
+            .firstOrNull { it.role == ChatRole.USER && it.content.startsWith(screenLabel) }
+            ?.let { stripScreenLabel(it.content) }
+            .orEmpty()
+        if (goal.isBlank() && digest.isNullOrBlank() && lastScreen.isBlank()) return emptyList()
+
+        val material = buildString {
+            append("长期目标：").append(goal.ifBlank { "无" }).append('\n')
+            append("背景摘要：").append(digest?.take(DIGEST_MAX_CHARS) ?: "无").append('\n')
+            append("当前屏幕：\n").append(lastScreen.take(DIRECTION_SCREEN_CHARS))
+        }
+        val raw = auxiliaryTasks.complete(
+            config = config,
+            systemPrompt = DIRECTION_SYSTEM,
+            userPrompt = material,
+            maxTokens = 160,
+        )
+        return parseDirections(raw)
+    }
+
+    /** 解析编号列表输出：去序号/项目符号/引号，过滤长度，去重，限 5 条。 */
+    private fun parseDirections(raw: String): List<String> {
+        val numberPrefix = Regex("""^\s*\d+\s*[.、)）:：-]?\s*""")
+        return raw.lineSequence()
+            .map { line ->
+                line.trim()
+                    .trimStart('-', '·', '•', '*', '、')
+                    .replace(numberPrefix, "")
+                    .trim('「', '」', '“', '”', '"', ' ', '：', ':')
+            }
+            .filter { it.length in DIRECTION_MIN_CHARS..DIRECTION_ITEM_MAX_CHARS }
+            .distinct()
+            .take(FloatUi.DIRECTION_MENU_MAX)
+            .toList()
     }
 
     // --------------------------------------------------------- preheat
@@ -379,6 +530,7 @@ class ScreenAdvisor @Inject constructor(
         if (question.isEmpty()) return PreparedTurn.Empty
         val contact = resolveContact(titleFallback)
         _activeContact.value = contact
+        switchDirection(contact?.let { "c:${it.contactId}" } ?: DIRECTION_KEY_SHARED)
         val conversationId = resolveConversation(contact)
         if (isDuplicateScreen(conversationId, question)) {
             _transcript.updateStatus(Status.Idle)
@@ -448,7 +600,7 @@ class ScreenAdvisor @Inject constructor(
         contact: ContactRef?,
         backgroundTurn: Boolean,
     ) {
-        _transcript.updateStatus(Status.Thinking)
+        _transcript.update { it.copy(status = Status.Thinking, lastUsage = null) }
         turnMutex.withLock {
             runAdvisorTurn(conversationId, contact, backgroundTurn)
         }
@@ -457,13 +609,12 @@ class ScreenAdvisor @Inject constructor(
     /** 自动屏幕消息与上一条屏幕消息的正文相似度判定（前缀行不参与）。 */
     private suspend fun isDuplicateScreen(conversationId: Long, content: String): Boolean {
         if (!content.startsWith(screenLabel)) return false
-        val last = conversationRepository.getMessages(conversationId)
-            .lastOrNull { it.role == ChatRole.USER && it.content.startsWith(screenLabel) }
-            ?: return false
+        // LIMIT 1 有界查询，不随会话长度增长装载整表。
+        val last = historyGateway.latestScreenBody(conversationId, screenLabel) ?: return false
         return FrameQuality.textSimilarity(
             stripScreenLabel(content),
-            stripScreenLabel(last.content),
-        ) >= DUP_SCREEN_SIMILARITY
+            stripScreenLabel(last),
+        ) >= prefs.state.value.screenDedupSimilarity
     }
 
     private fun stripScreenLabel(content: String): String =
@@ -479,67 +630,194 @@ class ScreenAdvisor @Inject constructor(
         data class PartialOutputFailure(val reason: String, val partial: String) : TurnOutcome
     }
 
+    /** 交往脉络段并行取数的原始产物（跨段去重前）。 */
+    private data class ContactFacts(
+        val entityNotes: List<Note>,
+        val dueNotes: List<Note>,
+        val dealFacts: List<DealFact>,
+    )
+
+    /** T1 并行取数收口后的全部回合素材（去重/渲染在其上进行）。 */
+    private data class TurnSources(
+        val core: CoreMemory?,
+        val primed: List<Note>,
+        val boundDigest: String?,
+        val brief: ChatBriefBuilder.Brief?,
+        val facts: ContactFacts?,
+    )
+
     /**
      * 与 ChatViewModel 的聊天轮同构：AgentLoop 产出、仓储落库。
      * 零文本失败（首字超时/连接失败/零文本 Failed）按递增间隔重试；
      * 已见文本（含思考过程）后失败绝不重试，保存 partial 并报错。
      */
     private suspend fun runAdvisorTurn(conversationId: Long, contact: ContactRef?, tightRetry: Boolean) {
+        val settings = prefs.state.value
         val config: ProviderConfig = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
             ?: run {
                 _transcript.updateStatus(Status.Error(REASON_NO_CONFIG))
                 return
             }
+        // 通道选择（省 token 的核心开关）：
+        // 智能档=连续模式的自动回合走无工具直连，手动参谋/追问保留全功能记忆；
+        // 增强档=全部走 AgentLoop；精简档=全部直连。两条通道的 App 侧记忆
+        // 注入（core/primed/联系人事实/承诺/成交要件）完全一致。
+        val lean = settings.memoryMode == AdvisorPrefs.MEMORY_MODE_LEAN ||
+            (settings.memoryMode == AdvisorPrefs.MEMORY_MODE_AUTO && tightRetry)
+        // 回答长度档硬上限：两条通道最终都以该 maxTokens 构建 ChatRequest。
+        val boundedConfig = config.copy(maxTokens = settings.answerMaxTokens)
+
+        // 有界读取：瘦身历史最多使用最后 60 条（AdvisorHistory.MAX_MESSAGES），
+        // 不整表加载随会话变长的全部消息。问题文本是后续全部取数的唯一输入，
+        // 必须先于 T1 并行块拿到。
+        val allMessages = historyGateway.recentMessages(conversationId, HISTORY_LOAD_MESSAGES)
+        val question = allMessages.lastOrNull { it.role == ChatRole.USER } ?: return
+        val screenBody = stripScreenLabel(question.content)
+        val goal = contact?.goal?.takeIf { it.isNotBlank() }
+
+        // 召回 query 收窄（v4 §8.2）：聊天界面用「对方最后一条来信」，
+        // 非聊天界面/提取失败回退整屏；绑定联系人追加业务目标关键词。
+        val incoming = IncomingCue.latestIncoming(screenBody)
+        val recallCue = IncomingCue.recallQuery(screenBody, goal, RECALL_QUERY_CHARS)
+
+        // T1 并行取数（v4 §11）：核心记忆/通用召回/滚动摘要/ChatBrief/
+        // 交往脉络五类只读数据并发，互不依赖；任一失败 runCatching 静默降级，
+        // 绝不让参谋回合开天窗（P-7）。
+        val sources = coroutineScope {
+            val coreDeferred = async {
+                runCatching { memoryRepository.getCore() }.getOrNull()
+            }
+            val primedDeferred = async {
+                // 检索是只读浏览，不强化（feedback=false），看屏不反写记忆权重。
+                runCatching {
+                    memoryRepository.recall(
+                        terms = MemoryText.terms(recallCue),
+                        limit = PRIMED_NOTES,
+                        feedback = false,
+                    )
+                }.getOrDefault(emptyList()).map { it.note }
+            }
+            // 绑定联系人只用自己的 digest；尚无 digest 时为 null（省略历史行），
+            // 绝不回退共享会话 digest——别的屏幕摘要串进客户线程会误导话术。
+            val digestDeferred = async {
+                contact?.let { c ->
+                    runCatching { contactDirectory.digest(c.contactId) }.getOrNull()?.digest
+                }
+            }
+            val briefDeferred = async {
+                contact?.let { c ->
+                    runCatching {
+                        chatBriefBuilder.build(c.contactId, screenBody, goal)
+                    }.getOrNull()
+                }
+            }
+            val factsDeferred = async {
+                contact?.let { c ->
+                    runCatching { fetchContactFacts(c, question.content) }.getOrNull()
+                }
+            }
+            TurnSources(
+                core = coreDeferred.await(),
+                primed = primedDeferred.await(),
+                boundDigest = digestDeferred.await(),
+                brief = briefDeferred.await(),
+                facts = factsDeferred.await(),
+            )
+        }
 
         // 落库原文完整，但发给模型的是「瘦身历史」：当前屏全文 + 最近若干屏
         // 缩写 + 更早屏幕的一句场景占位/滚动摘要（见 AdvisorHistory）。
-        // 绑定联系人会话走 bound 档：近屏保留更多、预算更宽、旧屏报价承诺仍有效。
-        val boundDigest = contact?.let { c ->
-            runCatching { contactDirectory.digest(c.contactId) }.getOrNull()?.digest
-        }
-        val allMessages = conversationRepository.getMessages(conversationId)
         val history = AdvisorHistory.build(
             messages = allMessages,
             screenLabel = screenLabel,
-            // 绑定联系人只用自己的 digest；尚无 digest 时为 null（省略历史行），
-            // 绝不回退共享会话 digest——别的屏幕摘要串进客户线程会误导话术。
-            digest = if (contact != null) boundDigest else prefs.screenDigest(),
+            digest = if (contact != null) sources.boundDigest else prefs.screenDigest(),
             bound = contact != null,
         )
-        val question = allMessages.lastOrNull { it.role == ChatRole.USER } ?: return
 
-        // 参谋的「阅人」：核心记忆 + 由屏幕文字（绑定联系人再追加业务目标）
-        // 线索唤醒的通用笔记。检索是只读浏览，不强化（feedback=false），
-        // 看屏不应改写记忆权重。
-        val cue = contact?.goal?.takeIf { it.isNotBlank() }?.let { "${question.content} $it" }
-            ?: question.content
-        val core = runCatching { memoryRepository.getCore() }.getOrNull()
-        val primed = runCatching {
-            memoryRepository.recall(
-                terms = MemoryText.terms(cue),
-                limit = PRIMED_NOTES,
-                feedback = false,
-            )
-        }.getOrDefault(emptyList()).map { it.note }
+        // 跨段去重（v4 §8.2，修 D5）：同一事实不在 承诺/画像/脉络/通用召回
+        // 四处重复注入。保留优先级：承诺与约定 ＞ 已确认画像 ＞ 交往脉络 ＞
+        // 通用笔记。承诺/计划/事件/小结只按 id 去重，不被文本指纹吞掉。
+        val dueNotes = sources.facts?.dueNotes.orEmpty()
+        val dueIds = dueNotes.mapTo(HashSet()) { it.id }
+        val curatedTexts = sources.brief?.curatedTexts.orEmpty()
+        val entityKept = sources.facts?.entityNotes
+            ?.sortedByDescending { it.whenAt ?: it.updatedAt }
+            ?.let { sorted ->
+                PromptDedup.dedupeNotes(
+                    PromptDedup.filterNotes(
+                        notes = sorted,
+                        keepIds = dueIds,
+                        keepTexts = curatedTexts,
+                        protectedKinds = RESERVED_NOTE_KINDS,
+                    ),
+                    protectedKinds = RESERVED_NOTE_KINDS,
+                )
+            }
+            .orEmpty()
+        val reservedIds = dueIds + entityKept.mapTo(HashSet()) { it.id }
+        val reservedTexts = curatedTexts +
+            dueNotes.map { it.content } +
+            entityKept.map { it.content }
+        val primedKept = PromptDedup.filterNotes(
+            notes = sources.primed,
+            keepIds = reservedIds,
+            keepTexts = reservedTexts,
+        )
+        val dealKept = sources.facts?.dealFacts?.let { deals ->
+            val keptTexts = PromptDedup.filterTexts(deals.map { it.content }, reservedTexts).toSet()
+            deals.filter { it.content in keptTexts }
+        }.orEmpty()
+        android.util.Log.d(
+            TAG,
+            "prompt sources: incoming=${incoming != null}, primed=${sources.primed.size}->${primedKept.size}, " +
+                "entity=${sources.facts?.entityNotes?.size ?: 0}->${entityKept.size}, " +
+                "due=${dueNotes.size}, deal=${sources.facts?.dealFacts?.size ?: 0}->${dealKept.size}",
+        )
+
         val memoryContext = MemoryPrompt.context(
-            core = core,
-            primed = primed,
+            core = sources.core,
+            primed = primedKept,
             now = System.currentTimeMillis(),
         )
 
-        // 绑定联系人：① ChatBrief（§6.2 业务目标/风格/双方人设/话术 Top3）+
-        // ② 按人直取的交往脉络 + 到期承诺 + 成交要件 + 转折铁律，各自独立段落
-        // 拼进 custom（与上游 memoryContext 分轨；取数纪律见 §6.5）。
-        val briefSection = contact?.let { c ->
-            runCatching { chatBriefBuilder.buildSection(c.contactId, stripScreenLabel(question.content)) }
-                .getOrNull()
-        }
+        // 绑定联系人：交往脉络（到期承诺置顶 + 按人事实 + 成交要件，均已去重）
+        // 独立段落拼进 custom（与上游 memoryContext 分轨；取数纪律见 §6.5）。
         val contactSection = contact?.let { c ->
-            runCatching { buildContactSection(c, question.content) }.getOrNull()
+            runCatching {
+                ContactBriefSection.render(
+                    contact = c,
+                    entityNotes = entityKept,
+                    dueNotes = dueNotes,
+                    dealFacts = dealKept,
+                )
+            }.getOrNull()
         }
-        val customSystemPrompt = listOfNotNull(ADVISOR_STYLE, briefSection, contactSection)
+        // 长度档：人设尾句动态生成，软约束（提示词）+ 硬约束（maxTokens）双保险。
+        val styleWithLength = ADVISOR_STYLE_BASE +
+            "请用简体中文给出简洁、可直接参考的分析，回答控制在 ${settings.answerTargetChars} 字以内，" +
+                "不啰嗦、不复述原文。"
+        // 即时方向（顶栏「方向」chip）：仅次于总纲的高优先级段落，置于长期
+        // 目标/人设 brief 之前；未设置时整段省略，行为与现状一致。
+        val directionSection = _direction.value.selected
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "$DIRECTION_SECTION\n$it\n$DIRECTION_REQUIRE" }
+        // 规约总纲置 system prompt 首位（v4 §8.1）：renderSystemPrompt 会把
+        // custom 拼在最前，总纲因此先于上游一切基线条目。
+        val customSystemPrompt = listOfNotNull(
+            PREAMBLE_SECTION,
+            styleWithLength,
+            directionSection,
+            sources.brief?.section,
+            contactSection,
+        )
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
+        // 直连通道没有上游 renderSystemPrompt 的记忆段：App 侧注入的记忆在这里
+        // 以独立段落显式给出（业务能力与 AgentLoop 通道等价）。
+        val leanSystemPrompt = listOfNotNull(
+            customSystemPrompt,
+            memoryContext?.takeIf { it.isNotBlank() }?.let { "$MEMORY_LEAD_IN\n$it" },
+        ).joinToString("\n\n")
 
         val ka = keepAlivePrefs.state.value
         val maxRetries = if (tightRetry) TIGHT_RETRY_TIMES else ka.retryTimes
@@ -547,20 +825,45 @@ class ScreenAdvisor @Inject constructor(
             (if (tightRetry) TIGHT_RETRY_TIMEOUT_SEC else ka.retryTimeoutSec) * 1000L
         val delayBaseSec = ka.retryDelaySec.coerceAtLeast(1).toLong()
 
+        // 本回合用量（AgentLoop 若触发工具会有多轮 Usage，累加；重试重新计数）。
+        var turnInput = 0L
+        var turnOutput = 0L
+        val usageSink: (Long, Long) -> Unit = { input, output ->
+            turnInput += input.coerceAtLeast(0L)
+            turnOutput += output.coerceAtLeast(0L)
+        }
+
         try {
             var attempt = 0
             while (true) {
-                val outcome = collectAdvisorOnce(
-                    config = config,
-                    conversationId = conversationId,
-                    history = history,
-                    memoryContext = memoryContext,
-                    customSystemPrompt = customSystemPrompt,
-                    triggerMessageId = question.id,
-                    firstTextTimeoutMs = firstTextTimeoutMs,
-                )
+                turnInput = 0L
+                turnOutput = 0L
+                val outcome = if (lean) {
+                    collectLeanOnce(
+                        config = boundedConfig,
+                        conversationId = conversationId,
+                        systemPrompt = leanSystemPrompt,
+                        history = history,
+                        maxTokens = settings.answerMaxTokens,
+                        triggerMessageId = question.id,
+                        firstTextTimeoutMs = firstTextTimeoutMs,
+                        onUsage = usageSink,
+                    )
+                } else {
+                    collectAdvisorOnce(
+                        config = boundedConfig,
+                        conversationId = conversationId,
+                        history = history,
+                        memoryContext = memoryContext,
+                        customSystemPrompt = customSystemPrompt,
+                        triggerMessageId = question.id,
+                        firstTextTimeoutMs = firstTextTimeoutMs,
+                        onUsage = usageSink,
+                    )
+                }
                 when (outcome) {
                     is TurnOutcome.Done -> {
+                        recordTurnUsage(turnInput, turnOutput, tightRetry, settings.sessionTokenBudget)
                         // 后台滚动摘要 + 画像萃取：独立协程，不占串行队列、不阻塞 UI。
                         // 上一回合的沉淀仍在跑则跳过（素材每次按全量回合重算，不丢信息）。
                         advisorScope.launch {
@@ -610,65 +913,66 @@ class ScreenAdvisor @Inject constructor(
     }
 
     /**
-     * 绑定联系人回合的提示词段落（设计文档 §6.5–6.6）：
+     * 绑定联系人脉络段的并行取数（设计文档 §6.5–6.6，T1 并发的子步骤）：
      * ① recallByEntity 按主名+别名直取该联系人的事实（天然防串档）；
-     * ② ContactMemoryReader 按人只读取窗内承诺/约见到期置顶（AGREEMENT/PLAN，
+     * ② ContactMemoryReader 按人只读取窗内承诺/约见（AGREEMENT/PLAN，
      *   不 touch、不强化，避开上游 upcoming() 的全局截断与权重反写）；
-     * ③ 当前屏出现成交信号时，跨该联系人全部会话检索成交要件；
-     * ④ 渲染器始终附上转折铁律。全部只读、feedback=false。
+     * ③ 当前屏出现成交信号时，跨该联系人全部会话检索成交要件。
+     * 三路互不依赖、同屏并发；全部只读、feedback=false；去重与渲染由调用方
+     * 在并行块收口后统一完成。
      */
-    private suspend fun buildContactSection(contact: ContactRef, currentScreen: String): String {
+    private suspend fun fetchContactFacts(contact: ContactRef, currentScreen: String): ContactFacts {
         val names = (listOf(contact.displayName) + contact.aliases)
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
             .take(ENTITY_NAME_LIMIT)
         val now = System.currentTimeMillis()
-
-        val entityNotes = if (names.isEmpty()) {
-            emptyList()
-        } else {
-            runCatching {
-                memoryRepository.recallByEntity(
-                    entities = names,
-                    limit = ENTITY_NOTES,
-                    feedback = false,
-                )
-            }.getOrDefault(emptyList()).map { it.note }
+        return coroutineScope {
+            val entityDeferred = async {
+                if (names.isEmpty()) {
+                    emptyList()
+                } else {
+                    runCatching {
+                        memoryRepository.recallByEntity(
+                            entities = names,
+                            limit = ENTITY_NOTES,
+                            feedback = false,
+                        )
+                    }.getOrDefault(emptyList()).map { it.note }
+                }
+            }
+            val dueDeferred = async {
+                runCatching { memoryReader.dueFor(names, now = now) }
+                    .getOrDefault(emptyList())
+                    .take(DUE_NOTES)
+            }
+            val dealDeferred = async {
+                if (!historyGateway.hasClosingSignal(stripScreenLabel(currentScreen))) {
+                    emptyList()
+                } else {
+                    val ids = runCatching { contactDirectory.conversationIds(contact.contactId) }
+                        .getOrDefault(emptyList())
+                    runCatching { historyGateway.dealFacts(ids) }.getOrDefault(emptyList())
+                }
+            }
+            ContactFacts(
+                entityNotes = entityDeferred.await(),
+                dueNotes = dueDeferred.await(),
+                dealFacts = dealDeferred.await(),
+            )
         }
-
-        val dueNotes = runCatching { memoryReader.dueFor(names, now = now) }
-            .getOrDefault(emptyList())
-            .take(DUE_NOTES)
-
-        val dealFacts = if (historyGateway.hasClosingSignal(stripScreenLabel(currentScreen))) {
-            val ids = runCatching { contactDirectory.conversationIds(contact.contactId) }
-                .getOrDefault(emptyList())
-            runCatching { historyGateway.dealFacts(ids) }.getOrDefault(emptyList())
-        } else {
-            emptyList()
-        }
-
-        return ContactBriefSection.render(
-            contact = contact,
-            entityNotes = entityNotes,
-            dueNotes = dueNotes,
-            dealFacts = dealFacts,
-            now = now,
-        )
     }
 
     /**
-     * 滚动摘要：每完成 [DIGEST_EVERY_TURNS] 个自动屏幕回合，把最近
+     * 滚动摘要（总开关/频率读 AdvisorPrefs）：间隔满足时把最近
      * [DIGEST_TURN_WINDOW] 个已完成回合（屏幕正文/参谋意见各截
      * [DIGEST_ITEM_CHARS] 字）压成 ≤[DIGEST_MAX_CHARS] 字的连续背景。
      * 绑定联系人存 session_bindings（经 [ContactDirectory]），共享会话存
-     * AdvisorPrefs。这里重新读库（调用时回复已落库）；任何失败都静默
-     * 保留旧摘要，不影响主回合。只统计「屏幕+回复」完整配对，手动追问不计入。
+     * AdvisorPrefs。任何失败都静默保留旧摘要，不影响主回合。手动追问不计入。
      */
     private suspend fun maybeRefreshDigest(conversationId: Long, contact: ContactRef?) {
-        val screenTurns = completedScreenTurns(conversationId)
-        val total = screenTurns.size
+        if (!prefs.state.value.digestEnabled) return
         val stored = contact?.let { c ->
             runCatching { contactDirectory.digest(c.contactId) }.getOrNull()
         }
@@ -679,16 +983,19 @@ class ScreenAdvisor @Inject constructor(
             stored != null -> stored.coveredTurns
             else -> 0
         }
-        if (total - coveredTurns < DIGEST_EVERY_TURNS) return
+        // 绝对回合序号走 COUNT 查询（不装载消息实体）；素材只取最近窗口的配对。
+        val total = historyGateway.countScreenTurns(conversationId, screenLabel)
+        if (total - coveredTurns < prefs.state.value.digestEveryTurns) return
+        val screenTurns = historyGateway.recentScreenTurns(conversationId, screenLabel)
 
         val config = runCatching { agentRepository.resolveConfig(null) }.getOrNull() ?: return
         val previousDigest = if (contact != null) stored?.digest else prefs.screenDigest()
         val material = buildString {
             previousDigest?.let { append("已有摘要：").append(it).append("\n\n") }
-            screenTurns.takeLast(DIGEST_TURN_WINDOW).forEachIndexed { index, (screen, advice) ->
+            screenTurns.takeLast(DIGEST_TURN_WINDOW).forEachIndexed { index, turn ->
                 append("屏幕").append(index + 1).append("：")
-                append(stripScreenLabel(screen.content).take(DIGEST_ITEM_CHARS)).append('\n')
-                append("参谋：").append(advice.content.take(DIGEST_ITEM_CHARS)).append("\n\n")
+                append(stripScreenLabel(turn.screenContent).take(DIGEST_ITEM_CHARS)).append('\n')
+                append("参谋：").append(turn.replyContent.take(DIGEST_ITEM_CHARS)).append("\n\n")
             }
         }
         val digest = auxiliaryTasks.complete(
@@ -706,38 +1013,140 @@ class ScreenAdvisor @Inject constructor(
         }
     }
 
-    /** 会话内全部「屏幕提问 + 参谋回复」完整配对（手动追问不计入），按时间正序。 */
-    private suspend fun completedScreenTurns(conversationId: Long): List<Pair<ChatMessage, ChatMessage>> {
-        val messages = conversationRepository.getMessages(conversationId)
-        return buildList {
-            var pendingScreen: ChatMessage? = null
-            for (message in messages) {
-                when {
-                    message.role == ChatRole.USER &&
-                        message.content.startsWith(screenLabel) -> pendingScreen = message
-                    message.role == ChatRole.ASSISTANT && pendingScreen != null -> {
-                        add(pendingScreen to message)
-                        pendingScreen = null
-                    }
-                }
-            }
+    /**
+     * 对方画像萃取（§4.2）：总开关与节流频率读 AdvisorPrefs；字段目录/
+     * 草稿冷却在 [PersonaExtractor] 与 ContactRepository 内完成，这里只
+     * 负责组装最近窗口的回合文本。任何失败静默，不影响参谋主链路；
+     * 草稿落库后由画像页供用户 ✓/✕。
+     */
+    private suspend fun maybeExtractPersona(conversationId: Long, contact: ContactRef) {
+        if (!prefs.state.value.extractEnabled) return
+        val settings = prefs.state.value
+        val turns = historyGateway.recentScreenTurns(conversationId, screenLabel).map { turn ->
+            PersonaExtractor.Turn(
+                screen = stripScreenLabel(turn.screenContent),
+                reply = turn.replyContent,
+                at = turn.screenCreatedAt,
+            )
+        }
+        personaExtractor.maybeExtract(
+            contactId = contact.contactId,
+            conversationId = conversationId,
+            turns = turns,
+            everyTurns = settings.extractEveryTurns,
+        )
+    }
+
+    /**
+     * 完成回合的用量入账：累计持久化 + 面板小字；连续模式下若本次会话用量
+     * 达到预算上限，发出自动停录请求（在回合落库之后，不丢这条回答）。
+     */
+    private fun recordTurnUsage(
+        input: Long,
+        output: Long,
+        backgroundTurn: Boolean,
+        sessionBudget: Long,
+    ) {
+        prefs.recordTurnUsage(input, output)
+        _transcript.update { it.copy(lastUsage = TurnTokens(input, output)) }
+        if (backgroundTurn && sessionBudget > 0L) {
+            val used = prefs.tokenStats.value.sessionTotal
+            if (used >= sessionBudget) _budgetExceeded.tryEmit(Unit)
         }
     }
 
     /**
-     * 对方画像萃取（§4.2）：节流/字段目录/草稿冷却全部在 [PersonaExtractor]
-     * 与 ContactRepository 内完成，这里只负责组装回合文本。任何失败静默，
-     * 不影响参谋主链路；草稿落库后由 P4 画像页供用户 ✓/✕。
+     * 精简直连通道的单轮流式收集：无工具，故只有一轮，事件处理与
+     * [collectAdvisorOnce] 同构（首字超时→可重试；已出文本后失败→保 partial）。
      */
-    private suspend fun maybeExtractPersona(conversationId: Long, contact: ContactRef) {
-        val turns = completedScreenTurns(conversationId).map { (screen, reply) ->
-            PersonaExtractor.Turn(
-                screen = stripScreenLabel(screen.content),
-                reply = reply.content,
-                at = screen.createdAt,
+    private suspend fun collectLeanOnce(
+        config: ProviderConfig,
+        conversationId: Long,
+        systemPrompt: String,
+        history: List<ChatMessage>,
+        maxTokens: Int,
+        triggerMessageId: Long,
+        firstTextTimeoutMs: Long,
+        onUsage: (Long, Long) -> Unit,
+    ): TurnOutcome = kotlinx.coroutines.coroutineScope {
+        val chunks = responder.stream(
+            config = config,
+            systemPrompt = systemPrompt,
+            messages = history,
+            maxTokens = maxTokens,
+        ).produceIn(this)
+
+        val live = StringBuilder()
+        var sawText = false
+        var failureReason: String? = null
+
+        fun handle(chunk: AdvisorResponder.Chunk) {
+            when (chunk) {
+                is AdvisorResponder.Chunk.Delta -> {
+                    sawText = true
+                    live.append(chunk.text)
+                    _transcript.update { it.copy(streaming = live.toString()) }
+                }
+                is AdvisorResponder.Chunk.Usage -> onUsage(chunk.inputTokens, chunk.outputTokens)
+                is AdvisorResponder.Chunk.Failure -> failureReason = chunk.reason
+                AdvisorResponder.Chunk.Done -> Unit
+            }
+        }
+
+        try {
+            withTimeout(firstTextTimeoutMs) {
+                while (true) {
+                    val result = chunks.receiveCatching()
+                    if (result.isClosed) break
+                    handle(result.getOrThrow())
+                    if (sawText) break
+                }
+            }
+        } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+            chunks.cancel()
+            return@coroutineScope TurnOutcome.ZeroOutputFailure(REASON_FIRST_TEXT_TIMEOUT)
+        } catch (cancelled: CancellationException) {
+            chunks.cancel()
+            throw cancelled
+        } catch (error: Exception) {
+            chunks.cancel()
+            return@coroutineScope if (sawText) {
+                TurnOutcome.PartialOutputFailure(error.message ?: "unknown", live.toString())
+            } else {
+                TurnOutcome.ZeroOutputFailure(error.message ?: REASON_NETWORK)
+            }
+        }
+
+        if (!sawText) {
+            return@coroutineScope TurnOutcome.ZeroOutputFailure(failureReason ?: REASON_NO_RESPONSE)
+        }
+        try {
+            for (chunk in chunks) handle(chunk)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return@coroutineScope TurnOutcome.PartialOutputFailure(
+                error.message ?: "unknown",
+                live.toString(),
             )
         }
-        personaExtractor.maybeExtract(contact.contactId, conversationId, turns)
+        if (failureReason != null && live.isBlank()) {
+            return@coroutineScope TurnOutcome.ZeroOutputFailure(failureReason ?: REASON_NO_RESPONSE)
+        }
+        if (failureReason != null) {
+            return@coroutineScope TurnOutcome.PartialOutputFailure(failureReason ?: "unknown", live.toString())
+        }
+        conversationRepository.append(
+            ChatMessage(
+                conversationId = conversationId,
+                role = ChatRole.ASSISTANT,
+                content = live.toString(),
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
+        _transcript.update { it.copy(streaming = null, status = Status.Idle) }
+        _turnCompletions.tryEmit(Unit)
+        TurnOutcome.Done
     }
 
     /**
@@ -753,6 +1162,7 @@ class ScreenAdvisor @Inject constructor(
         customSystemPrompt: String,
         triggerMessageId: Long,
         firstTextTimeoutMs: Long,
+        onUsage: (Long, Long) -> Unit,
     ): TurnOutcome = kotlinx.coroutines.coroutineScope {
         val events: ReceiveChannel<AgentEvent> = agentLoop.run(
             config = config,
@@ -811,6 +1221,8 @@ class ScreenAdvisor @Inject constructor(
                         failureReason = failureReason ?: REASON_NO_RESPONSE
                     }
                 }
+                is AgentEvent.Usage ->
+                    onUsage(event.promptTokens ?: 0L, event.completionTokens ?: 0L)
                 is AgentEvent.Failed -> failureReason = event.error.message
                 else -> Unit
             }
@@ -934,6 +1346,7 @@ class ScreenAdvisor @Inject constructor(
     }
 
     fun advisorScopeCancel() {
+        directionJob?.cancel()
         advisorScope.cancel()
     }
 
@@ -942,8 +1355,36 @@ class ScreenAdvisor @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "ScreenAdvisor"
+
         const val REASON_NO_TEXT = "no_text"
         const val REASON_NO_CONFIG = "no_config"
+
+        /** 即时方向的会话键：共享会话用；绑定联系人拼 `c:<contactId>`。 */
+        const val DIRECTION_KEY_SHARED = "shared"
+
+        /** 即时方向拟定时喂给模型的当前屏正文字数上限。 */
+        const val DIRECTION_SCREEN_CHARS = 800
+
+        /** AI 拟定方向的最长等待：超时落静态兜底，不卡住下拉菜单。 */
+        const val DIRECTION_TIMEOUT_MS = 20_000L
+
+        /** AI 建议方向的长度过滤窗（去序号后）。 */
+        const val DIRECTION_MIN_CHARS = 2
+        const val DIRECTION_ITEM_MAX_CHARS = 16
+
+        /** 注入系统提示词的即时方向段落（置于长期目标之前）。 */
+        const val DIRECTION_SECTION = "【本次参谋的即时方向】"
+        const val DIRECTION_REQUIRE =
+            "本回合的建议回复必须服务于这个即时方向；若当前屏幕话题偏离，" +
+                "也要指出如何把对话自然引回该方向。"
+
+        /** 即时方向 AI 拟定的系统提示词：只输出编号列表。 */
+        const val DIRECTION_SYSTEM =
+            "你是销售参谋的即时方向助手。根据用户当前聊天屏幕、长期业务目标与已有摘要，" +
+                "拟定当下最值得推进的 2~5 个即时方向：每条不超过 12 字、动宾短语、" +
+                "互不包含、可直接执行（如「先问出预算区间」）；信息不足时给泛化方向。" +
+                "只输出编号列表，每行一条，不要解释、不要寒暄。"
 
         /** 零文本失败原因（展示层映射成中文文案；均允许重试）。 */
         const val REASON_FIRST_TEXT_TIMEOUT = "first_text_timeout"
@@ -979,6 +1420,20 @@ class ScreenAdvisor @Inject constructor(
         const val MAX_SCREEN_CHARS = 3_000
         const val PRIMED_NOTES = 4
 
+        /** 召回收窄 query 的字符上限（来信候选 + 目标关键词；terms 还会再截断）。 */
+        const val RECALL_QUERY_CHARS = 600
+
+        /**
+         * 跨段去重时受保护的笔记类别：承诺/计划/事件/小结只按 id 精确去重，
+         * 不被画像值或其他文本的指纹判同吞掉（独立承诺必须各自保留）。
+         */
+        val RESERVED_NOTE_KINDS = setOf(
+            NoteKind.AGREEMENT,
+            NoteKind.PLAN,
+            NoteKind.EVENT,
+            NoteKind.SUMMARY,
+        )
+
         /** recallByEntity 参与匹配的主名+别名数量上限。 */
         const val ENTITY_NAME_LIMIT = 8
 
@@ -988,14 +1443,14 @@ class ScreenAdvisor @Inject constructor(
         /** 置顶的到期承诺/约见上限。 */
         const val DUE_NOTES = 3
 
-        /** 相邻两屏正文相似度达到该值即判为重复，短路不发 LLM。 */
-        const val DUP_SCREEN_SIMILARITY = 0.92
+        /** 主回合历史的有界读取条数（与 AdvisorHistory.MAX_MESSAGES 对齐）。 */
+        const val HISTORY_LOAD_MESSAGES = 60
 
-        /** 每完成这么多个自动屏幕回合刷新一次滚动摘要。 */
-        const val DIGEST_EVERY_TURNS = 6
-
-        /** 刷新摘要时回看的最近屏幕回合数。 */
-        const val DIGEST_TURN_WINDOW = 12
+        /**
+         * 刷新摘要时回看的最近屏幕回合数。摘要是带旧摘要的增量压缩，
+         * 喂 6 个新屏即可接续背景（原 12 屏输入减半，输出质量不变）。
+         */
+        const val DIGEST_TURN_WINDOW = 6
 
         /** 摘要素材里屏幕正文/参谋意见各自的截断长度。 */
         const val DIGEST_ITEM_CHARS = 200
@@ -1022,14 +1477,33 @@ class ScreenAdvisor @Inject constructor(
                 "随后只保留谈过的型号与价格、我方承诺、对方明确表达的顾虑或意向，" +
                 "丢弃寒暄、重复屏幕与 OCR 噪声。只输出摘要正文，不要标题分点与寒暄。"
 
-        /** 参谋人设：作为 customSystemPrompt 拼进 AgentLoop 的系统提示词。 */
-        const val ADVISOR_STYLE =
+        /**
+         * 规约总纲（v4 §8.1）：system prompt 固定首位，冲突时自上而下取舍。
+         * 由 v3 仅绑定联系人段尾部的「转折铁律」升级而来，共享/绑定回合统一生效。
+         */
+        const val PREAMBLE_SECTION =
+            "【规约总纲】\n" +
+                "你是用户的随身参谋，依据当前屏幕与以下材料分析，不要提及本规约或材料的组织方式。" +
+                "信息冲突时严格按优先级取舍：当前屏幕事实 ＞ 有效承诺与约定 ＞ 历史画像与通用记忆。" +
+                "历史只代表当时；当前屏幕出现矛盾信号时一律顺应当前屏——对方由拒绝/犹豫转为意向或" +
+                "同意购买时，立即停止说服、辩解或逼单，转入型号、数量、付款方式、交付时间的闭环确认；" +
+                "历史脉络中谈过的报价、承诺仍然有效，回复须与之自洽，不得凭空改价或食言。"
+
+        /**
+         * 参谋人设骨架：作为 customSystemPrompt 拼进 AgentLoop / 直连通道的系统
+         * 提示词。长度档的尾句由调用方动态追加（见 answerTargetChars）。
+         */
+        const val ADVISOR_STYLE_BASE =
             "你是「老参谋」，用户的随身参谋。用户在手机上轻点了一下悬浮球，" +
                 "最近一条用户消息是由 OCR 或无障碍树从当前屏幕提取的文本（可能有识别噪声、排版可能混乱），" +
                 "更早的屏幕只以一句场景占位或摘要存在，原始文本已经省略——严禁复述旧屏幕，" +
                 "始终以当前屏幕为唯一分析对象；用户手动输入的追问优先于一切屏幕内容。" +
-                "请用简体中文给出简洁、可直接参考的分析：" +
                 "若屏幕是对话/聊天，概括各方立场并给出建议的回应要点；若是文章/资料，提炼要点；" +
-                "若是操作界面，说明当前状态与下一步选项。一百五十字以内，不啰嗦、不复述原文。"
+                "若是操作界面，说明当前状态与下一步选项。"
+
+        /** 直连通道记忆段的引导语（替代上游 renderSystemPrompt 的英文记忆协议）。 */
+        const val MEMORY_LEAD_IN =
+            "以下是与当前参谋相关的用户记忆与联系人档案，请在分析时自然参考，" +
+                "不要逐条罗列或主动提及记忆的存在："
     }
 }

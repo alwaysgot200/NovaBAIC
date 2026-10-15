@@ -60,6 +60,19 @@ internal object FloatUi {
     const val SPLIT_MAX_RATIO = 0.88f
     const val SPLIT_DEFAULT_RATIO = 0.55f
 
+    /** 紧凑顶栏（拖动热区/标题/方向/自动/关闭单行）高度。 */
+    const val HEADER_HEIGHT_DP = 38
+
+    /** 方向 chip 未选/已选底色；下拉菜单强调色。 */
+    private val DIRECTION_CHIP_OFF = 0x22FFFFFF.toInt()
+    private val DIRECTION_CHIP_ON = 0x552E5FD0.toInt()
+    private val MENU_ACCENT = 0xFF9DB8F0.toInt()
+    private val MENU_DANGER = 0xFFFF8A80.toInt()
+
+    /** AI 建议方向的最多展示条数；自定义方向的字符上限。 */
+    const val DIRECTION_MENU_MAX = 5
+    const val DIRECTION_MAX_CHARS = 24
+
     private val BALL_COLOR = 0xFF2E5FD0.toInt()
     private val PANEL_COLOR = 0xF214161C.toInt()
     private val RECORD_COLOR = 0xFFD0342C.toInt()
@@ -74,10 +87,10 @@ internal object FloatUi {
     /** 可拖动的悬浮球；触摸手势由服务层绑定。窗口尺寸=视觉尺寸（中心即可点击）。 */
     fun buildBall(context: Context): BallView {
         val size = dp(context, BALL_SIZE_DP)
-        // 与应用图标共用同一矢量 logo；矢量内容占视口约 52%，故 logo 视图
-        // 放大到 72dp 居中（父容器裁剪），使羽扇在 56dp 球内视觉占比约 2/3。
-        // 圆形底色单独由 56dp 的圆盘承担，避免底色随 logo 放大溢出球体。
-        val logoSize = dp(context, 72)
+        // 球内用 56dp 专用彩色扇标（24 视口、全实色、扇骨加粗）：与应用图标
+        // ic_logo_advisor 同形（白扇面/金柄/蓝骨/青星），但精细渐变版在这个
+        // 尺寸会光栅化成小白块，故用小尺寸重绘稿。40dp 居中，占球径约 70%。
+        val logoSize = dp(context, 40)
         val disc = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -86,7 +99,7 @@ internal object FloatUi {
             }
         }
         val logo = ImageView(context).apply {
-            setImageResource(R.drawable.ic_logo_advisor)
+            setImageResource(R.drawable.fb_ic_logo_ball)
             scaleType = ImageView.ScaleType.FIT_CENTER
         }
         val spinner = View(context).apply {
@@ -401,26 +414,18 @@ internal object FloatUi {
     }
 
     /**
-     * 底部锚定的分屏问答面板。上沿是拖动把手（调高度），正文区由服务层
-     * 挂载 [TranscriptView]，底部是「新对话」同款输入行（输入框/语音/
-     * ＋号/发送-停止），由服务层接线行为。
+     * 底部锚定的分屏问答面板。顶部是 **38dp 单行 headerRow**（同时作为拖动
+     * 调高热区）：握把 │「老参谋」│「方向 ▾」chip │ 弹性空白 │「自动」
+     * （本期置灰占位）│「✕」；其下是压缩到 24dp 的联系人状态条；正文区由
+     * 服务层挂载 [TranscriptView]，底部是「新对话」同款输入行。
      */
     fun buildSplitPanel(
         context: Context,
         onClose: () -> Unit,
+        onDirection: () -> Unit,
+        onAuto: () -> Unit,
         inputCallbacks: InputBarCallbacks,
     ): SplitPanel {
-        val handle = FrameLayout(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(context, 26),
-            )
-            addView(View(context).apply {
-                background = rounded(context, 0x66FFFFFF, 2)
-                layoutParams = FrameLayout.LayoutParams(dp(context, 56), dp(context, 4), Gravity.CENTER)
-            })
-        }
-
         val transcriptContainer = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -431,15 +436,90 @@ internal object FloatUi {
         }
 
         // 联系人状态条（§7）：显示当前绑定联系人，点击打开画像管理页。
-        // 文案/点击由服务层随 ScreenAdvisor.activeContact 更新。
+        // 顶栏紧凑化后压到单行 24dp；文案/点击由服务层随 activeContact 更新。
         val statusBar = TextView(context).apply {
             text = context.getString(R.string.float_profile_status_unbound)
             setTextColor(0xCCFFFFFF.toInt())
-            textSize = 12.5f
+            textSize = 12f
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(context, 16), dp(context, 6), dp(context, 16), dp(context, 6))
+            setPadding(dp(context, 16), dp(context, 4), dp(context, 16), dp(context, 4))
             setSingleLine(true)
             ellipsize = TextUtils.TruncateAt.END
+        }
+
+        // 方向 chip 在 header 外声明（apply 块外的 SplitPanel 需要引用）。
+        val chip = TextView(context).apply {
+            text = context.getString(R.string.float_dir_chip)
+            setTextColor(0xCCFFFFFF.toInt())
+            textSize = 12.5f
+            gravity = Gravity.CENTER
+            maxLines = 1
+            maxWidth = dp(context, 150)
+            ellipsize = TextUtils.TruncateAt.END
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 14).toFloat()
+                setColor(DIRECTION_CHIP_OFF)
+            }
+            setPadding(dp(context, 10), dp(context, 3), dp(context, 10), dp(context, 3))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(context, 4) }
+            setOnClickListener { onDirection() }
+        }
+
+        // 整行即拖动把手：非按钮子 View（握把/标题/空白）不消费触摸，
+        // 服务层把 resize listener 挂在 headerRow 上即可；chip/自动/✕ 各自
+        // clickable，点击不会误触发拖动。
+        val header = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(context, HEADER_HEIGHT_DP),
+            )
+            setPadding(dp(context, 12), 0, dp(context, 6), 0)
+
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.fb_ic_drag)
+                alpha = 0.55f
+                contentDescription = context.getString(R.string.float_split_drag_desc)
+                layoutParams = LinearLayout.LayoutParams(dp(context, 16), dp(context, 16)).apply {
+                    marginEnd = dp(context, 6)
+                }
+            })
+            addView(TextView(context).apply {
+                text = context.getString(R.string.float_ask_title)
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = dp(context, 8) }
+            })
+
+            addView(chip)
+
+            addView(View(context).apply {
+                layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+            })
+            addView(TextView(context).apply {
+                text = context.getString(R.string.float_split_auto)
+                setTextColor(0x80FFFFFF.toInt())
+                textSize = 12.5f
+                alpha = 0.45f
+                setPadding(dp(context, 10), dp(context, 4), dp(context, 10), dp(context, 4))
+                setOnClickListener { onAuto() }
+            })
+            addView(TextView(context).apply {
+                text = context.getString(R.string.float_ask_close_x)
+                setTextColor(0xCCFFFFFF.toInt())
+                textSize = 18f
+                contentDescription = context.getString(R.string.float_ask_close)
+                setPadding(dp(context, 10), dp(context, 2), dp(context, 10), dp(context, 4))
+                setOnClickListener { onClose() }
+            })
         }
 
         val inputBar = buildInputBar(context, inputCallbacks)
@@ -456,34 +536,13 @@ internal object FloatUi {
             }
             elevation = dp(context, 12).toFloat()
 
-            addView(handle)
-
-            val header = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(context, 16), dp(context, 4), dp(context, 8), dp(context, 8))
-                addView(TextView(context).apply {
-                    text = context.getString(R.string.float_ask_title)
-                    setTextColor(Color.WHITE)
-                    textSize = 15f
-                    typeface = Typeface.DEFAULT_BOLD
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                addView(TextView(context).apply {
-                    text = context.getString(R.string.float_ask_close)
-                    setTextColor(0xCCFFFFFF.toInt())
-                    textSize = 16f
-                    setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 4))
-                    setOnClickListener { onClose() }
-                })
-            }
             addView(header)
             addView(divider(context))
             addView(statusBar)
             addView(transcriptContainer)
             addView(inputBar)
         }
-        return SplitPanel(root, handle, transcriptContainer, inputBar, statusBar)
+        return SplitPanel(root, header, transcriptContainer, inputBar, statusBar, chip)
     }
 
     /** 分屏面板句柄：服务层操作所需的句柄集合。 */
@@ -493,7 +552,179 @@ internal object FloatUi {
         val transcriptContainer: FrameLayout,
         val inputBar: LinearLayout,
         val statusBar: TextView,
+        val directionChip: TextView,
     )
+
+    /** 方向 chip 选中态渲染：[selectedLabel] 为 null 显示未设置态。 */
+    fun bindDirectionChip(chip: TextView, selectedLabel: String?) {
+        chip.text = selectedLabel ?: chip.context.getString(R.string.float_dir_chip)
+        (chip.background as? GradientDrawable)?.setColor(
+            if (selectedLabel != null) DIRECTION_CHIP_ON else DIRECTION_CHIP_OFF,
+        )
+        chip.setTextColor(if (selectedLabel != null) Color.WHITE else 0xCCFFFFFF.toInt())
+    }
+
+    /**
+     * 「方向」下拉浮层的纯视图工厂。loading 且无建议时只展示「AI 拟定中…」；
+     * 建议行点击回调 [onPick]，另有自定义输入与清除方向。
+     */
+    fun buildDirectionMenu(
+        context: Context,
+        suggestions: List<String>,
+        loading: Boolean,
+        hasSelected: Boolean,
+        onPick: (String) -> Unit,
+        onCustom: () -> Unit,
+        onClear: () -> Unit,
+    ): View {
+        fun menuRow(text: String, color: Int, click: (() -> Unit)?): TextView =
+            TextView(context).apply {
+                this.text = text
+                setTextColor(color)
+                textSize = 14f
+                gravity = Gravity.CENTER_VERTICAL
+                setSingleLine(true)
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(dp(context, 16), dp(context, 9), dp(context, 16), dp(context, 9))
+                if (click != null) {
+                    isClickable = true
+                    selectableBackground(this)
+                    setOnClickListener { click() }
+                }
+            }
+
+        val column = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            minimumWidth = dp(context, 188)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 14).toFloat()
+                setColor(PANEL_COLOR)
+            }
+            setPadding(0, dp(context, 4), 0, dp(context, 4))
+            elevation = dp(context, 10).toFloat()
+        }
+
+        if (suggestions.isEmpty() && loading) {
+            column.addView(menuRow(context.getString(R.string.float_dir_loading), 0x99FFFFFF.toInt(), null))
+        } else {
+            suggestions.take(DIRECTION_MENU_MAX)
+                .forEach { column.addView(menuRow(it, Color.WHITE) { onPick(it) }) }
+        }
+        column.addView(menuDivider(context))
+        column.addView(menuRow(context.getString(R.string.float_dir_custom), MENU_ACCENT) { onCustom() })
+        if (hasSelected) {
+            column.addView(
+                menuRow(context.getString(R.string.float_dir_clear), MENU_DANGER) { onClear() },
+            )
+        }
+        return column
+    }
+
+    /**
+     * 「自定义方向」输入浮层的纯视图工厂：单输入框 + 取消/确定。
+     * 确定时文本去空白非空才回调 [onConfirm]；回车（IME DONE）等同确定。
+     */
+    fun buildDirectionInput(
+        context: Context,
+        initial: String,
+        onCancel: () -> Unit,
+        onConfirm: (String) -> Unit,
+    ): View {
+        val field = EditText(context).apply {
+            hint = context.getString(R.string.float_dir_input_hint)
+            setHintTextColor(0x66FFFFFF.toInt())
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 20).toFloat()
+                setColor(0x22FFFFFF.toInt())
+            }
+            setPadding(dp(context, 14), dp(context, 8), dp(context, 14), dp(context, 8))
+            filters = arrayOf(android.text.InputFilter.LengthFilter(DIRECTION_MAX_CHARS))
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(initial)
+            setSelection(text.length)
+        }
+        fun submit() {
+            val value = field.text.toString().trim()
+            if (value.isNotEmpty()) onConfirm(value)
+        }
+        field.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                submit()
+                true
+            } else {
+                false
+            }
+        }
+
+        val column = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 16).toFloat()
+                setColor(PANEL_COLOR)
+            }
+            setPadding(dp(context, 14), dp(context, 14), dp(context, 14), dp(context, 12))
+            elevation = dp(context, 10).toFloat()
+            addView(field, LinearLayout.LayoutParams(dp(context, 248), LinearLayout.LayoutParams.WRAP_CONTENT))
+
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(context, 10) }
+                addView(TextView(context).apply {
+                    text = context.getString(R.string.float_dir_input_cancel)
+                    setTextColor(0xCCFFFFFF.toInt())
+                    textSize = 14f
+                    setPadding(dp(context, 14), dp(context, 6), dp(context, 14), dp(context, 6))
+                    setOnClickListener { onCancel() }
+                })
+                addView(TextView(context).apply {
+                    text = context.getString(R.string.float_dir_input_confirm)
+                    setTextColor(Color.WHITE)
+                    textSize = 14f
+                    typeface = Typeface.DEFAULT_BOLD
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(context, 16).toFloat()
+                        setColor(BALL_COLOR)
+                    }
+                    setPadding(dp(context, 16), dp(context, 6), dp(context, 16), dp(context, 6))
+                    setOnClickListener { submit() }
+                })
+            }
+            addView(row)
+        }
+        // 服务层在 PopupWindow 获焦后据此 requestFocus + 呼键盘。
+        column.tag = field
+        return column
+    }
+
+    private fun menuDivider(context: Context): View = View(context).apply {
+        background = GradientDrawable().apply { setColor(0x1EFFFFFF) }
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1).apply {
+            marginStart = dp(context, 12)
+            marginEnd = dp(context, 12)
+            topMargin = dp(context, 2)
+            bottomMargin = dp(context, 2)
+        }
+    }
+
+    /** 列表行按压反馈；Service 主题取不到资源 id 时静默退化（无涟漪）。 */
+    private fun selectableBackground(view: View) {
+        runCatching {
+            val outValue = TypedValue()
+            view.context.theme.resolveAttribute(
+                android.R.attr.selectableItemBackground,
+                outValue,
+                true,
+            )
+            if (outValue.resourceId != 0) view.setBackgroundResource(outValue.resourceId)
+        }
+    }
 
     /** 「新对话」同款输入行的行为接线（由服务层实现）。 */
     interface InputBarCallbacks {

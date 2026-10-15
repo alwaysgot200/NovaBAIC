@@ -45,12 +45,14 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +71,7 @@ import com.verlintas.baic2.designsystem.Baic2Theme
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
+import kotlinx.coroutines.launch
 
 /**
  * 老参谋设置页（扇形菜单「设置」子球入口）。只管老参谋专属项与权限
@@ -85,6 +88,9 @@ class FloatSettingsActivity : ComponentActivity() {
 
     @Inject
     lateinit var settingsRepository: SettingsRepository
+
+    @Inject
+    lateinit var balanceRepository: DeepSeekBalanceRepository
 
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
@@ -118,6 +124,7 @@ class FloatSettingsActivity : ComponentActivity() {
                 AdvisorSettingsScreen(
                     prefs = advisorPrefs,
                     advisor = screenAdvisor,
+                    balanceRepository = balanceRepository,
                     onClose = { finish() },
                 )
             }
@@ -129,6 +136,7 @@ class FloatSettingsActivity : ComponentActivity() {
 private fun AdvisorSettingsScreen(
     prefs: AdvisorPrefs,
     advisor: ScreenAdvisor,
+    balanceRepository: DeepSeekBalanceRepository,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
@@ -174,15 +182,100 @@ private fun AdvisorSettingsScreen(
                 ) { prefs.setPollInterval(it) }
 
                 Text(
+                    text = stringResource(R.string.float_settings_backoff_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                ChoiceRow(
+                    options = BACKOFF_OPTIONS,
+                    selected = settings.idleBackoffMultiplier,
+                    label = { res -> stringResource(res) },
+                ) { prefs.setIdleBackoffMultiplier(it) }
+
+                Text(
                     text = stringResource(R.string.float_settings_session_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
                 )
                 ChoiceRow(
                     options = SESSION_OPTIONS,
                     selected = settings.maxSessionMs,
                     label = { res -> stringResource(res) },
                 ) { prefs.setMaxSession(it) }
+
+                SectionLabel(stringResource(R.string.float_settings_background))
+                ToggleRow(
+                    title = stringResource(R.string.float_settings_digest),
+                    hint = stringResource(R.string.float_settings_digest_hint),
+                    checked = settings.digestEnabled,
+                ) { prefs.setDigestEnabled(it) }
+                FrequencyRow(
+                    values = DIGEST_FREQUENCY,
+                    selected = settings.digestEveryTurns,
+                    enabled = settings.digestEnabled,
+                ) { prefs.setDigestEveryTurns(it) }
+                ToggleRow(
+                    title = stringResource(R.string.float_settings_extract),
+                    hint = stringResource(R.string.float_settings_extract_hint),
+                    checked = settings.extractEnabled,
+                ) { prefs.setExtractEnabled(it) }
+                FrequencyRow(
+                    values = EXTRACT_FREQUENCY,
+                    selected = settings.extractEveryTurns,
+                    enabled = settings.extractEnabled,
+                ) { prefs.setExtractEveryTurns(it) }
+
+                SectionLabel(stringResource(R.string.float_settings_tokens))
+                Text(
+                    text = stringResource(R.string.float_settings_memory_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+                ChoiceRow(
+                    options = MEMORY_MODE_OPTIONS,
+                    selected = settings.memoryMode,
+                    label = { res -> stringResource(res) },
+                ) { prefs.setMemoryMode(it) }
+
+                Text(
+                    text = stringResource(R.string.float_settings_answer_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                ChoiceRow(
+                    options = ANSWER_LENGTH_OPTIONS,
+                    selected = settings.answerLength,
+                    label = { res -> stringResource(res) },
+                ) { prefs.setAnswerLength(it) }
+
+                Text(
+                    text = stringResource(R.string.float_settings_dedup_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                ChoiceRow(
+                    options = DEDUP_LEVEL_OPTIONS,
+                    selected = settings.dedupLevel,
+                    label = { res -> stringResource(res) },
+                ) { prefs.setDedupLevel(it) }
+
+                Text(
+                    text = stringResource(R.string.float_settings_budget_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                ChoiceRow(
+                    options = TOKEN_BUDGET_OPTIONS,
+                    selected = settings.sessionTokenBudget,
+                    label = { res -> stringResource(res) },
+                ) { prefs.setSessionTokenBudget(it) }
+
+                TokenUsageCard(prefs = prefs, balanceRepository = balanceRepository)
 
                 SectionLabel(stringResource(R.string.float_settings_permissions))
                 PermissionRow(
@@ -372,6 +465,145 @@ private val SESSION_OPTIONS = listOf(
     LabeledOption(0L, R.string.float_settings_session_unlimited),
 )
 
+private val BACKOFF_OPTIONS = listOf(
+    LabeledOption(1, R.string.float_settings_backoff_off),
+    LabeledOption(2, R.string.float_settings_backoff_2x),
+    LabeledOption(4, R.string.float_settings_backoff_4x),
+)
+
+/** 后台摘要/萃取的频率档（回合数）。 */
+private val DIGEST_FREQUENCY = listOf(3, 6, 12)
+private val EXTRACT_FREQUENCY = listOf(3, 5, 10)
+
+private val MEMORY_MODE_OPTIONS = listOf(
+    LabeledOption(AdvisorPrefs.MEMORY_MODE_AUTO, R.string.float_settings_memory_auto),
+    LabeledOption(AdvisorPrefs.MEMORY_MODE_FULL, R.string.float_settings_memory_full),
+    LabeledOption(AdvisorPrefs.MEMORY_MODE_LEAN, R.string.float_settings_memory_lean),
+)
+
+private val ANSWER_LENGTH_OPTIONS = listOf(
+    LabeledOption(AdvisorPrefs.ANSWER_CONCISE, R.string.float_settings_answer_concise),
+    LabeledOption(AdvisorPrefs.ANSWER_STANDARD, R.string.float_settings_answer_standard),
+    LabeledOption(AdvisorPrefs.ANSWER_DETAILED, R.string.float_settings_answer_detailed),
+)
+
+private val DEDUP_LEVEL_OPTIONS = listOf(
+    LabeledOption(AdvisorPrefs.DEDUP_LOOSE, R.string.float_settings_dedup_loose),
+    LabeledOption(AdvisorPrefs.DEDUP_STANDARD, R.string.float_settings_dedup_standard),
+    LabeledOption(AdvisorPrefs.DEDUP_STRICT, R.string.float_settings_dedup_strict),
+)
+
+private val TOKEN_BUDGET_OPTIONS = listOf(
+    LabeledOption(0L, R.string.float_settings_budget_none),
+    LabeledOption(20_000L, R.string.float_settings_budget_20k),
+    LabeledOption(50_000L, R.string.float_settings_budget_50k),
+    LabeledOption(100_000L, R.string.float_settings_budget_100k),
+)
+
+/**
+ * 用量统计卡片：主参谋回合的累计/本次会话 token 与回合数（持久化），
+ * 以及 DeepSeek 官方账户余额（仅 DeepSeek 供应商显示，手动刷新）。
+ */
+@Composable
+private fun TokenUsageCard(
+    prefs: AdvisorPrefs,
+    balanceRepository: DeepSeekBalanceRepository,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val stats by prefs.tokenStats.collectAsState()
+    var balance by remember { mutableStateOf<DeepSeekBalanceRepository.Balance?>(null) }
+    var balanceLoading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        balance = balanceRepository.refresh()
+    }
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = scheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+            Text(
+                text = stringResource(R.string.float_settings_usage_title),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                text = stringResource(
+                    R.string.float_settings_usage_total,
+                    stats.totalInput,
+                    stats.totalOutput,
+                    stats.totalTurns,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+            Text(
+                text = stringResource(R.string.float_settings_usage_session, stats.sessionTotal),
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+            )
+            val current = balance
+            if (current != null && current.supported) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 6.dp),
+                ) {
+                    val amount = when {
+                        current.total.isBlank() ->
+                            stringResource(R.string.float_settings_balance_unknown)
+                        !current.available ->
+                            stringResource(
+                                R.string.float_settings_balance_unavailable_fmt,
+                                current.total,
+                            )
+                        else -> stringResource(R.string.float_settings_balance_value_fmt, current.total)
+                    }
+                    Text(
+                        text = stringResource(R.string.float_settings_balance_line, amount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(
+                        enabled = !balanceLoading,
+                        onClick = {
+                            scope.launch {
+                                balanceLoading = true
+                                balance = balanceRepository.refresh()
+                                balanceLoading = false
+                            }
+                        },
+                    ) {
+                        Text(
+                            text = stringResource(
+                                if (balanceLoading) {
+                                    R.string.float_settings_balance_refreshing
+                                } else {
+                                    R.string.float_settings_balance_refresh
+                                },
+                            ),
+                        )
+                    }
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.End,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+            ) {
+                OutlinedButton(onClick = { prefs.clearAllUsage() }) {
+                    Text(text = stringResource(R.string.float_settings_usage_clear))
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun <T> ChoiceRow(
     options: List<LabeledOption<T>>,
@@ -386,6 +618,59 @@ private fun <T> ChoiceRow(
                 onClick = { onSelect(option.value) },
                 label = { Text(label(option.labelRes)) },
             )
+        }
+    }
+}
+
+/** 回合频率选择（每 N 回合）；总开关关闭时 chips 置灰。 */
+@Composable
+private fun FrequencyRow(
+    values: List<Int>,
+    selected: Int,
+    enabled: Boolean,
+    onSelect: (Int) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        values.forEach { value ->
+            FilterChip(
+                selected = value == selected,
+                enabled = enabled,
+                onClick = { onSelect(value) },
+                label = { Text(stringResource(R.string.float_settings_every_n_turns, value)) },
+            )
+        }
+    }
+}
+
+/** 带说明文案的开关行（后台摘要/萃取等会产生额外网络消耗的能力）。 */
+@Composable
+private fun ToggleRow(
+    title: String,
+    hint: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = scheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = title, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = checked, onCheckedChange = onChange)
         }
     }
 }

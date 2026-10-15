@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ 悬浮球专用标识：彩色白羽扇（与应用图标 ic_logo_advisor 同形，小尺寸重绘）。
+  ~ 应用图标的精细渐变版（108 视口、aapt:attr 渐变、亚像素细线）在 56dp
+  ~ 悬浮球里会光栅化成小白块；本文件按 24 视口重绘：全实色（不依赖渐变
+  ~ 光栅化）、扇骨加粗到 1.35、铆钉与星光放大，白扇面/金扇柄/蓝扇骨/
+  ~ 青星光在蓝色球盘上逐项可辨。改品牌图形时两处须同步。
+  -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 扇柄：金色实色（小尺寸用渐变两端的中间色，不用 aapt:attr 渐变） -->
+    <path
+        android:fillColor="#FFD69E3D"
+        android:pathData="M10.9,14.8 L13.1,14.8 L12.8,20.2 C12.7,21.0 11.3,21.0 11.2,20.2 Z" />
+
+    <!-- 扇面：单片白色实色，顶部中央起冠，两侧弧线收成扇肩 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M3.5,15.4
+            C3.9,10.9 6.7,8.7 9.0,8.4
+            C9.4,5.9 10.9,4.8 12.0,4.8
+            C13.1,4.8 14.6,5.9 15.0,8.4
+            C17.3,8.7 20.1,10.9 20.5,15.4
+            C16.0,17.2 8.0,17.2 3.5,15.4 Z" />
+
+    <!-- 三根扇骨：实色中蓝加粗（自扇轴向羽尖辐射，小尺寸仍清晰） -->
+    <path
+        android:strokeColor="#FF6E92CE"
+        android:strokeWidth="1.35"
+        android:strokeLineCap="round"
+        android:pathData="M12,15.2 L9.0,8.6 M12,15.2 L12,5.2 M12,15.2 L15.0,8.6" />
+
+    <!-- AI 星光：青色四角星，放大后落在扇面右上方（与应用图标构图一致） -->
+    <path
+        android:fillColor="#FF9FECFF"
+        android:pathData="M18.4,4.2 L19.3,5.5 L20.6,6.4 L19.3,7.3 L18.4,8.6 L17.5,7.3 L16.2,6.4 L17.5,5.5 Z" />
+
+    <!-- 扇轴铆钉：金底棕心，压住扇骨汇聚点（放大以保证小尺寸可辨） -->
+    <path
+        android:fillColor="#FFEAC571"
+        android:pathData="M12,15.2 m-1.1,0 a1.1,1.1 0 1 0 2.2,0 a1.1,1.1 0 1 0 -2.2,0 Z" />
+    <path
+        android:fillColor="#FF8A5E1C"
+        android:pathData="M12,15.2 m-0.58,0 a0.58,0.58 0 1 0 1.16,0 a0.58,0.58 0 1 0 -1.16,0 Z" />
+</vector>

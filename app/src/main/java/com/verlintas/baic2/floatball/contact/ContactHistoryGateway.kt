@@ -19,7 +19,10 @@
 
 package com.verlintas.baic2.floatball.contact
 
+import com.verlintas.baic2.core.data.db.Baic2Database
 import com.verlintas.baic2.core.data.db.MessageDao
+import com.verlintas.baic2.core.data.mapper.ChatMapper
+import com.verlintas.baic2.core.model.ChatMessage
 import com.verlintas.baic2.core.model.ChatRole
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -33,6 +36,16 @@ data class DealFact(
 )
 
 /**
+ * 一个完整的「屏幕提问 + 参谋回复」配对（时间升序序列中的一项）。
+ * [screenCreatedAt] 用于画像萃取的「距上次萃取」节流。
+ */
+data class ScreenTurn(
+    val screenContent: String,
+    val replyContent: String,
+    val screenCreatedAt: Long,
+)
+
+/**
  * 成交要件网关（设计文档 §6.6）：当前屏出现成交信号但视口内缺要件时，
  * 跨该联系人**全部**参谋会话（合并带来的多个也覆盖）检索更早聊过的
  * 报价/合同/账期等关键行。
@@ -43,7 +56,87 @@ data class DealFact(
 @Singleton
 class ContactHistoryGateway @Inject constructor(
     private val messageDao: MessageDao,
+    private val db: Baic2Database,
+    private val mapper: ChatMapper,
 ) {
+    /**
+     * 会话内最近一条自动屏幕消息（USER 且以 [labelPrefix] 起头）正文，
+     * 没有返回 null。LIMIT 1 有界查询，替代整表加载后内存过滤。
+     */
+    suspend fun latestScreenBody(conversationId: Long, labelPrefix: String): String? {
+        val rows = runCatching {
+            messageDao.searchMessagesIn(
+                conversationIds = listOf(conversationId),
+                pattern = likePatternPrefix(labelPrefix),
+                from = null,
+                to = null,
+                limit = LATEST_SCREEN_LIMIT,
+            )
+        }.getOrDefault(emptyList())
+        return rows.firstOrNull { it.role == ChatRole.USER.name }?.content
+    }
+
+    /**
+     * 会话最近 [limit] 条消息（时间升序）。瘦身历史只需要最后 60 条，
+     * 有界读取替代随会话线性增长的整表加载。
+     */
+    suspend fun recentMessages(conversationId: Long, limit: Int): List<ChatMessage> =
+        runCatching {
+            messageDao.latestMessages(conversationId, limit)
+                .map(mapper::messageToModel)
+                .asReversed()
+        }.getOrDefault(emptyList())
+
+    /**
+     * 会话内最近 [limitMessages] 条消息中的完整「屏幕提问 + 参谋回复」
+     * 配对，时间正序。摘要窗口 12 回合、萃取阈值至多 10 回合，120 条
+     * （约 60 配对）的上界远超需求；手动追问消息不参与配对。
+     */
+    suspend fun recentScreenTurns(
+        conversationId: Long,
+        labelPrefix: String,
+        limitMessages: Int = RECENT_TURN_MESSAGES,
+    ): List<ScreenTurn> {
+        val messages = recentMessages(conversationId, limitMessages)
+        val turns = ArrayList<ScreenTurn>()
+        var pendingScreen: ChatMessage? = null
+        for (message in messages) {
+            when {
+                message.role == ChatRole.USER && message.content.startsWith(labelPrefix) ->
+                    pendingScreen = message
+                message.role == ChatRole.ASSISTANT && pendingScreen != null -> {
+                    turns += ScreenTurn(
+                        screenContent = pendingScreen.content,
+                        replyContent = message.content,
+                        screenCreatedAt = pendingScreen.createdAt,
+                    )
+                    pendingScreen = null
+                }
+            }
+        }
+        return turns
+    }
+
+    /**
+     * 会话内自动屏幕消息的总数（COUNT，有界整数返回，不装载实体）。
+     * 回合刚完成时每条屏幕消息都有回复配对，作为滚动摘要的绝对回合序号。
+     */
+    suspend fun countScreenTurns(conversationId: Long, labelPrefix: String): Int =
+        runCatching {
+            val query = androidx.sqlite.db.SimpleSQLiteQuery(
+                "SELECT COUNT(*) FROM messages WHERE conversationId = ? " +
+                    "AND role = ? AND content LIKE ? ESCAPE '\\'",
+                arrayOf<Any>(
+                    conversationId,
+                    ChatRole.USER.name,
+                    likePatternPrefix(labelPrefix),
+                ),
+            )
+            db.query(query).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getInt(0) else 0
+            }
+        }.getOrDefault(0)
+
     /** 当前屏出现哪些成交信号词（命中才值得翻旧账，避免每轮全库扫）。 */
     fun hasClosingSignal(currentScreen: String): Boolean =
         CLOSING_SIGNALS.any { it in currentScreen }
@@ -137,9 +230,21 @@ class ContactHistoryGateway @Inject constructor(
         return "%$escaped%"
     }
 
+    /** 前缀匹配的 LIKE 参数（屏幕消息去重/计数用）。 */
+    private fun likePatternPrefix(prefix: String): String {
+        val escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return "$escaped%"
+    }
+
     private companion object {
         const val MAX_FACTS = 3
         const val ROWS_PER_KEYWORD = 10
+
+        /** 最近屏幕消息探测：只需最新 1 条，多取几条防御 ASSISTANT 引用。 */
+        const val LATEST_SCREEN_LIMIT = 5
+
+        /** 配对/摘要回看的消息上界（约 60 个屏幕回合，远超 12 回合窗口）。 */
+        const val RECENT_TURN_MESSAGES = 120
         const val SNIPPET_LEAD = 24
         const val SNIPPET_TAIL = 96
         const val SNIPPET_MAX = 120
