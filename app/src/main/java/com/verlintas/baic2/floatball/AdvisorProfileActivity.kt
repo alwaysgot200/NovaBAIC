@@ -40,6 +40,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.TextButton
@@ -52,6 +53,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -73,11 +75,16 @@ import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
 import com.verlintas.baic2.floatball.advisor.ContactRepository
+import com.verlintas.baic2.floatball.advisor.FieldOption
 import com.verlintas.baic2.floatball.advisor.PersonaFieldDef
 import com.verlintas.baic2.floatball.advisor.PersonaFieldType
 import com.verlintas.baic2.floatball.advisor.PersonaSchemas
+import com.verlintas.baic2.floatball.advisor.PersonaValueCodes
 import com.verlintas.baic2.floatball.advisor.PersonaValues
 import com.verlintas.baic2.floatball.advisor.ProfileMemorySync
+import com.verlintas.baic2.floatball.advisor.StyleAssets
+import com.verlintas.baic2.floatball.advisor.StyleCardRepository
+import com.verlintas.baic2.floatball.advisor.StyleResolver
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_GROUP
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_PERSON
 import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
@@ -111,6 +118,15 @@ class AdvisorProfileActivity : ComponentActivity() {
 
     @Inject
     lateinit var profileSync: ProfileMemorySync
+
+    @Inject
+    lateinit var personaValueMigrator: com.verlintas.baic2.floatball.advisor.PersonaValueMigrator
+
+    @Inject
+    lateinit var styleCards: StyleCardRepository
+
+    @Inject
+    lateinit var styleAssets: StyleAssets
 
     @Inject
     lateinit var historyGateway: ContactHistoryGateway
@@ -177,6 +193,10 @@ private fun ProfileNav(
 ) {
     var screen by remember { mutableStateOf(ProfileScreen.LIST) }
     var selectedId by remember { mutableStateOf(0L) }
+    val activity = advisorActivity()
+
+    // P1：画像页打开时跑一次存量 label→code 惰性迁移（幂等，失败静默下次再试）。
+    LaunchedEffect(Unit) { activity.personaValueMigrator.runOnce() }
 
     LaunchedEffect(initialContactId) {
         if (initialContactId > 0) {
@@ -404,17 +424,11 @@ private fun ContactDetailScreen(
         LabeledField(stringResource(R.string.float_profile_name), name, { name = it })
         var goal by remember(current.id, current.goal) { mutableStateOf(current.goal.orEmpty()) }
         LabeledField(stringResource(R.string.float_profile_goal), goal, { goal = it }, minLines = 2)
-        var style by remember(current.id, current.style) { mutableStateOf(current.style.orEmpty()) }
-        SectionTitle(stringResource(R.string.float_profile_style))
-        FlowChips(
-            options = schemas.get().stylePresets.map { it to null },
-            selected = style,
-        ) { style = it }
-        LabeledField(stringResource(R.string.float_profile_style_custom), style, { style = it })
+        StyleEntryCard(contactId = contactId)
         Button(onClick = {
             scope.launch {
                 contacts.renameContact(contactId, name)
-                contacts.updateGoalStyle(contactId, goal, style)
+                contacts.updateGoal(contactId, goal)
                 toast(context, R.string.float_profile_saved)
             }
         }) { Text(stringResource(R.string.float_profile_save)) }
@@ -526,7 +540,7 @@ private fun ContactDetailScreen(
     }
 
     editing?.let { def ->
-        val initial = fields.firstOrNull { it.field == def.key }?.let { storedValue(def.type, it) }.orEmpty()
+        val initial = fields.firstOrNull { it.field == def.key }?.value.orEmpty()
         FieldEditorDialog(
             def = def,
             initial = initial,
@@ -901,6 +915,7 @@ private fun MyPersonaScreen(onBack: () -> Unit) {
         onClose = null,
         onBack = onBack,
     ) {
+        StyleEntryCard(contactId = MY_PERSONA_CONTACT_ID)
         schemas.get().myFields.groupBy { it.group }.forEach { (group, defs) ->
             SectionTitle(group)
             defs.forEach { def ->
@@ -917,10 +932,7 @@ private fun MyPersonaScreen(onBack: () -> Unit) {
     }
 
     editing?.let { def ->
-        val initial = contacts.let { repo ->
-            val entity = fields.firstOrNull { it.field == def.key }
-            if (entity == null) "" else storedValue(def.type, entity)
-        }
+        val initial = fields.firstOrNull { it.field == def.key }?.value.orEmpty()
         FieldEditorDialog(
             def = def,
             initial = initial,
@@ -955,7 +967,7 @@ private fun FieldRow(
     mine: Boolean = false,
 ) {
     val context = LocalContext.current
-    val value = entity?.let { storedValue(def.type, it) }
+    val value = entity?.let { PersonaValueCodes.displayValue(def, it.value) }
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = if (entity != null && !entity.confirmed && !mine) {
@@ -1020,6 +1032,7 @@ private fun FieldRow(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FieldEditorDialog(
     def: PersonaFieldDef,
@@ -1028,44 +1041,242 @@ private fun FieldEditorDialog(
     onSave: (String) -> Unit,
     onDelete: () -> Unit,
 ) {
-    var text by remember(def.key) { mutableStateOf(initial) }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text(def.label, style = MaterialTheme.typography.titleMedium)
                 when (def.type) {
-                    PersonaFieldType.ENUM -> FlowChips(
-                        options = (def.options ?: emptyList()).map { it to null },
-                        selected = text,
-                    ) { text = it }
+                    PersonaFieldType.ENUM -> EnumEditor(def, initial) { selected ->
+                        EnumEditorActions(def, initial, selected, onSave, onDelete, onDismiss)
+                    }
 
-                    else -> OutlinedTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        minLines = if (def.type == PersonaFieldType.TEXTAREA) 3 else 1,
-                        label = { Text(def.label) },
-                    )
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 12.dp),
-                ) {
-                    Button(onClick = { onSave(text) }) {
-                        Text(stringResource(R.string.float_profile_save))
+                    PersonaFieldType.TAGS -> TagsEditor(def, initial) { tags ->
+                        TagsEditorActions(initial, tags, onSave, onDelete, onDismiss)
                     }
-                    if (initial.isNotBlank()) {
-                        OutlinedButton(onClick = onDelete) {
-                            Text(stringResource(R.string.float_profile_clear))
-                        }
-                    }
-                    OutlinedButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.float_profile_cancel))
+
+                    else -> {
+                        var text by remember(def.key) { mutableStateOf(initial) }
+                        OutlinedTextField(
+                            value = text,
+                            onValueChange = { text = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            minLines = if (def.type == PersonaFieldType.TEXTAREA) 3 else 1,
+                            label = { Text(def.label) },
+                        )
+                        EditorButtons(
+                            hasValue = initial.isNotBlank(),
+                            onSave = { onSave(text) },
+                            onDelete = onDelete,
+                            onDismiss = onDismiss,
+                        )
                     }
                 }
+                // enum/tags 的按钮行由各自 Editor 内部渲染（紧贴选项），text 分支见上。
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EnumEditor(
+    def: PersonaFieldDef,
+    initial: String,
+    actions: @Composable (String?) -> Unit,
+) {
+    var selected by remember(def.key) { mutableStateOf(initial.trim().takeIf { it.isNotEmpty() }) }
+    var customMode by remember(def.key) {
+        mutableStateOf(initial.trim().startsWith(PersonaValueCodes.CUSTOM_PREFIX))
+    }
+    var customText by remember(def.key) {
+        mutableStateOf(PersonaValueCodes.unwrapCustom(initial.trim()))
+    }
+
+    if (!customMode) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 8.dp),
+        ) {
+            def.options.orEmpty().forEach { option: FieldOption ->
+                FilterChip(
+                    selected = selected == option.code,
+                    onClick = {
+                        selected = if (selected == option.code) null else option.code
+                    },
+                    label = { Text(option.label) },
+                )
+            }
+            if (def.allowCustom) {
+                FilterChip(
+                    selected = selected?.startsWith(PersonaValueCodes.CUSTOM_PREFIX) == true,
+                    onClick = {
+                        customText = selected?.let { PersonaValueCodes.unwrapCustom(it) }.orEmpty()
+                        customMode = true
+                    },
+                    label = { Text(stringResource(R.string.float_style_custom_edit)) },
+                )
+            }
+        }
+    } else {
+        OutlinedTextField(
+            value = customText,
+            onValueChange = { customText = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            singleLine = true,
+            label = { Text(def.label) },
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 8.dp),
+        ) {
+            FilterChip(
+                selected = true,
+                onClick = {
+                    selected = customText.trim().takeIf { it.isNotEmpty() }
+                        ?.let { PersonaValueCodes.customValue(it) }
+                    customMode = false
+                },
+                label = { Text(stringResource(R.string.float_style_custom_done)) },
+            )
+        }
+    }
+    actions(if (customMode) customText.trim().takeIf { it.isNotEmpty() }?.let { PersonaValueCodes.customValue(it) } else selected)
+}
+
+@Composable
+private fun EnumEditorActions(
+    def: PersonaFieldDef,
+    initial: String,
+    selected: String?,
+    onSave: (String) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    EditorButtons(
+        hasValue = initial.isNotBlank(),
+        // 不允许自定义时，自造值（理论上只有旧数据）按丢弃处理，避免把非法值写回去。
+        onSave = {
+            val value = selected.orEmpty()
+            val ok = value.isEmpty() || def.options.orEmpty().any { it.code == value } ||
+                (def.allowCustom && value.startsWith(PersonaValueCodes.CUSTOM_PREFIX))
+            if (ok) onSave(value)
+        },
+        onDelete = onDelete,
+        onDismiss = onDismiss,
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TagsEditor(
+    def: PersonaFieldDef,
+    initial: String,
+    actions: @Composable (List<String>) -> Unit,
+) {
+    val tags = remember(def.key) {
+        mutableStateListOf<String>().apply { addAll(PersonaValues.decodeTags(initial)) }
+    }
+    var inputOpen by remember(def.key) { mutableStateOf(false) }
+    var input by remember(def.key) { mutableStateOf("") }
+    val options = def.options.orEmpty()
+
+    fun addInput() {
+        val raw = input.trim()
+        if (raw.isNotEmpty()) {
+            val stored = if (options.isEmpty()) raw else PersonaValueCodes.storedOption(def, raw)
+            if (stored != null && stored !in tags) tags.add(stored)
+        }
+        input = ""
+    }
+
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(top = 8.dp),
+    ) {
+        options.forEach { option ->
+            FilterChip(
+                selected = option.code in tags,
+                onClick = {
+                    if (option.code in tags) tags.remove(option.code) else tags.add(option.code)
+                },
+                label = { Text(option.label) },
+            )
+        }
+        // 码表外的已选值（自定义标签）：描边 chip，点击移除。
+        tags.filter { stored -> options.none { it.code == stored } }.forEach { stored ->
+            AssistChip(
+                onClick = { tags.remove(stored) },
+                label = { Text(PersonaValueCodes.displaySingle(def, stored)) },
+                trailingIcon = { Text("✕") },
+            )
+        }
+        // 无码表 tags 永远允许自由添加；有码表 tags 仅在 allowCustom 时允许。
+        if (options.isEmpty() || def.allowCustom) {
+            AssistChip(
+                onClick = { inputOpen = !inputOpen },
+                label = { Text("＋ ${stringResource(R.string.float_style_custom_add)}") },
+            )
+        }
+    }
+    if (inputOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                label = { Text(def.label) },
+            )
+            TextButton(onClick = { addInput() }) {
+                Text(stringResource(R.string.float_style_custom_add))
+            }
+        }
+    }
+    actions(tags.toList())
+}
+
+@Composable
+private fun TagsEditorActions(
+    initial: String,
+    tags: List<String>,
+    onSave: (String) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    // 顿号字符串交回 setUserField：encodeValue 会重新拆分编码（与既有写入路径一致）。
+    EditorButtons(
+        hasValue = initial.isNotBlank(),
+        onSave = { onSave(tags.joinToString("、")) },
+        onDelete = onDelete,
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+private fun EditorButtons(
+    hasValue: Boolean,
+    onSave: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(top = 12.dp),
+    ) {
+        Button(onClick = onSave) {
+            Text(stringResource(R.string.float_profile_save))
+        }
+        if (hasValue) {
+            OutlinedButton(onClick = onDelete) {
+                Text(stringResource(R.string.float_profile_clear))
+            }
+        }
+        OutlinedButton(onClick = onDismiss) {
+            Text(stringResource(R.string.float_profile_cancel))
         }
     }
 }
@@ -1181,15 +1392,79 @@ private fun rememberHistoryGateway(): ContactHistoryGateway = advisorActivity().
 private fun rememberConversationRepository(): ConversationRepository =
     advisorActivity().conversationRepository
 
-/**
- * 字段存储值 → 展示文本（tags 解码顿号拼接）。
- */
-private fun storedValue(type: String, entity: PersonaFieldEntity): String =
-    if (type == PersonaFieldType.TAGS) {
-        PersonaValues.decodeTags(entity.value).joinToString("、")
-    } else {
-        entity.value
+/** 「说话风格」入口卡：contactId=0 显示全局卡摘要；>0 显示联系人卡，缺卡时显示跟随默认。 */
+@Composable
+private fun StyleEntryCard(contactId: Long) {
+    val context = LocalContext.current
+    val activity = advisorActivity()
+    val playbook = activity.styleAssets.playbook()
+    val defaultCard by activity.styleCards.observeDefaultCard()
+        .collectAsStateWithLifecycle(initialValue = null)
+    val ownCard by (
+        if (contactId == MY_PERSONA_CONTACT_ID) {
+            activity.styleCards.observeDefaultCard()
+        } else {
+            activity.styleCards.observeContactCard(contactId)
+        }
+        ).collectAsStateWithLifecycle(initialValue = null)
+
+    val customBadge = stringResource(R.string.float_style_custom_badge)
+    val subtitle = when {
+        contactId != MY_PERSONA_CONTACT_ID && ownCard == null -> {
+            val fallback = StyleResolver.summary(defaultCard, playbook)
+            if (fallback.isNullOrBlank()) {
+                stringResource(R.string.float_style_none)
+            } else {
+                stringResource(
+                    R.string.float_style_following_default,
+                    withCustomBadge(defaultCard, fallback, customBadge),
+                )
+            }
+        }
+
+        else -> {
+            val summary = StyleResolver.summary(ownCard, playbook)
+            withCustomBadge(ownCard, summary.orEmpty(), customBadge)
+                .ifBlank { stringResource(R.string.float_style_none) }
+        }
     }
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .clickable {
+                context.startActivity(
+                    android.content.Intent(context, StyleCardActivity::class.java)
+                        .putExtra(StyleCardActivity.EXTRA_CONTACT_ID, contactId)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            },
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+            Text(
+                text = stringResource(R.string.float_style_entry),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun withCustomBadge(
+    card: com.verlintas.baic2.floatball.advisor.data.StyleCardEntity?,
+    summary: String,
+    customBadge: String,
+): String {
+    val hasCustom = card?.customNote?.isNotBlank() == true
+    if (!hasCustom) return summary
+    return if (summary.isBlank()) customBadge else "$summary · $customBadge"
+}
 
 private fun toast(context: android.content.Context, resId: Int) {
     android.widget.Toast.makeText(context, context.getString(resId), android.widget.Toast.LENGTH_SHORT).show()

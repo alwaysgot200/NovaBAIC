@@ -92,7 +92,7 @@ class ProfileMemorySync @Inject constructor(
     suspend fun syncMyPersonaField(field: String, rawValue: String) {
         if (rawValue.isBlank()) return
         val def = schemas.get().def(field) ?: return
-        val rendered = renderValue(def.type, rawValue) ?: return
+        val rendered = renderValue(def, rawValue) ?: return
         runCatching {
             memoryRepository.addNote(
                 kind = NoteKind.PROFILE,
@@ -116,7 +116,7 @@ class ProfileMemorySync @Inject constructor(
         val profile = contacts.profile(contactId) ?: return
         val aliases = contacts.aliases(contactId).map { it.alias }
         val entities = (listOf(profile.displayName) + aliases).filter { it.isNotBlank() }.distinct()
-        val rendered = renderValue(def.type, field.value) ?: return
+        val rendered = renderValue(def, field.value) ?: return
         val content = "${profile.displayName}的${def.label}：$rendered"
         val now = System.currentTimeMillis()
 
@@ -163,15 +163,12 @@ class ProfileMemorySync @Inject constructor(
         }
     }
 
-    /** tags 存的是 JSON 数组，其余类型即原文；空值返回 null。 */
-    private fun renderValue(type: String, stored: String): String? {
-        val text = if (type == PersonaFieldType.TAGS) {
-            PersonaValues.decodeTags(stored).joinToString("、")
-        } else {
-            stored.trim()
-        }
-        return text.takeIf { it.isNotBlank() }
-    }
+    /**
+     * 双写上游前一律转人类可读文本：code→label、`~x`→x、tags 顿号展开；空值返回 null。
+     * 上游记忆不存储 code（它不认识 app 的码表）。
+     */
+    private fun renderValue(def: PersonaFieldDef, stored: String): String? =
+        PersonaValueCodes.displayValue(def, stored).takeIf { it.isNotBlank() }
 
     /** 宽松解析常见日期写法为当天 0 点毫秒；解析不了返回 null（回退调用方用当前时间）。 */
     private fun parseDate(text: String): Long? {

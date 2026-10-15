@@ -40,8 +40,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaybookEntity::class,
         PlaybookFtsEntity::class,
         MergeRecordEntity::class,
+        StyleCardEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -61,6 +62,8 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun playbookDao(): PlaybookDao
 
     abstract fun mergeRecordDao(): MergeRecordDao
+
+    abstract fun styleCardDao(): StyleCardDao
 }
 
 /**
@@ -107,19 +110,49 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
                 "ON `group_members` (`linkedContactId`)",
         )
     }
+}
 
-    /** 列不存在时才 ADD COLUMN（PRAGMA table_info 幂等保护，SQLite 无 ADD COLUMN IF NOT EXISTS）。 */
-    private fun ensureColumn(
-        db: SupportSQLiteDatabase,
-        table: String,
-        column: String,
-        columnDdl: String,
-    ) {
-        val exists = db.query("PRAGMA table_info(`$table`)").use { cursor ->
-            val nameIndex = cursor.getColumnIndexOrThrow("name")
-            generateSequence { if (cursor.moveToNext()) cursor.getString(nameIndex) else null }
-                .any { it == column }
-        }
-        if (!exists) db.execSQL("ALTER TABLE `$table` ADD COLUMN $columnDdl")
+/**
+ * v3 → v4（P1 风格行为化）：新增 style_cards 风格卡表；contact_profiles 补 scenarioCode。
+ * 不做 enum 值搬运（label→code 由 PersonaValueMigrator 在 Room 之外惰性完成）。
+ * goals/stage_states 等 P2 表留给后续 4→5 迁移，保持 P1 灰度包结构最小。
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `style_cards` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `scope` TEXT NOT NULL,
+                `contactId` INTEGER NOT NULL DEFAULT 0,
+                `toneCode` TEXT,
+                `intentCodes` TEXT NOT NULL DEFAULT '[]',
+                `customNote` TEXT,
+                `compiledCustomJson` TEXT,
+                `confirmed` INTEGER NOT NULL DEFAULT 1,
+                `updatedAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_style_cards_scope_contactId` " +
+                "ON `style_cards` (`scope`, `contactId`)",
+        )
+        ensureColumn(db, "contact_profiles", "scenarioCode", "scenarioCode TEXT")
     }
+}
+
+/** 列不存在时才 ADD COLUMN（PRAGMA table_info 幂等保护，SQLite 无 ADD COLUMN IF NOT EXISTS）。 */
+internal fun ensureColumn(
+    db: SupportSQLiteDatabase,
+    table: String,
+    column: String,
+    columnDdl: String,
+) {
+    val exists = db.query("PRAGMA table_info(`$table`)").use { cursor ->
+        val nameIndex = cursor.getColumnIndexOrThrow("name")
+        generateSequence { if (cursor.moveToNext()) cursor.getString(nameIndex) else null }
+            .any { it == column }
+    }
+    if (!exists) db.execSQL("ALTER TABLE `$table` ADD COLUMN $columnDdl")
 }

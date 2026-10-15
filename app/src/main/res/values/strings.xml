@@ -235,6 +235,38 @@
     <string name="float_settings_profiles">联系人画像</string>
     <string name="float_settings_profiles_hint">按人管理目标、人设、话术与 AI 草稿</string>
 
+    <!-- 悬浮球 · 说话风格（P1 风格行为化） -->
+    <string name="float_style_entry">说话风格</string>
+    <string name="float_settings_style">默认说话风格</string>
+    <string name="float_settings_style_hint">基调与意图，对所有联系人生效，可按人单独覆盖</string>
+    <string name="float_style_title_default">默认说话风格</string>
+    <string name="float_style_title_contact">%1$s 的说话风格</string>
+    <string name="float_style_tone">基调（单选）</string>
+    <string name="float_style_intents">本轮意图（最多 %1$d 个）</string>
+    <string name="float_style_custom">一句补充要求（可选）</string>
+    <string name="float_style_custom_hint">例：她加班时别讲大道理，先问吃饭没</string>
+    <string name="float_style_preview">提示词预览</string>
+    <string name="float_style_preview_empty">尚未选择基调或意图，将使用基础参谋风格</string>
+    <string name="float_style_save">保存</string>
+    <string name="float_style_saved">风格已保存</string>
+    <string name="float_style_follow_default">恢复跟随默认风格</string>
+    <string name="float_style_follow_default_confirm">删除这位联系人的专属风格，之后统一使用你的默认说话风格？</string>
+    <string name="float_style_none">未设置（使用基础风格）</string>
+    <string name="float_style_following_default">跟随默认风格：%1$s</string>
+    <string name="float_style_custom_badge">自定义</string>
+    <string name="float_style_custom_add">添加</string>
+    <string name="float_style_custom_edit">✎ 自定义…</string>
+    <string name="float_style_custom_done">✓ 完成</string>
+    <string name="float_style_example">示例</string>
+    <string name="float_style_do">要</string>
+    <string name="float_style_dont">不要</string>
+    <string name="float_scenario_title">适用场景</string>
+    <string name="float_scenario_none">不套用场景</string>
+    <string name="float_scenario_hint">切换场景会用其默认风格覆盖当前选择</string>
+    <string name="float_scenario_overwrite_title">载入场景默认风格</string>
+    <string name="float_scenario_overwrite_msg">将载入该场景的默认基调与意图，覆盖当前未保存的选择。</string>
+    <string name="float_scenario_load">载入</string>
+
     <!-- 悬浮球 · 保活 -->
     <string name="float_keepalive_title">保活措施</string>
     <string name="float_keepalive_subtitle">悬浮球常驻的关键——完成授权引导，并在省电与存活之间选一档</string>

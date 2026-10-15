@@ -101,7 +101,10 @@ class PersonaExtractor @Inject constructor(
 
     private fun systemPrompt(fields: List<PersonaFieldDef>): String {
         val catalog = fields.joinToString("\n") { def ->
-            val options = def.options?.takeIf { it.isNotEmpty() }?.let { "，可选值：${it.joinToString("/")}" } ?: ""
+            val options = def.options?.takeIf { it.isNotEmpty() }?.let {
+                val customRule = if (def.allowCustom) "；确有依据但不在可选值内时才填你的原词" else "；只能从可选值中原样选取"
+                "，可选值：${it.joinToString("/") { option -> option.label }}$customRule"
+            } ?: ""
             "- ${def.key}（${def.label}，${def.type}$options）"
         }
         return """
@@ -112,7 +115,8 @@ class PersonaExtractor @Inject constructor(
             1. 只提取有明确对话依据、跨回合仍成立的事实（身份、职业、偏好、关系、预算、需求、禁忌等）；
                一次性寒暄、情绪、时间不确定的内容不要提取；严禁臆测。
             2. 只提取【对方】的信息，不要提取「我」（用户本人）的信息。
-            3. field 必须且只能取自以下字段目录；目录外的键一律丢弃：
+            3. field 必须且只能取自以下字段目录；目录外的键一律丢弃；
+               带可选值的字段，value 必须原样使用可选值中文，不要自造同义词：
             $catalog
             4. action：新值或覆盖旧草稿用 set；tags 类字段追加标签用 add、撤销标签用 remove。
             5. value 简洁客观，单个不超过 80 字；tags 类多个标签用顿号分隔；
@@ -143,26 +147,38 @@ class PersonaExtractor @Inject constructor(
             json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(DraftJson.serializer()), text.substring(start, end + 1))
         }.getOrDefault(emptyList())
         val allowed = fields.associateBy { it.key }
-        return list.filter { draft ->
-            val def = allowed[draft.field] ?: return@filter false
-            val value = draft.value.trim()
-            val action = draft.action?.lowercase()?.takeIf { it in ACTIONS }
-            value.isNotEmpty() && value.length <= VALUE_MAX_CHARS && action != null &&
-                // tags 类才允许 add/remove；其余只接受 set。
-                (action == "set" || def.type == PersonaFieldType.TAGS)
-        }.map {
+        return list.mapNotNull { draft ->
+            val def = allowed[draft.field] ?: return@mapNotNull null
+            val rawValue = draft.value.trim()
+            val action = draft.action?.lowercase()?.takeIf { it in ACTIONS } ?: return@mapNotNull null
+            if (rawValue.isEmpty() || rawValue.length > VALUE_MAX_CHARS) return@mapNotNull null
+            // tags 类才允许 add/remove；其余只接受 set。
+            if (action != "set" && def.type != PersonaFieldType.TAGS) return@mapNotNull null
+            // 落库前码表归一：label→code、自造值 ~原文（不允许自定义的枚举值直接丢弃）。
+            val normalized = normalizeDraftValue(def, rawValue) ?: return@mapNotNull null
             DraftJson(
-                field = it.field,
-                value = it.value.trim(),
-                action = it.action!!.lowercase(),
-                evidence = it.evidence?.trim()?.take(EVIDENCE_MAX_CHARS),
-                actionEnum = when (it.action!!.lowercase()) {
+                field = draft.field,
+                value = normalized,
+                action = action,
+                evidence = draft.evidence?.trim()?.take(EVIDENCE_MAX_CHARS),
+                actionEnum = when (action) {
                     "add" -> ContactRepository.DraftAction.ADD
                     "remove" -> ContactRepository.DraftAction.REMOVE
                     else -> ContactRepository.DraftAction.SET
                 },
             )
         }
+    }
+
+    /**
+     * 萃取值落库归一（仍保持 ContactRepository.encodeValue 约定的形态：
+     * tags 顿号字符串、enum 单值）；标签逐元素归一后为空则整条丢弃。
+     */
+    private fun normalizeDraftValue(def: PersonaFieldDef, raw: String): String? {
+        if (def.type != PersonaFieldType.TAGS) return PersonaValueCodes.normalizeExtracted(def, raw)
+        val parts = raw.split(",", "，", "、")
+            .mapNotNull { PersonaValueCodes.normalizeExtracted(def, it) }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString("、")
     }
 
     @Serializable

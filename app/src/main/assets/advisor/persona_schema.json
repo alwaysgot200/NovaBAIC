@@ -1,64 +1,171 @@
 {
   "fields": [
-    { "key": "genderHint", "owner": "their", "group": "基本信息", "type": "enum", "label": "性别推测", "options": ["男", "女"] },
-    { "key": "ageRange", "owner": "their", "group": "基本信息", "type": "enum", "label": "年龄段", "options": ["20以下", "20-29", "30-39", "40-49", "50+"] },
-    { "key": "city", "owner": "their", "group": "基本信息", "type": "text", "label": "所在城市" },
-    { "key": "hometown", "owner": "their", "group": "基本信息", "type": "text", "label": "家乡" },
+    { "key": "genderHint", "owner": "their", "group": "基本信息", "type": "enum", "label": "性别推测", "allowCustom": false, "salience": "low",
+      "options": [
+        { "code": "male", "label": "男" },
+        { "code": "female", "label": "女" }
+      ] },
+    { "key": "ageRange", "owner": "their", "group": "基本信息", "type": "enum", "label": "年龄段", "allowCustom": false, "salience": "low",
+      "options": [
+        { "code": "under20", "label": "20以下" },
+        { "code": "20s", "label": "20-29" },
+        { "code": "30s", "label": "30-39" },
+        { "code": "40s", "label": "40-49" },
+        { "code": "50plus", "label": "50+" }
+      ] },
+    { "key": "city", "owner": "their", "group": "基本信息", "type": "text", "label": "所在城市", "salience": "normal" },
+    { "key": "hometown", "owner": "their", "group": "基本信息", "type": "text", "label": "家乡", "salience": "low" },
 
-    { "key": "occupation", "owner": "their", "group": "职业教育", "type": "text", "label": "职业" },
-    { "key": "position", "owner": "their", "group": "职业教育", "type": "text", "label": "职位" },
-    { "key": "company", "owner": "their", "group": "职业教育", "type": "text", "label": "公司" },
-    { "key": "industry", "owner": "their", "group": "职业教育", "type": "text", "label": "所在行业" },
-    { "key": "seniority", "owner": "their", "group": "职业教育", "type": "enum", "label": "资历层级", "options": ["新人", "执行层", "主管", "经理", "总监", "老板/决策人"] },
-    { "key": "education", "owner": "their", "group": "职业教育", "type": "enum", "label": "学历", "options": ["高中及以下", "大专", "本科", "硕士", "博士"] },
-    { "key": "school", "owner": "their", "group": "职业教育", "type": "text", "label": "院校" },
-    { "key": "major", "owner": "their", "group": "职业教育", "type": "text", "label": "专业" },
-    { "key": "hardSkills", "owner": "their", "group": "职业教育", "type": "tags", "label": "硬技能" },
+    { "key": "occupation", "owner": "their", "group": "职业教育", "type": "text", "label": "职业", "salience": "normal" },
+    { "key": "position", "owner": "their", "group": "职业教育", "type": "text", "label": "职位", "salience": "normal" },
+    { "key": "company", "owner": "their", "group": "职业教育", "type": "text", "label": "公司", "salience": "normal" },
+    { "key": "industry", "owner": "their", "group": "职业教育", "type": "text", "label": "所在行业", "salience": "normal" },
+    { "key": "seniority", "owner": "their", "group": "职业教育", "type": "enum", "label": "资历层级", "salience": "normal",
+      "options": [
+        { "code": "junior", "label": "新人" },
+        { "code": "executor", "label": "执行层" },
+        { "code": "supervisor", "label": "主管" },
+        { "code": "manager", "label": "经理" },
+        { "code": "director", "label": "总监" },
+        { "code": "boss", "label": "老板/决策人" }
+      ] },
+    { "key": "education", "owner": "their", "group": "职业教育", "type": "enum", "label": "学历", "salience": "low",
+      "options": [
+        { "code": "high_school", "label": "高中及以下" },
+        { "code": "college", "label": "大专" },
+        { "code": "bachelor", "label": "本科" },
+        { "code": "master", "label": "硕士" },
+        { "code": "phd", "label": "博士" }
+      ] },
+    { "key": "school", "owner": "their", "group": "职业教育", "type": "text", "label": "院校", "salience": "low" },
+    { "key": "major", "owner": "their", "group": "职业教育", "type": "text", "label": "专业", "salience": "low" },
+    { "key": "hardSkills", "owner": "their", "group": "职业教育", "type": "tags", "label": "硬技能", "salience": "normal" },
 
-    { "key": "personality", "owner": "their", "group": "性格沟通", "type": "tags", "label": "性格标签" },
-    { "key": "commStyle", "owner": "their", "group": "性格沟通", "type": "enum", "label": "沟通风格", "options": ["直接干脆", "委婉客气", "理性分析", "热情健谈", "惜字如金"] },
-    { "key": "formality", "owner": "their", "group": "性格沟通", "type": "enum", "label": "称谓距离", "options": ["称您/正式", "称你/随意", "看场合"] },
-    { "key": "humorStyle", "owner": "their", "group": "性格沟通", "type": "enum", "label": "玩笑接受度", "options": ["接受玩笑", "只接受轻松", "保持严肃"] },
+    { "key": "personality", "owner": "their", "group": "性格沟通", "type": "tags", "label": "性格标签", "salience": "high" },
+    { "key": "commStyle", "owner": "their", "group": "性格沟通", "type": "enum", "label": "沟通风格", "salience": "high",
+      "options": [
+        { "code": "direct", "label": "直接干脆", "impl": "对方要结论不要铺垫：先给答案、一句话说清" },
+        { "code": "polite", "label": "委婉客气", "impl": "对方重分寸：措辞客气、先征询再推进" },
+        { "code": "analytical", "label": "理性分析", "impl": "对方重逻辑：给理由和依据，不打感情牌" },
+        { "code": "talkative", "label": "热情健谈", "impl": "可多给信息与话题，但仍先答其所问" },
+        { "code": "terse", "label": "惜字如金", "impl": "对方话少是习惯不是冷淡：每次不超过两句、不连环提问填空，她短句回应就换话题" }
+      ] },
+    { "key": "formality", "owner": "their", "group": "性格沟通", "type": "enum", "label": "称谓距离", "salience": "high",
+      "options": [
+        { "code": "formal", "label": "称您/正式" },
+        { "code": "informal", "label": "称你/随意" },
+        { "code": "adaptive", "label": "看场合" }
+      ] },
+    { "key": "humorStyle", "owner": "their", "group": "性格沟通", "type": "enum", "label": "玩笑接受度", "salience": "normal",
+      "options": [
+        { "code": "playful", "label": "接受玩笑" },
+        { "code": "light", "label": "只接受轻松" },
+        { "code": "serious", "label": "保持严肃" }
+      ] },
+    { "key": "emotionStyle", "owner": "their", "group": "性格沟通", "type": "enum", "label": "情感表达", "allowCustom": false, "salience": "high",
+      "options": [
+        { "code": "expressive", "label": "外放", "impl": "情绪外露：接住她的情绪浓度回应" },
+        { "code": "warm_slow", "label": "慢热", "impl": "慢热：不要求即时热情，稳定出现比猛攻有效" },
+        { "code": "avoidant", "label": "回避型", "impl": "回避型：少逼问、给空间，用轻松低压方式保持联系" },
+        { "code": "unknown", "label": "未知" }
+      ] },
+    { "key": "replyPace", "owner": "their", "group": "性格沟通", "type": "enum", "label": "回复节奏", "allowCustom": false, "salience": "normal",
+      "options": [
+        { "code": "instant", "label": "秒回", "impl": "在线时节奏可快，但仍不连发" },
+        { "code": "scheduled_active", "label": "时段性活跃", "impl": "按其活跃时段发消息，非活跃时段不期待秒回" },
+        { "code": "hours_gap", "label": "常隔数小时", "impl": "话题设计成可隔数小时自然续接，不催促" }
+      ] },
+    { "key": "loveLanguage", "owner": "their", "group": "性格沟通", "type": "tags", "label": "吃哪种好感方式", "salience": "high",
+      "options": [
+        { "code": "praise", "label": "被赞美", "topicHook": true },
+        { "code": "listening", "label": "被倾听", "topicHook": true },
+        { "code": "practical_help", "label": "实用帮助", "topicHook": true },
+        { "code": "shared_experience", "label": "共同体验", "topicHook": true },
+        { "code": "humor", "label": "幽默感", "topicHook": true }
+      ] },
 
-    { "key": "interests", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "兴趣爱好" },
-    { "key": "recentTopics", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "近期关注话题" },
+    { "key": "interests", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "兴趣爱好", "salience": "normal" },
+    { "key": "recentTopics", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "近期关注话题", "salience": "normal" },
 
-    { "key": "relationType", "owner": "their", "group": "关系", "type": "enum", "label": "关系类型", "options": ["客户", "潜在客户", "同事", "上级", "合作方", "朋友", "家人", "暧昧对象", "其他"] },
-    { "key": "relationStage", "owner": "their", "group": "关系", "type": "text", "label": "关系阶段" },
-    { "key": "decisionRole", "owner": "their", "group": "关系", "type": "enum", "label": "采购角色", "options": ["决策人", "影响人", "执行人", "把关人", "未知"] },
+    { "key": "relationType", "owner": "their", "group": "关系", "type": "enum", "label": "关系类型", "salience": "normal",
+      "options": [
+        { "code": "customer", "label": "客户" },
+        { "code": "lead", "label": "潜在客户" },
+        { "code": "colleague", "label": "同事" },
+        { "code": "superior", "label": "上级" },
+        { "code": "partner", "label": "合作方" },
+        { "code": "friend", "label": "朋友" },
+        { "code": "family", "label": "家人" },
+        { "code": "crush", "label": "暧昧对象" },
+        { "code": "other", "label": "其他" }
+      ] },
+    { "key": "relationStage", "owner": "their", "group": "关系", "type": "text", "label": "关系阶段", "salience": "normal" },
+    { "key": "decisionRole", "owner": "their", "group": "关系", "type": "enum", "label": "采购角色", "allowCustom": false, "salience": "normal",
+      "options": [
+        { "code": "decider", "label": "决策人", "impl": "拍板人：对话要给结论与投入产出" },
+        { "code": "influencer", "label": "影响人", "impl": "影响者：提供便于他内部转述的要点" },
+        { "code": "executor", "label": "执行人", "impl": "执行人：讲清流程、操作与配合事项" },
+        { "code": "gatekeeper", "label": "把关人", "impl": "把关人：先解决合规/风险疑虑" },
+        { "code": "unknown", "label": "未知" }
+      ] },
 
-    { "key": "needs", "owner": "their", "group": "商机", "type": "textarea", "label": "核心需求", "memory": "fact" },
-    { "key": "painPoints", "owner": "their", "group": "商机", "type": "textarea", "label": "痛点", "memory": "fact" },
-    { "key": "budget", "owner": "their", "group": "商机", "type": "text", "label": "预算水平", "memory": "fact" },
-    { "key": "intentStage", "owner": "their", "group": "商机", "type": "enum", "label": "意向阶段", "options": ["破冰", "询盘", "比价", "犹豫", "促单", "成交", "售后"], "memory": "event" },
-    { "key": "objections", "owner": "their", "group": "商机", "type": "tags", "label": "主要顾虑", "memory": "fact" },
-    { "key": "timeline", "owner": "their", "group": "商机", "type": "text", "label": "采购时间窗", "memory": "fact" },
+    { "key": "needs", "owner": "their", "group": "商机", "type": "textarea", "label": "核心需求", "memory": "fact", "salience": "high" },
+    { "key": "painPoints", "owner": "their", "group": "商机", "type": "textarea", "label": "痛点", "memory": "fact", "salience": "high" },
+    { "key": "budget", "owner": "their", "group": "商机", "type": "text", "label": "预算水平", "memory": "fact", "salience": "normal" },
+    { "key": "intentStage", "owner": "their", "group": "商机", "type": "enum", "label": "意向阶段", "memory": "event", "salience": "high",
+      "options": [
+        { "code": "ice", "label": "破冰", "impl": "建立信任，确认对接人与业务背景" },
+        { "code": "inquiry", "label": "询盘", "impl": "澄清需求与决策链，不急于报价" },
+        { "code": "compare", "label": "比价", "impl": "用差异点与事实回应比较，可给报价" },
+        { "code": "hesitate", "label": "犹豫", "impl": "逐点化解顾虑，共情优先" },
+        { "code": "push", "label": "促单", "impl": "锚定下一步时间与动作，二选一促成" },
+        { "code": "deal", "label": "成交", "impl": "闭环确认交付与账期，不画蛇添足" },
+        { "code": "after", "label": "售后", "impl": "兑现承诺，经营复购与转介绍" }
+      ] },
+    { "key": "objections", "owner": "their", "group": "商机", "type": "tags", "label": "主要顾虑", "memory": "fact", "salience": "high" },
+    { "key": "timeline", "owner": "their", "group": "商机", "type": "text", "label": "采购时间窗", "memory": "fact", "salience": "normal" },
 
-    { "key": "commitments", "owner": "their", "group": "承诺与禁忌", "type": "textarea", "label": "承诺待办", "memory": "agreement" },
-    { "key": "nextMeeting", "owner": "their", "group": "承诺与禁忌", "type": "date", "label": "下次约定", "memory": "agreement" },
-    { "key": "taboos", "owner": "their", "group": "承诺与禁忌", "type": "textarea", "label": "雷区禁忌" },
-    { "key": "preferredTime", "owner": "their", "group": "承诺与禁忌", "type": "text", "label": "方便联系时间" },
+    { "key": "commitments", "owner": "their", "group": "承诺与禁忌", "type": "textarea", "label": "承诺待办", "memory": "agreement", "salience": "high" },
+    { "key": "nextMeeting", "owner": "their", "group": "承诺与禁忌", "type": "date", "label": "下次约定", "memory": "agreement", "salience": "normal" },
+    { "key": "taboos", "owner": "their", "group": "承诺与禁忌", "type": "textarea", "label": "雷区禁忌", "salience": "high" },
+    { "key": "preferredTime", "owner": "their", "group": "承诺与禁忌", "type": "text", "label": "方便联系时间", "salience": "normal" },
 
-    { "key": "my_occupation", "owner": "my", "group": "我的职业", "type": "text", "label": "我的职业", "extract": false },
-    { "key": "my_position", "owner": "my", "group": "我的职业", "type": "text", "label": "我的职位", "extract": false },
-    { "key": "my_company", "owner": "my", "group": "我的职业", "type": "text", "label": "我的公司", "extract": false },
-    { "key": "my_industry", "owner": "my", "group": "我的职业", "type": "text", "label": "所在行业", "extract": false },
-    { "key": "my_product", "owner": "my", "group": "我的职业", "type": "textarea", "label": "我卖的产品或服务", "extract": false },
-    { "key": "my_hardSkills", "owner": "my", "group": "我的职业", "type": "tags", "label": "我的硬技能", "extract": false },
-    { "key": "my_education", "owner": "my", "group": "我的形象", "type": "enum", "label": "我的学历", "extract": false, "options": ["高中及以下", "大专", "本科", "硕士", "博士"] },
-    { "key": "my_personality", "owner": "my", "group": "我的形象", "type": "tags", "label": "我的性格标签", "extract": false },
-    { "key": "my_style", "owner": "my", "group": "我的形象", "type": "text", "label": "默认语言风格", "extract": false },
-    { "key": "my_taboo", "owner": "my", "group": "我的形象", "type": "textarea", "label": "我不能说的话", "extract": false },
-    { "key": "my_defaultGoal", "owner": "my", "group": "我的形象", "type": "textarea", "label": "我的默认业务目标", "extract": false }
-  ],
-  "stylePresets": [
-    "专业严谨",
-    "简洁直接",
-    "热情亲切",
-    "顾问式引导",
-    "朋友式轻松",
-    "先共情后建议",
-    "数据与事实优先",
-    "高情商委婉"
+    { "key": "my_occupation", "owner": "my", "group": "我的职业", "type": "text", "label": "我的职业", "extract": false, "salience": "normal" },
+    { "key": "my_position", "owner": "my", "group": "我的职业", "type": "text", "label": "我的职位", "extract": false, "salience": "normal" },
+    { "key": "my_company", "owner": "my", "group": "我的职业", "type": "text", "label": "我的公司", "extract": false, "salience": "normal" },
+    { "key": "my_industry", "owner": "my", "group": "我的职业", "type": "text", "label": "所在行业", "extract": false, "salience": "normal" },
+    { "key": "my_product", "owner": "my", "group": "我的职业", "type": "textarea", "label": "我卖的产品或服务", "extract": false, "salience": "normal" },
+    { "key": "my_hardSkills", "owner": "my", "group": "我的职业", "type": "tags", "label": "我的硬技能", "extract": false, "salience": "normal" },
+    { "key": "my_education", "owner": "my", "group": "我的形象", "type": "enum", "label": "我的学历", "extract": false, "salience": "low",
+      "options": [
+        { "code": "high_school", "label": "高中及以下" },
+        { "code": "college", "label": "大专" },
+        { "code": "bachelor", "label": "本科" },
+        { "code": "master", "label": "硕士" },
+        { "code": "phd", "label": "博士" }
+      ] },
+    { "key": "my_personality", "owner": "my", "group": "我的形象", "type": "tags", "label": "我的性格标签", "extract": false, "salience": "normal" },
+    { "key": "my_aspiration", "owner": "my", "group": "我的形象", "type": "tags", "label": "我的理想自我", "extract": false, "salience": "normal",
+      "options": [
+        { "code": "calm_emotional", "label": "情绪稳定" },
+        { "code": "has_boundary", "label": "有边界感" },
+        { "code": "non_pleasing", "label": "不讨好" },
+        { "code": "witty", "label": "幽默有料" },
+        { "code": "professional", "label": "专业可靠" },
+        { "code": "genuine", "label": "真诚直接" },
+        { "code": "relaxed", "label": "从容松弛" },
+        { "code": "ambitious", "label": "上进有目标" }
+      ] },
+    { "key": "my_relation_goal_default", "owner": "my", "group": "我的形象", "type": "enum", "label": "默认关系愿景", "extract": false, "salience": "normal",
+      "options": [
+        { "code": "life_partner", "label": "长期伴侣" },
+        { "code": "stable_casual", "label": "稳定暧昧" },
+        { "code": "friend", "label": "普通朋友" },
+        { "code": "client_trust", "label": "客户信任" },
+        { "code": "mentor_impression", "label": "师长印象" }
+      ] },
+    { "key": "my_style", "owner": "my", "group": "我的形象", "type": "text", "label": "默认语言风格", "extract": false, "salience": "normal" },
+    { "key": "my_taboo", "owner": "my", "group": "我的形象", "type": "textarea", "label": "我不能说的话", "extract": false, "salience": "high" },
+    { "key": "my_defaultGoal", "owner": "my", "group": "我的形象", "type": "textarea", "label": "我的默认业务目标", "extract": false, "salience": "normal" }
   ]
 }

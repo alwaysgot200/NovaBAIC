@@ -56,8 +56,36 @@ data class ContactProfileEntity(
     val mergedInto: Long? = null,
     /** 用户手动删档时间（v3）：非空即软删除，识别与列表均不出现；区别于合并。 */
     val deletedAt: Long? = null,
+    /** 用户选定的场景包 code（v4）：dating / sales_b2b…；仅用于场景默认风格与后续阶段机。 */
+    val scenarioCode: String? = null,
     val createdAt: Long,
     val updatedAt: Long,
+)
+
+/** 风格卡作用域：[STYLE_SCOPE_CONTACT] 按联系人覆盖；[STYLE_SCOPE_MY_DEFAULT] 全局默认（contactId=0）。 */
+const val STYLE_SCOPE_MY_DEFAULT = "my_default"
+const val STYLE_SCOPE_CONTACT = "contact"
+
+/**
+ * 说话风格卡（v4，方案 §6.2/§6.5）：基调单选 + 意图多选 + 一句自定义补充。
+ * 唯一键 (scope, contactId)：联系人缺卡时回退全局卡；[compiledCustomJson] P3 编译流预留，
+ * P1 恒为 null、[confirmed] 恒 true（选项与原文即时生效）。
+ */
+@Entity(
+    tableName = "style_cards",
+    indices = [Index(value = ["scope", "contactId"], unique = true)],
+)
+data class StyleCardEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val scope: String,
+    val contactId: Long = 0L,
+    val toneCode: String? = null,
+    /** 资产 intent code 的 JSON 数组；保存顺序即展示/渲染顺序。 */
+    val intentCodes: String = "[]",
+    val customNote: String? = null,
+    val compiledCustomJson: String? = null,
+    val confirmed: Boolean = true,
+    val updatedAt: Long = 0L,
 )
 
 /** 同一联系人的多个名称（改名/备注/昵称/群内显示名归同一档案）。 */

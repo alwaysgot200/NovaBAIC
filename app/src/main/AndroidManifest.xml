@@ -104,6 +104,11 @@
             android:label="@string/float_profile_title" />
 
         <activity
+            android:name=".floatball.StyleCardActivity"
+            android:exported="false"
+            android:label="@string/float_style_entry" />
+
+        <activity
             android:name=".floatball.AdvisorPlaybookActivity"
             android:exported="false"
             android:label="@string/float_playbook_title" />

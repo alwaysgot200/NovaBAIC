@@ -806,6 +806,7 @@ class ScreenAdvisor @Inject constructor(
         val customSystemPrompt = listOfNotNull(
             PREAMBLE_SECTION,
             styleWithLength,
+            sources.brief?.styleSection,
             directionSection,
             sources.brief?.section,
             contactSection,

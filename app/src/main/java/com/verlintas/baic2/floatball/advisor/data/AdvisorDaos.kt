@@ -80,6 +80,26 @@ interface ContactProfileDao {
 
     @Query("UPDATE contact_profiles SET mergedInto = NULL, updatedAt = :now WHERE id = :id")
     suspend fun unmarkMerged(id: Long, now: Long)
+
+    @Query("UPDATE contact_profiles SET scenarioCode = :code, updatedAt = :now WHERE id = :id")
+    suspend fun setScenario(id: Long, code: String?, now: Long)
+}
+
+/** 说话风格卡（v4）：全局卡 (my_default,0) 与按人卡 (contact,contactId) 各至多一行。 */
+@Dao
+interface StyleCardDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(card: StyleCardEntity): Long
+
+    @Query("SELECT * FROM style_cards WHERE scope = :scope AND contactId = :contactId")
+    suspend fun find(scope: String, contactId: Long): StyleCardEntity?
+
+    @Query("SELECT * FROM style_cards WHERE scope = :scope AND contactId = :contactId")
+    fun observe(scope: String, contactId: Long): Flow<StyleCardEntity?>
+
+    @Query("DELETE FROM style_cards WHERE scope = 'contact' AND contactId = :contactId")
+    suspend fun deleteContactCard(contactId: Long)
 }
 
 @Dao
@@ -140,6 +160,9 @@ interface PersonaFieldDao {
 
     @Query("DELETE FROM persona_fields WHERE contactId = :contactId AND field IN (:fields)")
     suspend fun deleteByFields(contactId: Long, fields: List<String>)
+
+    @Query("SELECT * FROM persona_fields")
+    suspend fun listAll(): List<PersonaFieldEntity>
 
     @Query("SELECT field FROM persona_fields WHERE contactId = :contactId")
     suspend fun fieldKeys(contactId: Long): List<String>

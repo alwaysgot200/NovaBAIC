@@ -1,0 +1,105 @@
+{
+  "packs": [
+    {
+      "code": "dating",
+      "label": "恋爱/暧昧",
+      "relationTypes": ["暧昧对象", "朋友"],
+      "defaultTone": "buddy",
+      "defaultIntents": ["spark_topic", "hold_warmth", "show_value"],
+      "goalTemplates": [
+        { "horizon": 3, "text": "和{name}走向稳定、自然的亲密关系；同时我成为{aspiration}的人" },
+        { "horizon": 2, "text": "在{deadline}前完成一次自然的线下邀约（吃饭/看展），见面互动不冷场" }
+      ],
+      "stages": [
+        {
+          "code": "weak",
+          "label": "弱联系",
+          "advanceSignals": ["主动发起过话题", "连续两次回复不少于2句"],
+          "missionHint": "无压力刷存在，单话题轻互动，不邀约"
+        },
+        {
+          "code": "rebuild",
+          "label": "重建对话",
+          "advanceSignals": ["主动追问一次", "回复带情绪词"],
+          "missionHint": "用共同记忆或新话题钩子重启对话"
+        },
+        {
+          "code": "attract",
+          "label": "吸引/舒适",
+          "advanceSignals": ["主动开启新话题", "私聊延续超过3天"],
+          "missionHint": "展示生活密度与情绪稳定，建立舒适感"
+        },
+        {
+          "code": "probe",
+          "label": "试探邀约",
+          "advanceSignals": ["对邀约暗示给积极回应", "主动提及共同空闲时间"],
+          "missionHint": "轻试探线下意愿，不给压力"
+        },
+        {
+          "code": "confirm",
+          "label": "敲定见面",
+          "advanceSignals": ["确认具体时间或地点"],
+          "missionHint": "二选一落定时间地点"
+        }
+      ],
+      "retreatSignals": ["拒绝", "算了", "呵呵", "已读不回超过24小时"],
+      "taboos": ["查户口式连续提问", "深夜连续试探", "提前任/查岗", "弱联系阶段发起邀约"]
+    },
+    {
+      "code": "sales_b2b",
+      "label": "B2B销售",
+      "relationTypes": ["客户", "潜在客户"],
+      "defaultTone": "pro",
+      "defaultIntents": ["clarify_need", "handle_objection", "anchor_commit"],
+      "goalTemplates": [
+        { "horizon": 2, "text": "推动{name}在{deadline}前完成签约/复购，关键障碍是{objection}" }
+      ],
+      "stages": [
+        {
+          "code": "ice",
+          "label": "破冰",
+          "advanceSignals": ["对方回应并表明身份/需求"],
+          "missionHint": "建立信任，确认对接人与业务背景"
+        },
+        {
+          "code": "inquiry",
+          "label": "询盘",
+          "advanceSignals": ["对方说出具体需求或预算"],
+          "missionHint": "澄清需求与决策链，不急于报价"
+        },
+        {
+          "code": "compare",
+          "label": "比价",
+          "advanceSignals": ["提到竞品或要求报价"],
+          "missionHint": "用差异点与事实回应比较，可给报价"
+        },
+        {
+          "code": "hesitate",
+          "label": "犹豫",
+          "advanceSignals": ["提出具体顾虑", "同意进入下一步沟通"],
+          "missionHint": "逐点化解顾虑，共情优先"
+        },
+        {
+          "code": "push",
+          "label": "促单",
+          "advanceSignals": ["口头认可方案", "同意走流程"],
+          "missionHint": "锚定下一步时间与动作，二选一促成"
+        },
+        {
+          "code": "deal",
+          "label": "成交",
+          "advanceSignals": ["合同/付款确认"],
+          "missionHint": "闭环确认交付与账期，不画蛇添足"
+        },
+        {
+          "code": "after",
+          "label": "售后",
+          "advanceSignals": ["续约/增购信号"],
+          "missionHint": "兑现承诺，经营复购与转介绍"
+        }
+      ],
+      "retreatSignals": ["不需要", "已选别家", "以后再说", "预算冻结"],
+      "taboos": ["未确认预算前报价", "对已转意向客户继续强调痛点", "凭空改价或食言"]
+    }
+  ]
+}

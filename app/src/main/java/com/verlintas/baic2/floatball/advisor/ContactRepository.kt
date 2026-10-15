@@ -226,6 +226,14 @@ class ContactRepository @Inject constructor(
         )
     }
 
+    /** P1：联系人详情只改业务目标；风格改走 style_cards，旧 style 列保持原样（回退链只读）。 */
+    suspend fun updateGoal(contactId: Long, goal: String?) {
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        db.contactProfileDao().update(
+            p.copy(goal = goal?.trim()?.takeIf { it.isNotEmpty() }, updatedAt = System.currentTimeMillis()),
+        )
+    }
+
     suspend fun setContactType(contactId: Long, type: String) {
         val p = db.contactProfileDao().findById(contactId) ?: return
         db.contactProfileDao().update(p.copy(contactType = type, updatedAt = System.currentTimeMillis()))

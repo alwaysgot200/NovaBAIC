@@ -342,6 +342,32 @@ private fun AdvisorSettingsScreen(
                         .padding(top = 8.dp)
                         .clickable {
                             context.startActivity(
+                                Intent(context, StyleCardActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        Text(
+                            text = stringResource(R.string.float_settings_style),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = stringResource(R.string.float_settings_style_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = scheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable {
+                            context.startActivity(
                                 Intent(context, AdvisorProfileActivity::class.java)
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                             )

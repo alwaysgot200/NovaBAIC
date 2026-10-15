@@ -36,6 +36,19 @@ object PersonaFieldType {
     const val DATE = "date"
 }
 
+/**
+ * enum/tags 字段的单个码表选项（schema v2，方案 §6.1）：
+ * 存储与传输一律用 [code]（[a-z0-9_]+）；[label] 是唯一的用户可见中文文案；
+ * [impl] 非空时在画像提示词中追加该选项的行为暗示；[topicHook] 标记可作话题钩子。
+ */
+@Serializable
+data class FieldOption(
+    val code: String,
+    val label: String,
+    val impl: String = "",
+    val topicHook: Boolean = false,
+)
+
 @Serializable
 data class PersonaFieldDef(
     val key: String,
@@ -45,7 +58,16 @@ data class PersonaFieldDef(
     val type: String,
     val label: String,
     val extract: Boolean = true,
-    val options: List<String>? = null,
+    /** 码表选项；tags 字段无 options 时为自由标签（原样存储，不走 code/~ 体系）。 */
+    val options: List<FieldOption>? = null,
+    /** 是否允许模型/用户填写码表外的值：允许时以 `~原文` 存储，不允许时萃取归一丢弃。 */
+    val allowCustom: Boolean = true,
+    /** 提示词显著度：[SALIENCE_HIGH] 的行可追加 [FieldOption.impl]；集合裁剪留待后续阶段。 */
+    val salience: String? = null,
+    /** text/textarea 字段的行为暗示模板，{v} 占位替换为显示值；P1 仅数据占位。 */
+    val implTpl: String? = null,
+    /** 时效天数（易变商情）；P1 仅数据占位，时效渲染留待后续阶段。 */
+    val staleAfterDays: Int? = null,
     /**
      * 用户 ✓ 确认后双写上游记忆的类别（方案 §6.5 写入表）：
      * null/[MEMORY_PROFILE] 稳定事实；[MEMORY_AGREEMENT] 承诺（带 whenAt）；
@@ -54,20 +76,25 @@ data class PersonaFieldDef(
      */
     val memory: String? = null,
 ) {
+    fun optionByCode(code: String): FieldOption? = options?.firstOrNull { it.code == code }
+
+    fun optionByLabel(label: String): FieldOption? = options?.firstOrNull { it.label == label }
+
     companion object {
         const val MEMORY_PROFILE = "profile"
         const val MEMORY_AGREEMENT = "agreement"
         const val MEMORY_FACT = "fact"
         const val MEMORY_EVENT = "event"
         const val MEMORY_NONE = "none"
+        const val SALIENCE_HIGH = "high"
+        const val SALIENCE_NORMAL = "normal"
+        const val SALIENCE_LOW = "low"
     }
 }
 
 @Serializable
 data class PersonaSchema(
     val fields: List<PersonaFieldDef>,
-    /** 联系人「语言风格」的预设候选（画像页 chip，方案 P4 风格选择器）；仍允许自定义。 */
-    val stylePresets: List<String> = emptyList(),
 ) {
     val theirFields: List<PersonaFieldDef> get() = fields.filter { it.owner == "their" }
 
