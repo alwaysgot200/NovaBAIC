@@ -143,6 +143,36 @@ class StyleResolverTest {
     }
 
     @Test
+    fun render_crossPack_stagesNeverGatingThisPack_keptAsUniversal() {
+        // colleague 新包站码：spark_topic/push_close 的 fitStages 均为 dating 站码，
+        // 从未对 colleague 声明过门控 → 视为通用意图，不被误杀。
+        val colleagueStages = setOf("ice", "familiar", "mutual", "ally")
+        val out = StyleResolver.render(
+            card(intents = listOf("spark_topic", "push_close")),
+            playbook,
+            stageCode = "familiar",
+            packStageCodes = colleagueStages,
+        )!!
+        assertTrue(out.contains("制造话题"))
+        assertTrue(out.contains("推进邀约"))
+    }
+
+    @Test
+    fun render_withinPack_gatedIntentStillFilteredAtOtherStage() {
+        // dating 包内 weak 站：push_close 仅门控 probe 站 → weak 仍被正确过滤；
+        // spark_topic 门控 weak/attract → 保留。
+        val datingStages = setOf("weak", "rebuild", "attract", "probe", "confirm")
+        val out = StyleResolver.render(
+            card(intents = listOf("spark_topic", "push_close")),
+            playbook,
+            stageCode = "weak",
+            packStageCodes = datingStages,
+        )!!
+        assertTrue(out.contains("制造话题"))
+        assertFalse(out.contains("推进邀约"))
+    }
+
+    @Test
     fun summary_joinToneAndIntentLabels() {
         assertEquals(
             "朋友式轻松 · 制造话题、推进邀约",

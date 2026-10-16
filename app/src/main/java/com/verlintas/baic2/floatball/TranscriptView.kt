@@ -24,9 +24,16 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.TextPaint
 import android.text.TextUtils
+import android.text.method.LinkMovementMethod
+import android.text.style.ClickableSpan
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -36,6 +43,7 @@ import android.widget.Toast
 import com.verlintas.baic2.R
 import com.verlintas.baic2.core.model.ChatMessage
 import com.verlintas.baic2.core.model.ChatRole
+import com.verlintas.baic2.floatball.advisor.strategy.ReplySuggestions
 
 /**
  * 分屏浮窗的转录视图：渲染「老参谋」会话的消息流（与主界面同一会话、
@@ -49,8 +57,28 @@ import com.verlintas.baic2.core.model.ChatRole
  */
 internal class TranscriptView(context: Context) : LinearLayout(context) {
 
-    /** 一条气泡的句柄：[container] 挂入列表，[text] 承载正文更新。 */
-    private class Bubble(val container: View, val text: TextView)
+    /**
+     * 一条气泡的句柄：[container] 挂入列表，[text] 承载正文更新；
+     * 参谋回复的 [contentBox] 可在正文下挂行内建议/纠偏/依据（P3 §九）。
+     * [bindSignature] 为上次参谋绑定的指纹，流式 token 引发的重复渲染在此短路。
+     */
+    private class Bubble(
+        val container: View,
+        val text: TextView,
+        val contentBox: LinearLayout? = null,
+    ) {
+        var bindSignature: String? = null
+    }
+
+    // ── P3 §九：行内交互回调（由服务接线，视图本身不碰业务） ─────────────
+    /** 参数：建议编号（1 起）、建议正文（视图已先复制到剪贴板）。 */
+    var onAdopt: ((Int, String) -> Unit)? = null
+
+    /** 参数：[ScreenAdvisor.CorrectionKind] 的 ordinal。 */
+    var onRegenerate: ((Int) -> Unit)? = null
+
+    /** 参数：原依据关键词、用户更正文本。 */
+    var onCorrectMemory: ((List<String>, String) -> Unit)? = null
 
     private val list = LinearLayout(context).apply {
         orientation = VERTICAL
@@ -79,13 +107,35 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
         }
         // 移除已消失的消息（清空会话）。
         val ids = visible.mapTo(HashSet()) { it.id }
-        bubbles.keys.filterNot(ids::contains).toList().forEach { stale ->
+        bubbles.keys.filterNot { it == STATUS_KEY || ids.contains(it) }.toList().forEach { stale ->
             bubbles.remove(stale)?.let { list.removeView(it.container) }
         }
         visible.forEach { message -> upsertBubble(message) }
+        // P3 §九：参谋气泡行内建议/采纳/纠偏/依据重绑（任务令态变化即刷新）。
+        val lastAssistantId = visible.lastOrNull { it.role == ChatRole.ASSISTANT }?.id
+        val lastUserId = visible.lastOrNull { it.role == ChatRole.USER }?.id
+        visible.forEach { message ->
+            if (message.role == ChatRole.ASSISTANT) {
+                bubbles[message.id]?.let { bubble ->
+                    bindAssistant(
+                        message = message,
+                        bubble = bubble,
+                        state = state,
+                        isLastAssistant = message.id == lastAssistantId,
+                        lastUserId = lastUserId,
+                    )
+                }
+            }
+        }
         renderStreaming(state.streaming)
         renderStatus(state)
-        scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        // 仅当原本就贴近底部时跟随流式滚动；用户翻阅历史时不打扰。
+        scroll.post {
+            val child = scroll.getChildAt(0)
+            val nearBottom = child == null ||
+                child.bottom - (scroll.scrollY + scroll.height) < dp(96)
+            if (nearBottom) scroll.fullScroll(View.FOCUS_DOWN)
+        }
     }
 
     private fun upsertBubble(message: ChatMessage) {
@@ -123,13 +173,14 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                     upsertBubble(message)
                 }
             }
-        } else {
+        } else if (message.role == ChatRole.USER) {
             if (existing.text.text.toString() != message.content) existing.text.text = message.content
             existing.text.maxLines = Int.MAX_VALUE
             existing.text.ellipsize = null
             existing.text.setOnClickListener(null)
             existing.text.isClickable = false
         }
+        // ASSISTANT 的正文由 [bindAssistant] 按「引言 + 编号建议 + 依据」重绑。
     }
 
     /**
@@ -156,8 +207,11 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
             return Bubble(body, body)
         }
 
-        // 参谋回复：右侧给复制按钮留位，避免压住首行文字。
-        body.setPadding(dp(10), dp(8), dp(34), dp(8))
+        // 参谋回复：contentBox 承载正文 + 行内建议/依据，右侧给复制按钮留位。
+        val contentBox = LinearLayout(context).apply {
+            orientation = VERTICAL
+            setPadding(dp(10), dp(8), dp(34), dp(8))
+        }
         val container = FrameLayout(context).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
@@ -167,7 +221,7 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                 setMargins(dp(8), dp(6), dp(8), 0)
             }
             addView(
-                body,
+                contentBox,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -175,7 +229,255 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
             )
             addView(buildCopyButton(message.content))
         }
-        return Bubble(container, body)
+        return Bubble(container, body, contentBox)
+    }
+
+    /**
+     * P3 §九：重绑参谋气泡。最新参谋气泡且解析出 ≥2 条编号建议、且存在
+     * pending 任务令时，逐条挂「✓采纳」；长按建议条弹三档纠偏；气泡下挂
+     * 「依据：… · 记错了」。其余气泡只显示原文 + 依据小字。
+     */
+    private fun bindAssistant(
+        message: ChatMessage,
+        bubble: Bubble,
+        state: ScreenAdvisor.UiState,
+        isLastAssistant: Boolean,
+        lastUserId: Long?,
+    ) {
+        val box = bubble.contentBox ?: return
+        val pendingMission = state.missions.firstOrNull { it.pending }
+        val regenUsed = lastUserId != null && lastUserId in state.regeneratedTurns
+        val basis = state.basisByMessage[message.id].orEmpty()
+        // 指纹短路：内容/任务令态/依据都没变（典型：流式 token 触发的重渲染）
+        // 时跳过整块重建，避免每个 token 都 removeAllViews + 重建 Span。
+        val signature = "${message.content.hashCode()}|$isLastAssistant|" +
+            "${pendingMission != null}|${pendingMission?.adoptedIndex}|$regenUsed|$basis"
+        if (bubble.bindSignature == signature) return
+        bubble.bindSignature = signature
+        box.removeAllViews()
+        val body = bubble.text
+        val items = ReplySuggestions.parse(message.content)?.takeIf { isLastAssistant }
+        if (items == null) {
+            body.text = message.content
+            body.maxLines = Int.MAX_VALUE
+            box.addView(body)
+        } else {
+            val preamble = ReplySuggestions.preamble(message.content)
+            if (preamble.isNotBlank()) {
+                body.text = preamble
+                body.maxLines = Int.MAX_VALUE
+                box.addView(body)
+            }
+            val canAdopt = pendingMission != null
+            val adoptedIndex = pendingMission?.adoptedIndex
+            items.forEach { item ->
+                box.addView(
+                    buildSuggestionView(
+                        item = item,
+                        canAdopt = canAdopt,
+                        adoptedIndex = adoptedIndex,
+                        regenUsed = regenUsed,
+                    ),
+                )
+            }
+        }
+        basis.takeIf { it.isNotEmpty() }?.let { box.addView(buildBasisFooter(box, it)) }
+    }
+
+    /** 单条编号建议：正文 + 行尾采纳/已采纳；长按弹三档纠偏条。 */
+    private fun buildSuggestionView(
+        item: ReplySuggestions.Item,
+        canAdopt: Boolean,
+        adoptedIndex: Int?,
+        regenUsed: Boolean,
+    ): View {
+        val itemBox = LinearLayout(context).apply {
+            orientation = VERTICAL
+            val lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(4)
+            layoutParams = lp
+        }
+        val tv = newAssistantText()
+        val builder = SpannableStringBuilder(item.text)
+        when {
+            adoptedIndex == item.number -> {
+                builder.append("  ")
+                builder.append(
+                    context.getString(R.string.float_suggestion_adopted),
+                    ForegroundColorSpan(ADOPTED_COLOR),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+            canAdopt -> {
+                builder.append("  ")
+                builder.append(
+                    context.getString(R.string.float_suggestion_adopt),
+                    object : ClickableSpan() {
+                        override fun onClick(widget: View) {
+                            copyReply(item.text)
+                            onAdopt?.invoke(item.number, item.text)
+                        }
+                        override fun updateDrawState(ds: TextPaint) {
+                            ds.color = LINK_COLOR
+                            ds.isUnderlineText = false
+                        }
+                    },
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
+            }
+        }
+        tv.text = builder
+        tv.movementMethod = LinkMovementMethod.getInstance()
+        tv.setOnLongClickListener {
+            if (regenUsed) {
+                Toast.makeText(context, R.string.float_regen_used, Toast.LENGTH_SHORT).show()
+            } else {
+                showCorrectionBar(itemBox)
+            }
+            true
+        }
+        itemBox.addView(tv)
+        return itemBox
+    }
+
+    /** 长按后在建议条下插入三档纠偏 chips（再次长按先移除旧的）。 */
+    private fun showCorrectionBar(itemBox: LinearLayout) {
+        itemBox.findViewWithTag<View>(TAG_CORRECTION_BAR)?.let { itemBox.removeView(it) }
+        val bar = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            tag = TAG_CORRECTION_BAR
+            val lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(4)
+            layoutParams = lp
+        }
+        val kinds = listOf(
+            ScreenAdvisor.CorrectionKind.TOO_DIRECT to R.string.float_correction_too_direct,
+            ScreenAdvisor.CorrectionKind.TOO_SOFT to R.string.float_correction_too_soft,
+            ScreenAdvisor.CorrectionKind.CHANGE_DIRECTION to R.string.float_correction_change,
+        )
+        kinds.forEach { (kind, labelRes) ->
+            val chip = TextView(context).apply {
+                text = context.getString(labelRes)
+                setTextColor(LINK_COLOR)
+                textSize = 12f
+                setPadding(dp(8), dp(3), dp(8), dp(3))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(0x33FFFFFF)
+                }
+                val lp = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
+                lp.marginEnd = dp(6)
+                layoutParams = lp
+                setOnClickListener {
+                    onRegenerate?.invoke(kind.ordinal)
+                    // 重写触发后整树会随状态重绑；这里立即移除避免连点。
+                    itemBox.removeView(bar)
+                }
+            }
+            bar.addView(chip)
+        }
+        itemBox.addView(bar)
+    }
+
+    /** 气泡下「依据：X、Y · 记错了」；点记错了就地换输入框，确认写记忆（不直删）。 */
+    private fun buildBasisFooter(box: LinearLayout, basis: List<String>): View {
+        val footer = newAssistantText(12f, BASIS_COLOR)
+        footer.tag = TAG_BASIS_FOOTER
+        val builder = SpannableStringBuilder(context.getString(R.string.float_basis_label))
+        builder.append(basis.joinToString("、"))
+        builder.append("  ·  ")
+        builder.append(
+            context.getString(R.string.float_basis_wrong),
+            object : ClickableSpan() {
+                override fun onClick(widget: View) {
+                    val index = box.indexOfChild(footer)
+                    box.removeView(footer)
+                    val editor = buildBasisEditor(box, basis, index)
+                    box.addView(editor, index)
+                }
+                override fun updateDrawState(ds: TextPaint) {
+                    ds.color = LINK_COLOR
+                    ds.isUnderlineText = false
+                }
+            },
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+        footer.text = builder
+        footer.movementMethod = LinkMovementMethod.getInstance()
+        return footer
+    }
+
+    private fun buildBasisEditor(box: LinearLayout, basis: List<String>, index: Int): View {
+        val editor = LinearLayout(context).apply {
+            orientation = VERTICAL
+            val lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(2)
+            layoutParams = lp
+        }
+        val input = EditText(context).apply {
+            setText(basis.joinToString("、"))
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            hint = context.getString(R.string.float_basis_correct_hint)
+            setHintTextColor(0x80FFFFFF.toInt())
+            setSingleLine(false)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(6).toFloat()
+                setColor(0x22FFFFFF)
+            }
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+        }
+        editor.addView(input)
+        // 按 editor 自身引用定位替换：期间若发生整块重绑，缓存的 index 会失准，
+        // removeViewAt(index) 可能误删兄弟视图甚至越界崩溃。
+        fun replaceEditor(replacement: View) {
+            val pos = box.indexOfChild(editor)
+            if (pos >= 0) {
+                box.removeView(editor)
+                box.addView(replacement, pos)
+            } else {
+                box.addView(replacement)
+            }
+        }
+        val buttons = LinearLayout(context).apply { orientation = HORIZONTAL }
+        buttons.addView(footerAction(context.getString(R.string.float_basis_correct_save)) {
+            val correction = input.text.toString()
+            if (correction.isBlank()) {
+                Toast.makeText(context, R.string.float_basis_correct_empty, Toast.LENGTH_SHORT).show()
+                return@footerAction
+            }
+            onCorrectMemory?.invoke(basis, correction)
+            Toast.makeText(context, R.string.float_basis_correct_done, Toast.LENGTH_SHORT).show()
+            replaceEditor(buildBasisReadonly(basis))
+        })
+        buttons.addView(footerAction(context.getString(R.string.float_basis_correct_cancel)) {
+            replaceEditor(buildBasisFooter(box, basis))
+        })
+        editor.addView(buttons)
+        return editor
+    }
+
+    private fun buildBasisReadonly(basis: List<String>): View =
+        newAssistantText(12f, BASIS_COLOR).apply {
+            text = context.getString(R.string.float_basis_label) + basis.joinToString("、")
+        }
+
+    private fun footerAction(label: String, action: () -> Unit): TextView =
+        TextView(context).apply {
+            text = label
+            setTextColor(LINK_COLOR)
+            textSize = 12f
+            setPadding(dp(8), dp(4), dp(8), dp(2))
+            setOnClickListener { action() }
+        }
+
+    private fun newAssistantText(
+        size: Float = 14f,
+        color: Int = Color.WHITE,
+    ): TextView = TextView(context).apply {
+        setTextColor(color)
+        textSize = size
+        maxLines = Int.MAX_VALUE
     }
 
     /** 参谋回复右上角的复制按钮：常态半透明白，按下全亮；复制纯回复正文。 */
@@ -259,11 +561,17 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                 "first_text_timeout" -> context.getString(R.string.float_ask_error_timeout)
                 "no_response" -> context.getString(R.string.float_ask_error_no_response)
                 "network" -> context.getString(R.string.float_ask_error_network)
+                "regenerate_failed" -> context.getString(R.string.float_ask_regen_failed)
                 else -> context.getString(R.string.float_ask_failed, status.reason)
             }
             ScreenAdvisor.Status.Idle -> ""
         }
-        if (text.isEmpty()) return
+        if (text.isEmpty()) {
+            // 回到 Idle：状态行必须摘除，否则上一条「思考中/错误」永久残留
+            // （STATUS_KEY 被陈旧清理逻辑豁免，不会随消息清理走）。
+            bubbles.remove(STATUS_KEY)?.let { list.removeView(it.container) }
+            return
+        }
         val key = STATUS_KEY
         val holder = bubbles[key] ?: run {
             val created = TextView(context).apply {
@@ -286,5 +594,12 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
     private companion object {
         /** 状态行的伪 id（真实消息 id 是数据库自增正数）。 */
         const val STATUS_KEY = -1L
+
+        /** P3 §九：行内交互的视图 tag 与配色。 */
+        const val TAG_CORRECTION_BAR = "p3_correction_bar"
+        const val TAG_BASIS_FOOTER = "p3_basis_footer"
+        val LINK_COLOR = 0xFF9EC9FF.toInt()
+        val ADOPTED_COLOR = 0x99FFFFFF.toInt()
+        val BASIS_COLOR = 0xB3FFFFFF.toInt()
     }
 }

@@ -109,6 +109,11 @@
             android:label="@string/float_style_entry" />
 
         <activity
+            android:name=".floatball.StrategyCardActivity"
+            android:exported="false"
+            android:label="@string/float_goal_card_entry" />
+
+        <activity
             android:name=".floatball.AdvisorPlaybookActivity"
             android:exported="false"
             android:label="@string/float_playbook_title" />

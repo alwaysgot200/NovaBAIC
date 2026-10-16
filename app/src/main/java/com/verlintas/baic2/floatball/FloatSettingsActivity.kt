@@ -68,6 +68,10 @@ import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
+import com.verlintas.baic2.floatball.advisor.StrategyCardRepository
+import com.verlintas.baic2.floatball.advisor.data.CARD_CONFIRMED
+import com.verlintas.baic2.floatball.advisor.data.CARD_DRAFT
+import com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -91,6 +95,12 @@ class FloatSettingsActivity : ComponentActivity() {
 
     @Inject
     lateinit var balanceRepository: DeepSeekBalanceRepository
+
+    @Inject
+    lateinit var strategyRuntime: StrategyRuntime
+
+    @Inject
+    lateinit var strategyCards: StrategyCardRepository
 
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
@@ -125,6 +135,8 @@ class FloatSettingsActivity : ComponentActivity() {
                     prefs = advisorPrefs,
                     advisor = screenAdvisor,
                     balanceRepository = balanceRepository,
+                    runtime = strategyRuntime,
+                    strategyCards = strategyCards,
                     onClose = { finish() },
                 )
             }
@@ -137,6 +149,8 @@ private fun AdvisorSettingsScreen(
     prefs: AdvisorPrefs,
     advisor: ScreenAdvisor,
     balanceRepository: DeepSeekBalanceRepository,
+    runtime: StrategyRuntime,
+    strategyCards: StrategyCardRepository,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
@@ -360,6 +374,13 @@ private fun AdvisorSettingsScreen(
                     }
                 }
 
+                StrategySettingsSection(
+                    mode = settings.strategyMode,
+                    onModeChange = { prefs.setStrategyMode(it) },
+                    runtime = runtime,
+                    strategyCards = strategyCards,
+                )
+
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = scheme.surfaceContainer,
@@ -462,6 +483,105 @@ private fun AdvisorSettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onSurfaceVariant,
                 )
+            }
+        }
+    }
+}
+
+/** P2「我的聊天策略」：模式三档（增强档置灰）+ 默认策略卡入口与手动编译。 */
+@Composable
+private fun StrategySettingsSection(
+    mode: Int,
+    onModeChange: (Int) -> Unit,
+    runtime: StrategyRuntime,
+    strategyCards: StrategyCardRepository,
+) {
+    val context = LocalContext.current
+    val scheme = MaterialTheme.colorScheme
+    val globalCard by strategyCards.observeLatest(StrategyCardRepository.GLOBAL_CONTACT_ID)
+        .collectAsStateWithLifecycle(initialValue = null)
+
+    SectionLabel(stringResource(R.string.float_settings_strategy_section))
+    Text(
+        text = stringResource(R.string.float_strategy_mode_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = scheme.onSurfaceVariant,
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(top = 8.dp),
+    ) {
+        FilterChip(
+            selected = mode == AdvisorPrefs.STRATEGY_OFF,
+            onClick = { onModeChange(AdvisorPrefs.STRATEGY_OFF) },
+            label = { Text(stringResource(R.string.float_strategy_mode_off)) },
+        )
+        FilterChip(
+            selected = mode == AdvisorPrefs.STRATEGY_SMART,
+            onClick = { onModeChange(AdvisorPrefs.STRATEGY_SMART) },
+            label = { Text(stringResource(R.string.float_strategy_mode_smart)) },
+        )
+        FilterChip(
+            selected = mode == AdvisorPrefs.STRATEGY_ENHANCED,
+            onClick = { onModeChange(AdvisorPrefs.STRATEGY_ENHANCED) },
+            label = { Text(stringResource(R.string.float_strategy_mode_enhanced)) },
+        )
+    }
+    // P3 §七：增强档已解锁，明示额外成本与效果。
+    if (mode == AdvisorPrefs.STRATEGY_ENHANCED) {
+        Text(
+            text = stringResource(R.string.float_strategy_mode_enhanced_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+
+    val card = globalCard
+    val cardStatus = when (card?.status) {
+        CARD_DRAFT -> stringResource(R.string.float_goal_card_draft, card.version)
+        CARD_CONFIRMED -> stringResource(R.string.float_goal_card_confirmed, card.version)
+        else -> stringResource(R.string.float_goal_card_none)
+    }
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = scheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .clickable {
+                context.startActivity(
+                    Intent(context, StrategyCardActivity::class.java)
+                        .putExtra(
+                            StrategyCardActivity.EXTRA_CONTACT_ID,
+                            StrategyCardActivity.GLOBAL_CONTACT_ID,
+                        )
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            },
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+            Text(
+                text = stringResource(R.string.float_strategy_default_card),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                text = stringResource(R.string.float_strategy_default_card_hint) + " · " + cardStatus,
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+            )
+            OutlinedButton(
+                onClick = {
+                    runtime.requestCardCompile(StrategyCardRepository.GLOBAL_CONTACT_ID)
+                    android.widget.Toast.makeText(
+                        context,
+                        context.getString(R.string.float_strategy_compiling),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                },
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                Text(stringResource(R.string.float_strategy_compile_now))
             }
         }
     }

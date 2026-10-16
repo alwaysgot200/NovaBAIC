@@ -41,8 +41,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaybookFtsEntity::class,
         MergeRecordEntity::class,
         StyleCardEntity::class,
+        GoalEntity::class,
+        GoalDecompEntity::class,
+        StageStateEntity::class,
+        StageHistoryEntity::class,
+        StrategyCardEntity::class,
+        TalkMissionEntity::class,
     ],
-    version = 4,
+    version = 6,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -64,6 +70,18 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun mergeRecordDao(): MergeRecordDao
 
     abstract fun styleCardDao(): StyleCardDao
+
+    abstract fun goalDao(): GoalDao
+
+    abstract fun goalDecompDao(): GoalDecompDao
+
+    abstract fun stageStateDao(): StageStateDao
+
+    abstract fun stageHistoryDao(): StageHistoryDao
+
+    abstract fun strategyCardDao(): StrategyCardDao
+
+    abstract fun talkMissionDao(): TalkMissionDao
 }
 
 /**
@@ -139,6 +157,150 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
                 "ON `style_cards` (`scope`, `contactId`)",
         )
         ensureColumn(db, "contact_profiles", "scenarioCode", "scenarioCode TEXT")
+    }
+}
+
+/**
+ * v4 → v5（P2 三级目标 + 策略卡）：新增 goals / goal_decomps / stage_states /
+ * strategy_cards / talk_missions 五表；contact_profiles 补 activeCardId。
+ * 只建结构不搬数据——目标/卡片均由用户新建或慢车道编译产生。
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `goals` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `horizon` INTEGER NOT NULL,
+                `parentId` INTEGER,
+                `scenarioCode` TEXT,
+                `title` TEXT NOT NULL,
+                `successCriteria` TEXT,
+                `deadlineAt` INTEGER,
+                `status` TEXT NOT NULL DEFAULT 'draft',
+                `promptCount` INTEGER NOT NULL DEFAULT 0,
+                `priority` INTEGER NOT NULL DEFAULT 5,
+                `source` TEXT NOT NULL DEFAULT 'user',
+                `confirmed` INTEGER NOT NULL DEFAULT 0,
+                `failStreak` INTEGER NOT NULL DEFAULT 0,
+                `progressNote` TEXT,
+                `reviewedAt` INTEGER,
+                `createdAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_goals_contactId_status` ON `goals` (`contactId`, `status`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_goals_parentId` ON `goals` (`parentId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_goals_contactId_horizon_status` ON `goals` (`contactId`, `horizon`, `status`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `goal_decomps` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `goalId` INTEGER NOT NULL,
+                `version` INTEGER NOT NULL DEFAULT 1,
+                `kind` TEXT NOT NULL,
+                `payloadJson` TEXT NOT NULL,
+                `confirmed` INTEGER NOT NULL DEFAULT 0,
+                `supersededBy` INTEGER,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_goal_decomps_goalId_version` ON `goal_decomps` (`goalId`, `version`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `stage_states` (
+                `contactId` INTEGER NOT NULL,
+                `scenarioCode` TEXT NOT NULL,
+                `stageCode` TEXT NOT NULL,
+                `enteredAt` INTEGER NOT NULL,
+                `advanceHits` TEXT NOT NULL DEFAULT '{}',
+                `evidence` TEXT,
+                PRIMARY KEY(`contactId`, `scenarioCode`)
+            )
+            """.trimIndent(),
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `strategy_cards` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `version` INTEGER NOT NULL DEFAULT 1,
+                `scenarioCode` TEXT,
+                `payloadJson` TEXT NOT NULL,
+                `status` TEXT NOT NULL DEFAULT 'draft',
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_strategy_cards_contactId_status` ON `strategy_cards` (`contactId`, `status`)")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `talk_missions` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `conversationId` INTEGER NOT NULL,
+                `contactId` INTEGER,
+                `turnMessageId` INTEGER,
+                `stageCode` TEXT,
+                `goalId` INTEGER,
+                `mission` TEXT NOT NULL,
+                `actionsJson` TEXT NOT NULL DEFAULT '[]',
+                `forbiddenJson` TEXT NOT NULL DEFAULT '[]',
+                `signalsJson` TEXT NOT NULL DEFAULT '[]',
+                `planBlockJson` TEXT,
+                `result` TEXT NOT NULL DEFAULT 'pending',
+                `adoptedIndex` INTEGER,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_talk_missions_conversationId_id` ON `talk_missions` (`conversationId`, `id`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_talk_missions_contactId` ON `talk_missions` (`contactId`)")
+
+        ensureColumn(db, "contact_profiles", "activeCardId", "activeCardId INTEGER")
+    }
+}
+
+/**
+ * v5 → v6（P3 有向图阶段机）：
+ * 1. stage_states 加 roadmapVersion（遵循的 roadmap decomp 版本，null=退化线性链）、
+ *    pathTag（私有支线标记，null=主线）、locked（手动锁定，自动边不得移动）；
+ * 2. 新增 stage_history 阶段变迁时间线（每联系人×场景 DAO trim 50 条）；
+ * 3. session_bindings 加 lastIncomingAt（对方最后来信时间，24h 时序信号）。
+ * 旧数据 roadmapVersion=null，行为逐字退化同 v5 线性链。
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        ensureColumn(db, "stage_states", "roadmapVersion", "roadmapVersion INTEGER")
+        ensureColumn(db, "stage_states", "pathTag", "pathTag TEXT")
+        ensureColumn(db, "stage_states", "locked", "locked INTEGER NOT NULL DEFAULT 0")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `stage_history` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `scenarioCode` TEXT NOT NULL,
+                `fromCode` TEXT,
+                `toCode` TEXT NOT NULL,
+                `edge` TEXT NOT NULL,
+                `reason` TEXT,
+                `at` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_stage_history_contactId_scenarioCode_at` " +
+                "ON `stage_history` (`contactId`, `scenarioCode`, `at`)",
+        )
+
+        ensureColumn(db, "session_bindings", "lastIncomingAt", "lastIncomingAt INTEGER")
     }
 }
 

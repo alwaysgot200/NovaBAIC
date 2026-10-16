@@ -66,8 +66,14 @@ data class PersonaFieldDef(
     val salience: String? = null,
     /** text/textarea 字段的行为暗示模板，{v} 占位替换为显示值；P1 仅数据占位。 */
     val implTpl: String? = null,
-    /** 时效天数（易变商情）；P1 仅数据占位，时效渲染留待后续阶段。 */
+    /** 时效天数（易变商情）；超期字段保留但渲染「可能已变化，请先验证」措辞。 */
     val staleAfterDays: Int? = null,
+    /**
+     * 联系人类型显隐（P3 群实体，方案 §13）：取值 person/group，缺省 null=两类档案都显示；
+     * 非空时仅在 [com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity.contactType]
+     * 命中时渲染/萃取。
+     */
+    val showIfContactType: List<String>? = null,
     /**
      * 用户 ✓ 确认后双写上游记忆的类别（方案 §6.5 写入表）：
      * null/[MEMORY_PROFILE] 稳定事实；[MEMORY_AGREEMENT] 承诺（带 whenAt）；
@@ -101,6 +107,10 @@ data class PersonaSchema(
     val myFields: List<PersonaFieldDef> get() = fields.filter { it.owner == "my" }
 
     fun def(key: String): PersonaFieldDef? = fields.firstOrNull { it.key == key }
+
+    /** P3：按联系人类型（person/group）过滤可见字段；未声明显隐的字段两类都显示。 */
+    fun fieldsFor(owner: String, contactType: String): List<PersonaFieldDef> =
+        fields.filter { it.owner == owner && (it.showIfContactType == null || contactType in it.showIfContactType) }
 }
 
 /** tags 字段值的 JSON 数组编解码；渲染时空字段不参与（由调用方过滤）。 */

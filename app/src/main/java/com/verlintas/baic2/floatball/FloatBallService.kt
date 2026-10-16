@@ -212,14 +212,77 @@ class FloatBallService : Service() {
                 }
             }
         }
+        scope.launch {
+            // P2 分屏策略条：planning/轻确认问句/本轮任务令三态（分屏开着才渲染）。
+            screenAdvisor.missionUi.collect { state ->
+                mainHandler.post {
+                    split?.let { FloatUi.renderStrategyStrip(it.strategyStrip, state, strategyCallbacks) }
+                }
+            }
+        }
     }
 
-    /** 打开联系人画像管理（§7 状态条入口；带当前联系人/会话便于直接改绑）。 */
-    private fun openProfileManager(contactId: Long) {
+    /** 策略条回调：✓对/跳过走 Advisor 串行；✎改一下先关问句再直达目标 Tab。 */
+    private val strategyCallbacks = object : FloatUi.StrategyStripCallbacks {
+        override fun onProvisionalYes(goalId: Long) {
+            scope.launch { screenAdvisor.confirmProvisionalGoal(goalId) }
+        }
+
+        override fun onProvisionalEdit(goalId: Long) {
+            screenAdvisor.dismissProvisionalGoal()
+            // 轻确认问句只会在已绑定联系人回合出现；兜底 -1 由画像页自行落到列表。
+            val contactId = screenAdvisor.activeContact.value?.contactId ?: -1L
+            openProfileManager(
+                contactId = contactId,
+                tab = AdvisorProfileActivity.TAB_GOALS,
+                goalId = goalId,
+            )
+        }
+
+        override fun onProvisionalSkip(goalId: Long) {
+            scope.launch { screenAdvisor.skipProvisionalGoal(goalId) }
+        }
+
+        override fun onMissionToggle() {
+            screenAdvisor.toggleMissionExpanded()
+        }
+
+        override fun onBranchAccept() {
+            scope.launch { screenAdvisor.acceptPendingBranch() }
+        }
+
+        override fun onBranchReject() {
+            screenAdvisor.rejectPendingBranch()
+        }
+
+        override fun onReroute() {
+            screenAdvisor.requestReroute()
+        }
+
+        override fun onRerouteAccept() {
+            screenAdvisor.acceptPendingReroute()
+        }
+
+        override fun onRerouteReject() {
+            screenAdvisor.rejectPendingReroute()
+        }
+    }
+
+    /**
+     * 打开联系人画像管理（§7 状态条入口；带当前联系人/会话便于直接改绑）。
+     * [tab]=[AdvisorProfileActivity.TAB_GOALS] 时直达目标 Tab，[goalId]>0 自动弹编辑。
+     */
+    private fun openProfileManager(
+        contactId: Long,
+        tab: String? = null,
+        goalId: Long = -1L,
+    ) {
         startActivity(
             Intent(this, AdvisorProfileActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra(AdvisorProfileActivity.EXTRA_CONTACT_ID, contactId)
+                if (tab != null) putExtra(AdvisorProfileActivity.EXTRA_TAB, tab)
+                if (goalId > 0) putExtra(AdvisorProfileActivity.EXTRA_GOAL_ID, goalId)
                 val conversationId = screenAdvisor.transcript.value.conversationId
                 if (conversationId > 0) {
                     putExtra(AdvisorProfileActivity.EXTRA_CONVERSATION_ID, conversationId)
@@ -368,7 +431,12 @@ class FloatBallService : Service() {
                 screenAdvisor.adviseOnce(preheated).collect { event ->
                     when (event) {
                         ScreenAdvisor.Event.NeedsConsent -> requestProjectionConsent { granted ->
-                            if (granted) runOneShot(null, settleMs = CONSENT_SETTLE_MS)
+                            // 拒绝授权也要给出反馈，不能静默吞掉（用户会以为单击失效）。
+                            if (granted) {
+                                runOneShot(null, settleMs = CONSENT_SETTLE_MS)
+                            } else {
+                                toast(R.string.float_ask_denied)
+                            }
                         }
                         is ScreenAdvisor.Event.TurnStarted -> ensureSplit()
                         // 与上一屏几乎相同：不展开面板，仅轻提示；flow 结束后
@@ -608,6 +676,25 @@ class FloatBallService : Service() {
         // 正文区挂载轻量转录视图：与主界面同一个「老参谋」会话的数据流。
         val transcript = TranscriptView(this)
         transcriptView = transcript
+        // P3 §九：行内「✓采纳 / 长按三档重写 / 记错了」接线（复制已在视图内完成）。
+        transcript.onAdopt = { index, _ ->
+            scope.launch {
+                runCatching { screenAdvisor.adoptSuggestion(index) }
+                    .onFailure { android.util.Log.e("FloatBallService", "adoptSuggestion failed", it) }
+            }
+        }
+        transcript.onRegenerate = { ordinal ->
+            runCatching {
+                val kind = ScreenAdvisor.CorrectionKind.entries.getOrNull(ordinal) ?: return@runCatching
+                screenAdvisor.regenerateSuggestionAsync(kind)
+            }
+        }
+        transcript.onCorrectMemory = { basis, correction ->
+            scope.launch {
+                runCatching { screenAdvisor.correctBasisMemory(basis, correction) }
+                    .onFailure { android.util.Log.e("FloatBallService", "correctBasisMemory failed", it) }
+            }
+        }
         panel.transcriptContainer.addView(
             transcript,
             FrameLayout.LayoutParams(
@@ -642,6 +729,11 @@ class FloatBallService : Service() {
             openProfileManager(screenAdvisor.activeContact.value?.contactId ?: -1L)
         }
         renderDirectionChip(panel.directionChip, screenAdvisor.direction.value)
+        FloatUi.renderStrategyStrip(
+            panel.strategyStrip,
+            screenAdvisor.missionUi.value,
+            strategyCallbacks,
+        )
         inputHandle?.refresh()
         // 打开分屏=用户开始阅读：未读冒泡立即消失；阅读期间的新回合实时可见，
         // 不再计未读（turnCompletions 收集侧以 split != null 抑制）。

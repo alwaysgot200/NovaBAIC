@@ -6,6 +6,8 @@
       "relationTypes": ["暧昧对象", "朋友"],
       "defaultTone": "buddy",
       "defaultIntents": ["spark_topic", "hold_warmth", "show_value"],
+      "pathKind": "pursue",
+      "group": "romance",
       "goalTemplates": [
         { "horizon": 3, "text": "和{name}走向稳定、自然的亲密关系；同时我成为{aspiration}的人" },
         { "horizon": 2, "text": "在{deadline}前完成一次自然的线下邀约（吃饭/看展），见面互动不冷场" }
@@ -46,11 +48,254 @@
       "taboos": ["查户口式连续提问", "深夜连续试探", "提前任/查岗", "弱联系阶段发起邀约"]
     },
     {
+      "code": "couple",
+      "label": "情侣/夫妻经营",
+      "relationTypes": ["恋人", "配偶"],
+      "defaultTone": "empathetic",
+      "defaultIntents": ["comfort_support", "hold_warmth"],
+      "pathKind": "maintain",
+      "group": "romance",
+      "goalTemplates": [
+        { "horizon": 3, "text": "和{name}保持长期稳定、彼此舒服的亲密关系，同时我成为{aspiration}的人" },
+        { "horizon": 2, "text": "在{deadline}前就{name}在意的那件事达成双方都能接受的相处约定" }
+      ],
+      "stages": [
+        {
+          "code": "daily",
+          "label": "日常经营",
+          "advanceSignals": ["主动分享日常", "回应关心"],
+          "missionHint": "保持日常关心与情绪回应，让对方感到被惦记"
+        },
+        {
+          "code": "cooling",
+          "label": "矛盾降温",
+          "advanceSignals": ["愿意停火", "主动转移话题"],
+          "missionHint": "不争对错、不翻旧账，先把情绪降下来"
+        },
+        {
+          "code": "repair",
+          "label": "修复重建",
+          "advanceSignals": ["冲突后愿意复盘", "主动道歉或示好"],
+          "missionHint": "就事论事复盘，承认自己那部分，给出具体改变"
+        },
+        {
+          "code": "cocommit",
+          "label": "共同规划",
+          "advanceSignals": ["一起讨论具体未来安排"],
+          "missionHint": "把约定落到具体安排，长期维护共同承诺"
+        }
+      ],
+      "retreatSignals": ["随你便", "你根本不懂我", "又开始了", "冷战"],
+      "taboos": ["翻旧账", "冷战试探", "拿别人对象比较", "在气头上做决定", "当众指责对方家庭"],
+      "topicBank": [
+        "一起吃过且对方喜欢的一家店",
+        "最近一次让对方开心的小事",
+        "对方最近在忙的工作/学习",
+        "周末一起做的一件低压力小事",
+        "共同朋友的近况（不八卦评价）",
+        "一部正在追的剧或一档播客",
+        "换季的健康提醒与作息",
+        "下次见面想吃的菜单"
+      ]
+    },
+    {
+      "code": "family",
+      "label": "父母/长辈沟通",
+      "relationTypes": ["父母", "长辈"],
+      "defaultTone": "warm",
+      "defaultIntents": ["comfort_support", "clarify_need"],
+      "pathKind": "maintain",
+      "group": "romance",
+      "goalTemplates": [
+        { "horizon": 3, "text": "和{name}保持亲疏有度的关系，既不让步人生选择也不伤亲情" },
+        { "horizon": 2, "text": "在{deadline}前让{name}接受/不再强推我在那件事上的决定" }
+      ],
+      "stages": [
+        {
+          "code": "greet",
+          "label": "日常问候",
+          "advanceSignals": ["主动问你近况", "不再只说教"],
+          "missionHint": "主动报平安、问近况，先维持沟通温度"
+        },
+        {
+          "code": "gap",
+          "label": "观念分歧",
+          "advanceSignals": ["愿意听你讲完一次", "没有立刻否决"],
+          "missionHint": "听完不反驳，先共情立场再讲自己的处境"
+        },
+        {
+          "code": "insist",
+          "label": "温和坚持",
+          "advanceSignals": ["态度软化", "主动转移话题示好"],
+          "missionHint": "态度温和但边界清楚，不赌气、不人身否定"
+        },
+        {
+          "code": "compromise",
+          "label": "各退一步",
+          "advanceSignals": ["提出折中方案", "不再强推"],
+          "missionHint": "给出双方都能下台阶的具体折中安排"
+        }
+      ],
+      "retreatSignals": ["你不懂", "白养你了", "以后别回来了", "我都是为你好"],
+      "taboos": ["顶撞式否定", "用「你们那套」贴标签", "金钱问题赌气失联", "在亲戚群里公开顶撞", "把伴侣/工作矛盾甩给长辈裁决"],
+      "topicBank": [
+        "报一句具体的平安：吃饭/天气/通勤",
+        "请教一道对方拿手的家常菜做法",
+        "家里老人的体检与作息近况",
+        "分享一条养生或防骗的实用信息",
+        "回忆一件小时候的家庭小事",
+        "节日/生日的具体问候与安排",
+        "家里需要添置或维修的小东西"
+      ]
+    },
+    {
+      "code": "workplace_superior",
+      "label": "与上级相处",
+      "relationTypes": ["直属上级", "老板"],
+      "defaultTone": "pro",
+      "defaultIntents": ["anchor_commit", "clarify_need"],
+      "pathKind": "maintain",
+      "group": "workplace",
+      "goalTemplates": [
+        { "horizon": 3, "text": "在{name}的团队中成为被倚重的人，同时成为{aspiration}的专业者" },
+        { "horizon": 2, "text": "在{deadline}前独立扛下一个被{name}认可的关键交付" }
+      ],
+      "stages": [
+        {
+          "code": "settle",
+          "label": "站稳脚跟",
+          "advanceSignals": ["交办事项按时回应", "主动汇报进展"],
+          "missionHint": "事事有回音，先把可靠性立住"
+        },
+        {
+          "code": "trust",
+          "label": "建立信任",
+          "advanceSignals": ["被安排独立任务", "私下征求你的意见"],
+          "missionHint": "带方案汇报，给选择题不给问答题"
+        },
+        {
+          "code": "delegated",
+          "label": "被授权挑大梁",
+          "advanceSignals": ["把关键事项交给你", "在他人面前肯定你"],
+          "missionHint": "接住授权，同步风险与里程碑"
+        },
+        {
+          "code": "promoted",
+          "label": "关键项目/晋升",
+          "advanceSignals": ["提名你负责新项目", "讨论晋升相关安排"],
+          "missionHint": "经营关键成果与可见度，长期承担更大职责"
+        }
+      ],
+      "retreatSignals": ["对你失望", "这事你别管了", "我让别人跟", "当众批评", "已读不回工作请示"],
+      "taboos": ["当众顶撞", "揽功推过", "未经请示越级汇报", "在同事前抱怨薪资/领导", "微信群里情绪化回复", "没给方案只抛问题"],
+      "topicBank": [
+        "本周关键事项的一句话进展",
+        "一个需要上级拍板的二选一",
+        "行业里一条相关的新动态",
+        "团队里一个值得肯定的具体人/事",
+        "下次汇报的时间与材料清单",
+        "上级最近关注的风险点跟进",
+        "项目复盘后的一条改进建议"
+      ]
+    },
+    {
+      "code": "colleague",
+      "label": "同事平级",
+      "relationTypes": ["同事", "平级协作方"],
+      "defaultTone": "buddy",
+      "defaultIntents": ["hold_warmth", "spark_topic"],
+      "pathKind": "maintain",
+      "group": "workplace",
+      "goalTemplates": [
+        { "horizon": 2, "text": "在{deadline}前和{name}形成稳定协作默契，关键事项上愿意主动配合我" }
+      ],
+      "stages": [
+        {
+          "code": "ice",
+          "label": "破冰",
+          "advanceSignals": ["工作之外搭话", "回应非工作话题"],
+          "missionHint": "从工作交集自然切入，不刻意讨好"
+        },
+        {
+          "code": "familiar",
+          "label": "熟络",
+          "advanceSignals": ["主动分享工作信息", "一起吃饭闲聊"],
+          "missionHint": "互换小信息小忙，建立熟人感"
+        },
+        {
+          "code": "mutual",
+          "label": "互助默契",
+          "advanceSignals": ["主动帮忙配合", "愿意替你补位"],
+          "missionHint": "先给价值再谈配合，边界清楚不越界"
+        },
+        {
+          "code": "ally",
+          "label": "关键盟友",
+          "advanceSignals": ["关键事提前通气", "公开场合支持你"],
+          "missionHint": "维护长期互信，关键事项彼此站台"
+        }
+      ],
+      "retreatSignals": ["甩锅", "这不是我的事", "你找领导吧", "划清界限"],
+      "taboos": ["交浅言深", "吐槽共同上级", "打听或泄露薪资", "把别人帮忙当义务", "工作群公开纠错让人下不来台", "代人做承诺"],
+      "topicBank": [
+        "一个双方都在跟的项目进展",
+        "好用的工具/模板分享",
+        "食堂/外卖/咖啡的轻松话题",
+        "下班后一场低门槛运动",
+        "行业活动或公开课信息",
+        "通勤与天气的日常寒暄",
+        "共同协作流程的一个小优化",
+        "对方最近忙完后的一句问候"
+      ]
+    },
+    {
+      "code": "job_hunt",
+      "label": "求职/面试/谈offer",
+      "relationTypes": ["HR", "猎头", "用人经理"],
+      "defaultTone": "pro",
+      "defaultIntents": ["clarify_need", "anchor_commit"],
+      "pathKind": "pursue",
+      "group": "workplace",
+      "goalTemplates": [
+        { "horizon": 2, "text": "在{deadline}前拿到{name}所在团队的正式 offer 且薪资不低于预期" }
+      ],
+      "stages": [
+        {
+          "code": "apply",
+          "label": "初筛沟通",
+          "advanceSignals": ["主动约面试时间", "问到岗时间"],
+          "missionHint": "简洁对齐岗位匹配点，争取面试机会"
+        },
+        {
+          "code": "interview",
+          "label": "面试推进",
+          "advanceSignals": ["进入下一轮面试", "沟通薪资预期"],
+          "missionHint": "用事实与成果说话，跟进不失分寸"
+        },
+        {
+          "code": "offer",
+          "label": "offer/薪资谈判",
+          "advanceSignals": ["进入谈薪", "发正式 offer"],
+          "missionHint": "基于市场价与自身筹码谈判，要书面确认"
+        },
+        {
+          "code": "onboard",
+          "label": "入职衔接",
+          "advanceSignals": ["确认入职日期"],
+          "missionHint": "确认入职材料与时间，体面收尾原单位"
+        }
+      ],
+      "retreatSignals": ["已招到合适的人", "岗位冻结", "流程暂停", "不回复跟进"],
+      "taboos": ["虚报薪资/履历", "群发感模板催进度", "在面试沟通中贬低前东家", "谈薪阶段下最后通牒", "未拿到 offer 先离职"]
+    },
+    {
       "code": "sales_b2b",
       "label": "B2B销售",
       "relationTypes": ["客户", "潜在客户"],
       "defaultTone": "pro",
       "defaultIntents": ["clarify_need", "handle_objection", "anchor_commit"],
+      "pathKind": "pursue",
+      "group": "business",
       "goalTemplates": [
         { "horizon": 2, "text": "推动{name}在{deadline}前完成签约/复购，关键障碍是{objection}" }
       ],
@@ -100,6 +345,289 @@
       ],
       "retreatSignals": ["不需要", "已选别家", "以后再说", "预算冻结"],
       "taboos": ["未确认预算前报价", "对已转意向客户继续强调痛点", "凭空改价或食言"]
+    },
+    {
+      "code": "sales_c",
+      "label": "C端销售/保险/微商",
+      "relationTypes": ["顾客", "微信客户"],
+      "defaultTone": "consult",
+      "defaultIntents": ["clarify_need", "handle_objection"],
+      "pathKind": "pursue",
+      "group": "business",
+      "goalTemplates": [
+        { "horizon": 2, "text": "在{deadline}前促成{name}完成首次购买并愿意保留沟通" }
+      ],
+      "stages": [
+        {
+          "code": "ice",
+          "label": "破冰加微",
+          "advanceSignals": ["通过好友后主动回应", "愿意说明情况"],
+          "missionHint": "先建立熟人感，不刷产品广告"
+        },
+        {
+          "code": "need",
+          "label": "需求唤醒",
+          "advanceSignals": ["主动讲自身情况", "说出困扰或目标"],
+          "missionHint": "用提问让对方说出真实需求，不先推销"
+        },
+        {
+          "code": "trust",
+          "label": "信任建立",
+          "advanceSignals": ["主动问价格", "问效果", "提出具体疑问"],
+          "missionHint": "晒真实案例、答疑问，用事实建立信任"
+        },
+        {
+          "code": "close",
+          "label": "促成",
+          "advanceSignals": ["答应小额定金", "答应试用", "确认付款方式"],
+          "missionHint": "给低门槛下一步，限时/限额要真实"
+        },
+        {
+          "code": "repurchase",
+          "label": "复购转介绍",
+          "advanceSignals": ["主动反馈效果", "提到朋友也需要"],
+          "missionHint": "做好售后跟进，自然引导复购与转介绍"
+        }
+      ],
+      "retreatSignals": ["不需要", "别发广告了", "已买别家", "再骚扰拉黑"],
+      "taboos": ["首日刷屏广告", "夸大功效/承诺收益", "群发话术不称呼", "对方婉拒后连续追问", "贬低用户现有选择", "未经同意拉群/推名片"]
+    },
+    {
+      "code": "vendor",
+      "label": "供应商/乙方管理",
+      "relationTypes": ["供应商", "乙方", "服务商"],
+      "defaultTone": "data",
+      "defaultIntents": ["anchor_commit", "handle_objection"],
+      "pathKind": "maintain",
+      "group": "business",
+      "goalTemplates": [
+        { "horizon": 2, "text": "在{deadline}前以不超预算的价格锁定{name}的合格交付并写入合同" }
+      ],
+      "stages": [
+        {
+          "code": "inquiry",
+          "label": "询价摸底",
+          "advanceSignals": ["主动给实价", "提供书面报价"],
+          "missionHint": "多家摸底，需求与验收标准先说清"
+        },
+        {
+          "code": "compare",
+          "label": "比价筛选",
+          "advanceSignals": ["给出账期方案", "接受关键条款谈判"],
+          "missionHint": "按统一口径比价，不露预算上限"
+        },
+        {
+          "code": "contract",
+          "label": "合同条款",
+          "advanceSignals": ["确认合同文本", "走完用印流程"],
+          "missionHint": "范围/验收/违约全部落到书面"
+        },
+        {
+          "code": "delivery",
+          "label": "交付验收",
+          "advanceSignals": ["按期交付里程碑", "主动提风险和备选"],
+          "missionHint": "按里程碑验收，变更留痕"
+        },
+        {
+          "code": "partnership",
+          "label": "长期合作",
+          "advanceSignals": ["主动提长期方案", "新需求优先找你"],
+          "missionHint": "稳定供应商池，互惠但保持备选"
+        }
+      ],
+      "retreatSignals": ["推诿延期", "做不了", "装死不回", "偷换材料/范围"],
+      "taboos": ["口头改需求不留痕", "压价超底线后又要求加量", "验收标准口头化", "在对方面前暴露预算上限", "情绪化威胁换供应商"],
+      "topicBank": [
+        "本季度排期与产能情况",
+        "原材料/行业价格的客观变化",
+        "双方对接流程的一处简化",
+        "一次成功验收的经验复用",
+        "下一个里程碑的时间确认",
+        "对方团队的人员变动对接",
+        "行业里共同客户的案例（不涉机密）"
+      ]
+    },
+    {
+      "code": "networking",
+      "label": "贵人/弱关系经营",
+      "relationTypes": ["行业前辈", "弱关系", "引荐人"],
+      "defaultTone": "warm",
+      "defaultIntents": ["hold_warmth", "spark_topic"],
+      "pathKind": "maintain",
+      "group": "business",
+      "goalTemplates": [
+        { "horizon": 2, "text": "在{deadline}前和{name}建立一次自然的互惠互动（我先提供价值），让对方记得我是谁" }
+      ],
+      "stages": [
+        {
+          "code": "added",
+          "label": "加好友破冰",
+          "advanceSignals": ["通过好友后有来有回", "回应自我介绍"],
+          "missionHint": "一句话说清自己是谁、为何加好友"
+        },
+        {
+          "code": "kept",
+          "label": "弱连接保持",
+          "advanceSignals": ["点赞评论之外的私聊", "接你的话茬"],
+          "missionHint": "低频高质量互动，先提供价值再谈需求"
+        },
+        {
+          "code": "exchange",
+          "label": "价值交换",
+          "advanceSignals": ["愿意帮忙引荐", "愿意解答问题", "主动分享对你有用的信息"],
+          "missionHint": "完成一次自然互惠，把引荐当人情而非承诺"
+        },
+        {
+          "code": "deep",
+          "label": "深度关系",
+          "advanceSignals": ["私下深聊", "主动约线下长谈"],
+          "missionHint": "经营长期信任，关键时能说得上话"
+        }
+      ],
+      "retreatSignals": ["不通过", "通过后零回应", "婉拒帮忙", "客气了", "再说"],
+      "taboos": ["加好友立刻有事相求", "只在要帮忙时出现", "群发祝福/砍一刀", "过度攀附套近乎", "把引荐当承诺"],
+      "topicBank": [
+        "对方最近一条朋友圈/动态的真诚回应",
+        "一篇与对方领域相关的好文章",
+        "行业会议或活动的信息互通",
+        "一个不要求回报的小忙或信息",
+        "共同认识的人的正面消息",
+        "节气/节日的个性化一句问候",
+        "自己最近做成的一件小事（轻描淡写）",
+        "对方之前提过的一件事的后续"
+      ]
+    },
+    {
+      "code": "adversarial",
+      "label": "人际冲突/对立方",
+      "relationTypes": ["冲突对方", "对立方"],
+      "defaultTone": "direct",
+      "defaultIntents": ["graceful_exit", "handle_objection"],
+      "pathKind": "defend",
+      "group": "conflict",
+      "goalTemplates": [
+        { "horizon": 3, "text": "在与{name}的冲突中守住利益与体面，不让冲突扩大化" },
+        { "horizon": 2, "text": "在{deadline}前把与{name}的争议落到书面结论或完成干净切割" }
+      ],
+      "stages": [
+        {
+          "code": "hold",
+          "label": "稳住不激化",
+          "advanceSignals": ["愿意停火", "沟通不再带情绪攻击"],
+          "missionHint": "不接情绪、不争输赢，先稳住局面"
+        },
+        {
+          "code": "clarify",
+          "label": "厘清事实",
+          "advanceSignals": ["认可部分事实", "接受核对证据"],
+          "missionHint": "固定证据、厘清事实，只谈可验证的内容"
+        },
+        {
+          "code": "boundary",
+          "label": "划清底线",
+          "advanceSignals": ["不再提过分要求", "愿意谈条件"],
+          "missionHint": "明确底线与后果，不露数字底牌"
+        },
+        {
+          "code": "resolve",
+          "label": "谈判/止损/切割",
+          "advanceSignals": ["接受书面方案", "确认切割安排"],
+          "missionHint": "落书面结论或干净切割，保留证据链"
+        }
+      ],
+      "retreatSignals": ["人身攻击", "威胁", "造谣扩散", "拒绝一切沟通", "拉第三方站队"],
+      "taboos": ["情绪对骂", "私下妥协不留记录", "翻旧账", "提前透露底牌与底线数字", "在共同社交圈公开冲突细节", "威胁式表态"]
+    },
+    {
+      "code": "complaint",
+      "label": "消费投诉/服务维权",
+      "relationTypes": ["商家客服", "平台", "服务商"],
+      "defaultTone": "direct",
+      "defaultIntents": ["clarify_need", "anchor_commit"],
+      "pathKind": "defend",
+      "group": "conflict",
+      "goalTemplates": [
+        { "horizon": 2, "text": "在{deadline}前推动{name}就我反映的问题给出可接受的书面解决方案并履行" }
+      ],
+      "stages": [
+        {
+          "code": "state",
+          "label": "陈述诉求",
+          "advanceSignals": ["客服受理", "要求提供账号/凭证"],
+          "missionHint": "事实+证据+明确诉求，一次说清不带情绪"
+        },
+        {
+          "code": "escalate",
+          "label": "升级施压",
+          "advanceSignals": ["客服升级", "主管介入回复"],
+          "missionHint": "按平台/监管渠道逐级升级，留全部记录"
+        },
+        {
+          "code": "settle",
+          "label": "协商方案",
+          "advanceSignals": ["主动给方案", "确认退款时效"],
+          "missionHint": "只认书面方案，金额与时效要明确"
+        },
+        {
+          "code": "close",
+          "label": "收尾确认",
+          "advanceSignals": ["退款到账", "出具书面承诺"],
+          "missionHint": "退款到账/书面承诺到手后再撤投诉"
+        }
+      ],
+      "retreatSignals": ["以最终解释权拒绝", "拖延不回复", "要求先撤诉再处理", "推诿给第三方"],
+      "taboos": ["辱骂客服个人", "未到账先撤投诉", "只发情绪不给事实和诉求", "接受无书面记录的口头承诺", "夸大事实虚构证据"]
+    },
+    {
+      "code": "group_general",
+      "label": "群聊/社群经营",
+      "relationTypes": ["group"],
+      "defaultTone": "warm",
+      "defaultIntents": ["hold_warmth", "credit_share", "spark_topic"],
+      "pathKind": "maintain",
+      "group": "social",
+      "goalTemplates": [
+        { "horizon": 3, "text": "在群里长期保持得体、稳定在场的形象，成为被大家信任和愿意@的人" },
+        { "horizon": 2, "text": "在{deadline}前与群里{name}等关键角色建立可私聊互助的互信关系" }
+      ],
+      "stages": [
+        {
+          "code": "g_show",
+          "label": "破冰露面",
+          "advanceSignals": ["有人回应你的发言", "@你回答问题"],
+          "missionHint": "先观察群规与话题节奏，用一次有信息量的自我介绍或回答露面"
+        },
+        {
+          "code": "g_present",
+          "label": "稳定在场",
+          "advanceSignals": ["你的话题有人接龙", "被拉进群内小范围讨论"],
+          "missionHint": "规律但不刷屏地贡献内容，接住别人的话茬"
+        },
+        {
+          "code": "g_trust",
+          "label": "关键人互信",
+          "advanceSignals": ["关键角色主动私聊你", "公开场合支持你的观点"],
+          "missionHint": "与关键角色先公后私建立互信，群里给台阶、私下深交流"
+        },
+        {
+          "code": "g_rep",
+          "label": "口碑沉淀",
+          "advanceSignals": ["遇事被@征求意见", "新成员被推荐来认识你"],
+          "missionHint": "持续输出靠谱内容与公道态度，经营长期口碑，不抢话不站台"
+        }
+      ],
+      "retreatSignals": ["群里被公开呛声", "发言无人回应超过一周", "被管理员警告或禁言", "被移出群"],
+      "taboos": ["把私聊内容发进群里", "公开纠正或反驳别人让人下不来台", "群里发广告/砍一刀/拉票", "@所有人刷屏或连发大段语音", "在群里吵架、站队、传谣", "未经允许拉人进群或推名片"],
+      "topicBank": [
+        "群主题相关的一条资讯或干货",
+        "一个真诚的提问（给大家接话空间）",
+        "回答新人反复问过的问题",
+        "群里发起的活动接龙与回应",
+        "感谢某位群友的具体帮助",
+        "节假日应景但不刷屏的一句祝福",
+        "分享与群主题相关的资源/文件",
+        "对热门公共话题的克制点评"
+      ]
     }
   ]
 }

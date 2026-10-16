@@ -45,12 +45,17 @@ import com.verlintas.baic2.R
  */
 internal object FloatUi {
 
-    const val BALL_SIZE_DP = 56
+    // 主球取桌面启动器图标（实测约 55dp）的 80%，视觉上不与 app 图标争大小。
+    const val BALL_SIZE_DP = 44
     const val MARGIN_DP = 8
 
-    /** 扇形子球：子球直径 / 轨道半径（子球中心距主球中心 = 2 倍主球直径）。 */
-    const val FAN_CHILD_DP = 46
-    const val FAN_ORBIT_DP = 2 * BALL_SIZE_DP // 112dp
+    /**
+     * 扇形子球：子球直径 / 轨道半径（子球中心距主球中心 = 1.5 倍主球直径）。
+     * 几何约束：6 球在 ±75° 内 30° 分度，轨道 66dp 时相邻球心间距
+     * 2×66×sin15°≈34dp，故子球取 32dp（相邻净距约 2dp，再大即重叠）。
+     */
+    const val FAN_CHILD_DP = 32
+    const val FAN_ORBIT_DP = 3 * BALL_SIZE_DP / 2 // 66dp
     const val FAN_EDGE_MARGIN_DP = 8
     const val FAN_STAGGER_MS = 30L
     const val FAN_ANIM_MS = 160L
@@ -87,10 +92,10 @@ internal object FloatUi {
     /** 可拖动的悬浮球；触摸手势由服务层绑定。窗口尺寸=视觉尺寸（中心即可点击）。 */
     fun buildBall(context: Context): BallView {
         val size = dp(context, BALL_SIZE_DP)
-        // 球内用 56dp 专用彩色扇标（24 视口、全实色、扇骨加粗）：与应用图标
-        // ic_logo_advisor 同形（白扇面/金柄/蓝骨/青星），但精细渐变版在这个
-        // 尺寸会光栅化成小白块，故用小尺寸重绘稿。40dp 居中，占球径约 70%。
-        val logoSize = dp(context, 40)
+        // 球内专用彩色扇标（48 视口、全实色）：与应用图标 ic_logo_advisor
+        // 同形（五羽尖白扇面/金柄/柔褶/青星），两外羽尖逼近圆盘描边
+        // （扇幅约占球径 95%）。42dp 居中，四边各留 1dp。
+        val logoSize = dp(context, 42)
         val disc = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -260,7 +265,7 @@ internal object FloatUi {
             val view = TextView(context).apply {
                 text = context.getString(item.labelRes)
                 setTextColor(Color.WHITE)
-                textSize = 11f
+                textSize = 10f
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
                 setShadowLayer(dp(context, 3).toFloat(), 0f, dp(context, 1).toFloat(), 0xCC000000.toInt())
@@ -523,6 +528,7 @@ internal object FloatUi {
         }
 
         val inputBar = buildInputBar(context, inputCallbacks)
+        val strategyStrip = buildStrategyStrip(context)
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -539,10 +545,11 @@ internal object FloatUi {
             addView(header)
             addView(divider(context))
             addView(statusBar)
+            addView(strategyStrip.root)
             addView(transcriptContainer)
             addView(inputBar)
         }
-        return SplitPanel(root, header, transcriptContainer, inputBar, statusBar, chip)
+        return SplitPanel(root, header, transcriptContainer, inputBar, statusBar, chip, strategyStrip)
     }
 
     /** 分屏面板句柄：服务层操作所需的句柄集合。 */
@@ -553,7 +560,350 @@ internal object FloatUi {
         val inputBar: LinearLayout,
         val statusBar: TextView,
         val directionChip: TextView,
+        val strategyStrip: StrategyStrip,
     )
+
+    /** 策略条回调（P2）：轻确认三键与任务令展开；P3：分叉提议两键 + reroute 三件。服务层接线，视图不带业务。 */
+    interface StrategyStripCallbacks {
+        fun onProvisionalYes(goalId: Long)
+        fun onProvisionalEdit(goalId: Long)
+        fun onProvisionalSkip(goalId: Long)
+        fun onMissionToggle()
+        fun onBranchAccept()
+        fun onBranchReject()
+        /** 点「路线不对？重规划」（只发起，绝不静默迁移）。 */
+        fun onReroute()
+        fun onRerouteAccept()
+        fun onRerouteReject()
+    }
+
+    /** 策略条视图句柄：planning / provisional / branch / reroute / mission 态，默认整条 GONE。 */
+    class StrategyStrip(
+        val root: LinearLayout,
+        val planningRow: TextView,
+        val provisionalBox: LinearLayout,
+        val provisionalQuestion: TextView,
+        val branchBox: LinearLayout,
+        val branchQuestion: TextView,
+        val rerouteBox: LinearLayout,
+        val rerouteQuestion: TextView,
+        val rerouteHintRow: TextView,
+        val missionBox: LinearLayout,
+        val missionHeader: LinearLayout,
+        val missionLine: TextView,
+        val missionChevron: TextView,
+        val missionDetail: LinearLayout,
+    ) {
+        /** 渲染时随轻确认问句写入的目标 id；非问句态置 null。 */
+        internal var pendingGoalId: Long? = null
+
+        /** 服务层接线的回调，每次渲染刷新。 */
+        internal var callbacksRef: StrategyStripCallbacks? = null
+    }
+
+    private fun buildStrategyStrip(context: Context): StrategyStrip {
+        fun stripText(size: Float, color: Int, bold: Boolean = false): TextView =
+            TextView(context).apply {
+                setTextColor(color)
+                textSize = size
+                if (bold) typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(context, 16), dp(context, 3), dp(context, 16), dp(context, 3))
+            }
+
+        fun stripButton(text: String, filled: Boolean): TextView =
+            TextView(context).apply {
+                this.text = text
+                setTextColor(if (filled) Color.WHITE else 0xCCFFFFFF.toInt())
+                textSize = 12.5f
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(context, 12).toFloat()
+                    setColor(if (filled) DIRECTION_CHIP_ON else 0x22FFFFFF)
+                }
+                setPadding(dp(context, 12), dp(context, 5), dp(context, 12), dp(context, 5))
+                isClickable = true
+                selectableBackground(this)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = dp(context, 8) }
+            }
+
+        val planningRow = stripText(12.5f, 0x99FFFFFF.toInt())
+        val provisionalQuestion = stripText(13f, 0xEEFFFFFF.toInt())
+        val yesButton = stripButton(context.getString(R.string.float_mission_yes), filled = true)
+        val editButton = stripButton(context.getString(R.string.float_mission_edit), filled = false)
+        val skipButton = stripButton(context.getString(R.string.float_mission_skip), filled = false)
+        val provisionalButtons = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 6))
+            addView(yesButton)
+            addView(editButton)
+            addView(skipButton)
+        }
+        val provisionalBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(provisionalQuestion)
+            addView(provisionalButtons)
+        }
+
+        // P3 分叉提议（branch 边永不自动移动，必须用户两键确认）。
+        val branchQuestion = stripText(13f, 0xEEFFFFFF.toInt())
+        val branchAccept = stripButton(context.getString(R.string.float_branch_accept), filled = true)
+        val branchReject = stripButton(context.getString(R.string.float_branch_reject), filled = false)
+        val branchButtons = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 6))
+            addView(branchAccept)
+            addView(branchReject)
+        }
+        val branchBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(branchQuestion)
+            addView(branchButtons)
+        }
+
+        // P3 reroute：待确认条（采用新路线/先不）。
+        val rerouteQuestion = stripText(13f, 0xEEFFFFFF.toInt())
+        val rerouteAccept = stripButton(context.getString(R.string.float_reroute_accept), filled = true)
+        val rerouteReject = stripButton(context.getString(R.string.float_reroute_reject), filled = false)
+        val rerouteButtons = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 6))
+            addView(rerouteAccept)
+            addView(rerouteReject)
+        }
+        val rerouteBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(rerouteQuestion)
+            addView(rerouteButtons)
+        }
+        // P3 reroute 入口行：连续受挫时出现，可与任务令并存。
+        val rerouteHintRow = stripText(12.5f, 0xFFFFD27D.toInt()).apply {
+            text = context.getString(R.string.float_reroute_hint)
+            setPadding(dp(context, 16), dp(context, 4), dp(context, 16), dp(context, 6))
+            visibility = View.GONE
+            isClickable = true
+            selectableBackground(this)
+        }
+
+        val missionLine = stripText(13f, 0xEEFFFFFF.toInt(), bold = true).apply {
+            setSingleLine(true)
+            ellipsize = TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val missionChevron = stripText(12f, 0x80FFFFFF.toInt()).apply {
+            text = "▸"
+        }
+        val missionHeader = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(context, 12), 0, dp(context, 12), 0)
+            addView(missionLine)
+            addView(missionChevron)
+        }
+        val missionDetail = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(dp(context, 16), 0, dp(context, 16), dp(context, 6))
+        }
+        val missionBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(missionHeader)
+            addView(missionDetail)
+        }
+
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            background = GradientDrawable().apply { setColor(0x14FFFFFF) }
+            addView(planningRow)
+            addView(provisionalBox)
+            addView(branchBox)
+            addView(rerouteBox)
+            addView(missionBox)
+            addView(rerouteHintRow)
+        }
+        val strip = StrategyStrip(
+            root = root,
+            planningRow = planningRow,
+            provisionalBox = provisionalBox,
+            provisionalQuestion = provisionalQuestion,
+            branchBox = branchBox,
+            branchQuestion = branchQuestion,
+            rerouteBox = rerouteBox,
+            rerouteQuestion = rerouteQuestion,
+            rerouteHintRow = rerouteHintRow,
+            missionBox = missionBox,
+            missionHeader = missionHeader,
+            missionLine = missionLine,
+            missionChevron = missionChevron,
+            missionDetail = missionDetail,
+        )
+        yesButton.setOnClickListener {
+            strip.pendingGoalId?.let { strip.callbacksRef?.onProvisionalYes(it) }
+        }
+        editButton.setOnClickListener {
+            strip.pendingGoalId?.let { strip.callbacksRef?.onProvisionalEdit(it) }
+        }
+        skipButton.setOnClickListener {
+            strip.pendingGoalId?.let { strip.callbacksRef?.onProvisionalSkip(it) }
+        }
+        branchAccept.setOnClickListener { strip.callbacksRef?.onBranchAccept() }
+        branchReject.setOnClickListener { strip.callbacksRef?.onBranchReject() }
+        rerouteAccept.setOnClickListener { strip.callbacksRef?.onRerouteAccept() }
+        rerouteReject.setOnClickListener { strip.callbacksRef?.onRerouteReject() }
+        rerouteHintRow.setOnClickListener { strip.callbacksRef?.onReroute() }
+        missionHeader.setOnClickListener { strip.callbacksRef?.onMissionToggle() }
+        return strip
+    }
+
+    /**
+     * 按 [ScreenAdvisor.MissionUiState] 渲染策略条：planning → 轻确认问句 → P3 分叉提议 →
+     * P3 reroute 待确认 → 任务令；皆无则整条隐藏。reroute 入口行可与任务令并存。
+     */
+    fun renderStrategyStrip(
+        strip: StrategyStrip,
+        state: ScreenAdvisor.MissionUiState,
+        callbacks: StrategyStripCallbacks,
+    ) {
+        val context = strip.root.context
+        strip.callbacksRef = callbacks
+        val mainVisible = when {
+            state.planning -> {
+                strip.planningRow.visibility = View.VISIBLE
+                strip.planningRow.text = context.getString(R.string.float_mission_planning)
+                strip.provisionalBox.visibility = View.GONE
+                strip.branchBox.visibility = View.GONE
+                strip.rerouteBox.visibility = View.GONE
+                strip.missionBox.visibility = View.GONE
+                true
+            }
+
+            state.provisional != null -> {
+                strip.pendingGoalId = state.provisional.goalId
+                strip.planningRow.visibility = View.GONE
+                strip.provisionalBox.visibility = View.VISIBLE
+                strip.branchBox.visibility = View.GONE
+                strip.rerouteBox.visibility = View.GONE
+                strip.missionBox.visibility = View.GONE
+                strip.provisionalQuestion.text = context.getString(
+                    R.string.float_mission_provisional_q,
+                    state.provisional.title,
+                )
+                true
+            }
+
+            state.pendingBranch != null -> {
+                strip.pendingGoalId = null
+                strip.planningRow.visibility = View.GONE
+                strip.provisionalBox.visibility = View.GONE
+                strip.branchBox.visibility = View.VISIBLE
+                strip.rerouteBox.visibility = View.GONE
+                strip.missionBox.visibility = View.GONE
+                strip.branchQuestion.text = context.getString(
+                    R.string.float_branch_offer,
+                    state.pendingBranch.targetLabel,
+                )
+                true
+            }
+
+            state.pendingReroute != null -> {
+                strip.pendingGoalId = null
+                strip.planningRow.visibility = View.GONE
+                strip.provisionalBox.visibility = View.GONE
+                strip.branchBox.visibility = View.GONE
+                strip.rerouteBox.visibility = View.VISIBLE
+                strip.missionBox.visibility = View.GONE
+                strip.rerouteQuestion.text = context.getString(
+                    R.string.float_reroute_offer,
+                    state.pendingReroute.targetLabel,
+                )
+                true
+            }
+
+            state.missionLine != null -> {
+                strip.pendingGoalId = null
+                strip.planningRow.visibility = View.GONE
+                strip.provisionalBox.visibility = View.GONE
+                strip.branchBox.visibility = View.GONE
+                strip.rerouteBox.visibility = View.GONE
+                strip.missionBox.visibility = View.VISIBLE
+                strip.missionLine.text = context.getString(
+                    R.string.float_mission_line_prefix,
+                ) + "：" + state.missionLine
+                strip.missionChevron.text = if (state.expanded) "▾" else "▸"
+                renderMissionDetail(strip, state)
+                true
+            }
+
+            else -> {
+                strip.pendingGoalId = null
+                strip.planningRow.visibility = View.GONE
+                strip.provisionalBox.visibility = View.GONE
+                strip.branchBox.visibility = View.GONE
+                strip.rerouteBox.visibility = View.GONE
+                strip.missionBox.visibility = View.GONE
+                false
+            }
+        }
+        // reroute 入口行：独立于主态（任务令在时也能点）；待确认条/生成中切忙文案。
+        val hintVisible = state.pendingReroute == null && (state.rerouteHint || state.rerouteBusy)
+        strip.rerouteHintRow.visibility = if (hintVisible) View.VISIBLE else View.GONE
+        strip.rerouteHintRow.text = context.getString(
+            if (state.rerouteBusy) R.string.float_reroute_busy else R.string.float_reroute_hint,
+        )
+        strip.rerouteHintRow.isClickable = !state.rerouteBusy
+        strip.root.visibility = if (mainVisible || hintVisible) View.VISIBLE else View.GONE
+    }
+
+    private fun renderMissionDetail(strip: StrategyStrip, state: ScreenAdvisor.MissionUiState) {
+        val context = strip.root.context
+        val detail = state.missionDetail
+        strip.missionDetail.visibility = if (state.expanded && detail != null) View.VISIBLE else View.GONE
+        strip.missionDetail.removeAllViews()
+        if (detail == null || !state.expanded) return
+
+        fun detailLabel(resId: Int) {
+            strip.missionDetail.addView(
+                TextView(context).apply {
+                    text = context.getString(resId)
+                    setTextColor(0xFF9DB8F0.toInt())
+                    textSize = 12f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(0, dp(context, 4), 0, dp(context, 1))
+                },
+            )
+        }
+
+        fun detailLine(text: String, danger: Boolean = false) {
+            strip.missionDetail.addView(
+                TextView(context).apply {
+                    this.text = "· $text"
+                    setTextColor(if (danger) MENU_DANGER else 0xCCFFFFFF.toInt())
+                    textSize = 12.5f
+                    setSingleLine(false)
+                },
+            )
+        }
+
+        if (detail.actions.isNotEmpty()) {
+            detailLabel(R.string.float_mission_actions)
+            detail.actions.forEach { detailLine(it) }
+        }
+        if (detail.forbidden.isNotEmpty()) {
+            detailLabel(R.string.float_mission_forbidden)
+            detail.forbidden.forEach { detailLine(it, danger = true) }
+        }
+        if (detail.signalsToWatch.isNotEmpty()) {
+            detailLabel(R.string.float_mission_signals)
+            detail.signalsToWatch.forEach { detailLine(it) }
+        }
+        if (detail.successWhen.isNotBlank()) {
+            detailLabel(R.string.float_mission_success)
+            detailLine(detail.successWhen)
+        }
+    }
 
     /** 方向 chip 选中态渲染：[selectedLabel] 为 null 显示未设置态。 */
     fun bindDirectionChip(chip: TextView, selectedLabel: String?) {

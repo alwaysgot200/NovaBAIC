@@ -206,6 +206,14 @@ class ContactRepository @Inject constructor(
     suspend fun setLastExtractAt(conversationId: Long, at: Long) =
         db.sessionBindingDao().setLastExtractAt(conversationId, at)
 
+    /** P3 §12.2：对方新来信时间（24h 时序信号）；仅绑定会话有行，共享会话静默无效。 */
+    suspend fun setLastIncomingAt(conversationId: Long, at: Long) =
+        db.sessionBindingDao().setLastIncomingAt(conversationId, at)
+
+    /** P3 §12.2：读对方最后来信时间；无绑定行/从未更新均返回 null（无信号，不臆测）。 */
+    suspend fun lastIncomingAt(conversationId: Long): Long? =
+        db.sessionBindingDao().find(conversationId)?.lastIncomingAt
+
     suspend fun bindingsForContact(contactId: Long): List<SessionBindingEntity> =
         db.sessionBindingDao().listForContact(contactId)
 

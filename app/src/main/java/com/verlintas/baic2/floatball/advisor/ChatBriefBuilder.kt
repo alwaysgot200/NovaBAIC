@@ -21,8 +21,12 @@
 package com.verlintas.baic2.floatball.advisor
 
 import com.verlintas.baic2.floatball.IncomingCue
+import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_GROUP
 import com.verlintas.baic2.floatball.advisor.data.MY_PERSONA_CONTACT_ID
 import com.verlintas.baic2.floatball.advisor.data.PersonaFieldEntity
+import com.verlintas.baic2.floatball.advisor.strategy.BasisKeywords
+import com.verlintas.baic2.floatball.advisor.strategy.PersonaCandidate
+import com.verlintas.baic2.floatball.advisor.strategy.PersonaSelector
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -50,11 +54,13 @@ class ChatBriefBuilder @Inject constructor(
      * @param section 业务目标 + 双方人设 + 话术段（尾部带输出要求）；全无内容时为 null。
      * @param styleSection 【说话方式】段（风格卡三级回退）；无卡且无旧 style 时为 null。
      * @param curatedTexts 已确认目标/画像显示值（去重指纹原料，无标签前缀）。
+     * @param basis P3 §九：本回合实际引用依据的 ≤3 个短关键词（气泡「依据」小字用）。
      */
     data class Brief(
         val section: String?,
         val styleSection: String?,
         val curatedTexts: List<String>,
+        val basis: List<String> = emptyList(),
     )
 
     /**
@@ -62,11 +68,23 @@ class ChatBriefBuilder @Inject constructor(
      * @param latestScreenText 当前屏正文（增量优先），来信提取失败时作为兜底 query。
      * @param goalOverride 联系人业务目标（调用方已从 ContactRef 取到时传入，
      *   保证话术 query 的目标关键词与召回收窄一致；null 时读档案 goal）。
+     * @param stageCode 当前场景站码（P2）：风格卡意图按站过滤；null=不过滤（P1 行为）。
+     * @param packStageCodes 当前包全部站码（P2 跨包门控口径，见 [StyleResolver.render]）。
+     * @param suppressGoal true=策略体系已有生效 L2，抑制旧【本次聊天的业务目标】行
+     *   （L2 标题已由策略段呈现，避免重复）；其余人设/话术段不受影响。
+     * @param relevanceSignals P3 当前站推进/退缩信号原文：人设裁剪时弱关联字段优先。
+     * @param pathKind P3 当前场景路径（pursue/maintain/defend）：意图按 pathKind 门控；
+     *   null=无场景，不做 pathKind 过滤。
      */
     suspend fun build(
         contactId: Long,
         latestScreenText: String,
         goalOverride: String? = null,
+        stageCode: String? = null,
+        packStageCodes: Set<String>? = null,
+        suppressGoal: Boolean = false,
+        relevanceSignals: Set<String> = emptySet(),
+        pathKind: String? = null,
     ): Brief? {
         if (contactId == MY_PERSONA_CONTACT_ID) return null
         val profile = contacts.profile(contactId) ?: return null
@@ -75,12 +93,27 @@ class ChatBriefBuilder @Inject constructor(
         val goal = (goalOverride ?: profile.goal)?.trim().orEmpty()
         val myValues = contacts.myPersona().filter { it.confirmed }
         val theirValues = contacts.fields(contactId).filter { it.confirmed }
-        val myLines = renderPersona(schema.myFields, myValues)
-        val theirLines = renderPersona(schema.theirFields, theirValues)
+        val myRender = renderPersona(
+            schema.fieldsFor("my", profile.contactType),
+            myValues,
+            relevanceSignals,
+        )
+        val theirRender = renderPersona(
+            schema.fieldsFor("their", profile.contactType),
+            theirValues,
+            relevanceSignals,
+        )
+        val myLines = myRender.first
+        val theirLines = theirRender.first
 
-        // 说话方式：联系人卡 → 全局卡 → v3 style 自由文本兜底；P1 stageCode=null（不过滤意图）。
-        val styleSection = StyleResolver.render(styleCards.cardFor(contactId), styleAssets.playbook())
-            ?: StyleResolver.renderLegacy(profile.style)
+        // 说话方式：联系人卡 → 全局卡 → v3 style 自由文本兜底；P2 传真实站码做意图过滤。
+        val styleSection = StyleResolver.render(
+            card = styleCards.cardFor(contactId),
+            playbook = styleAssets.playbook(),
+            stageCode = stageCode,
+            packStageCodes = packStageCodes,
+            pathKind = pathKind,
+        ) ?: StyleResolver.renderLegacy(profile.style)
 
         // v3 §6.2：话术 query = 对方最新发言 + 目标关键词；来信提取失败
         // （文章等非聊天界面）回退整屏，维持原行为，质量不回退。
@@ -96,9 +129,17 @@ class ChatBriefBuilder @Inject constructor(
         }
 
         val sections = buildList {
-            if (goal.isNotEmpty()) add(SECTION_GOAL to goal)
+            if (goal.isNotEmpty() && !suppressGoal) add(SECTION_GOAL to goal)
             if (myLines.isNotEmpty()) add(SECTION_MY to myLines.joinToString("\n"))
-            if (theirLines.isNotEmpty()) add(SECTION_THEIR to theirLines.joinToString("\n"))
+            if (theirLines.isNotEmpty()) {
+                // P3：群=单一对方实体，人设段标题切换为群口径，避免模型按私聊语境作答。
+                val theirTitle = if (profile.contactType == CONTACT_TYPE_GROUP) {
+                    SECTION_GROUP
+                } else {
+                    SECTION_THEIR
+                }
+                add(theirTitle to theirLines.joinToString("\n"))
+            }
             if (playbookLines.isNotEmpty()) {
                 add(SECTION_PLAYBOOKS to playbookLines.joinToString("\n"))
             }
@@ -112,31 +153,47 @@ class ChatBriefBuilder @Inject constructor(
             }
             append("\n\n").append(OUTPUT_REQUIREMENTS)
         }
+        val curated = collectCurated(goal, myRender.second, theirRender.second)
         return Brief(
             section = section,
             styleSection = styleSection,
-            curatedTexts = collectCurated(goal, myValues, theirValues),
+            curatedTexts = curated,
+            basis = BasisKeywords.from(curated),
         )
     }
 
     /**
-     * 按字段目录顺序渲染「标签: 值」，空值/未知字段自动跳过。
-     * 存储 code/`~x` 一律转显示文本；enum 选项带 impl 或字段带 implTpl 时
-     * 行尾追加行为暗示短句（方案 §6.1）。
+     * P3 §十一：按字段目录顺序构造候选 → [PersonaSelector] 裁剪（禁忌/红线永不裁、
+     * 信号弱关联优先、salience/updatedAt 排序、每侧 ≤ [PersonaSelector.DEFAULT_LIMIT]）。
+     * 存储 code/`~x` 一律转显示文本；超 staleAfterDays 的行追加时效措辞；
+     * enum 选项带 impl 或字段带 implTpl 时行尾追加行为暗示短句（方案 §6.1）。
+     *
+     * @return (渲染行, 选中的字段实体——供指纹去重只覆盖实际进提示词的值)。
      */
     private fun renderPersona(
         defs: List<PersonaFieldDef>,
         values: List<PersonaFieldEntity>,
-    ): List<String> {
+        signals: Set<String>,
+    ): Pair<List<String>, List<PersonaFieldEntity>> {
         val byKey = values.associateBy { it.field }
-        return defs.mapNotNull { def ->
+        val candidates = defs.mapNotNull { def ->
             val entity = byKey[def.key] ?: return@mapNotNull null
             val displayed = PersonaValueCodes.displayValue(def, entity.value).trim()
             if (displayed.isEmpty()) return@mapNotNull null
-            val annotation = annotationFor(def, entity.value, displayed)
-            val suffix = annotation?.takeIf { it.isNotBlank() }?.let { "（$it）" }.orEmpty()
-            "${def.label}: $displayed$suffix"
+            PersonaCandidate(def, entity, displayed)
         }
+        val selected = PersonaSelector.select(candidates, signals)
+        val lines = selected.map { item ->
+            val c = item.candidate
+            val annotation = annotationFor(c.def, c.entity.value, c.displayed)
+            val noteParts = buildList {
+                annotation?.takeIf { it.isNotBlank() }?.let(::add)
+                if (item.stale) add(PersonaSelector.STALE_NOTE)
+            }
+            val suffix = noteParts.takeIf { it.isNotEmpty() }?.joinToString("；")?.let { "（$it）" }.orEmpty()
+            "${c.def.label}: ${c.displayed}$suffix"
+        }
+        return lines to selected.map { it.candidate.entity }
     }
 
     private fun annotationFor(def: PersonaFieldDef, stored: String, displayed: String): String? {
@@ -188,6 +245,7 @@ class ChatBriefBuilder @Inject constructor(
         const val SECTION_GOAL = "【本次聊天的业务目标】"
         const val SECTION_MY = "【我的人设】"
         const val SECTION_THEIR = "【对方的人设】"
+        const val SECTION_GROUP = "【群的人设】（群=一个整体对象，回复语境是群公共场合）"
         const val SECTION_PLAYBOOKS = "【可参考的话术】（结合当前场景选用，不要照搬）"
 
         const val OUTPUT_REQUIREMENTS =

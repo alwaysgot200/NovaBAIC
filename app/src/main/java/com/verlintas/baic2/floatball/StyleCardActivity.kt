@@ -78,6 +78,7 @@ import com.verlintas.baic2.floatball.advisor.StyleResolver
 import com.verlintas.baic2.floatball.advisor.data.STYLE_SCOPE_CONTACT
 import com.verlintas.baic2.floatball.advisor.data.STYLE_SCOPE_MY_DEFAULT
 import com.verlintas.baic2.floatball.advisor.data.StyleCardEntity
+import com.verlintas.baic2.floatball.advisor.strategy.StyleNoteRules
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -162,6 +163,13 @@ private fun StyleCardScreen(contactId: Long, onClose: () -> Unit) {
     val playbook = assets.playbook()
     val packs = assets.scenarioPacks().packs
 
+    // P3 §八：观察已保存的卡，customNote 编译确认条（compiling/ready/failed）由 DB 行驱动。
+    val savedCardFlow = remember(contactId, isContact) {
+        if (isContact) styleCards.observeContactCard(contactId) else styleCards.observeDefaultCard()
+    }
+    val savedCard by savedCardFlow.collectAsStateWithLifecycle(initialValue = null)
+    val failedNoteIds by styleCards.noteCompileFailed.collectAsStateWithLifecycle()
+
     var loaded by remember { mutableStateOf(false) }
     var contactName by remember { mutableStateOf("") }
     var tone by remember { mutableStateOf<String?>(null) }
@@ -227,6 +235,37 @@ private fun StyleCardScreen(contactId: Long, onClose: () -> Unit) {
                         scenarioLabel = scenarioLabel
                             ?: stringResource(R.string.float_scenario_none),
                         onClick = { scenarioMenuOpen = true },
+                    )
+                }
+
+                // P3 §八：含 customNote 的卡保存后为待确认草稿，确认前整卡不进提示词。
+                val draftCard = savedCard
+                if (draftCard != null && !draftCard.confirmed && !draftCard.customNote.isNullOrBlank()) {
+                    CustomNoteDraftBar(
+                        card = draftCard,
+                        failed = draftCard.id in failedNoteIds,
+                        onAdopt = {
+                            scope.launch {
+                                styleCards.confirmCompiled(draftCard.id)
+                                android.widget.Toast.makeText(
+                                    context,
+                                    context.getString(R.string.float_style_note_adopted),
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
+                        onRetry = { styleCards.recompileNote(draftCard.id) },
+                        onDiscard = {
+                            scope.launch {
+                                styleCards.discardCustomNote(draftCard.id)
+                                note = ""
+                                android.widget.Toast.makeText(
+                                    context,
+                                    context.getString(R.string.float_style_note_discarded),
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
                     )
                 }
 
@@ -324,7 +363,9 @@ private fun StyleCardScreen(contactId: Long, onClose: () -> Unit) {
                                     context.getString(R.string.float_style_saved),
                                     android.widget.Toast.LENGTH_SHORT,
                                 ).show()
-                                onClose()
+                                // P3 §八：有手写补充时留在本页，等慢车道编译出草稿供确认；
+                                // 纯选项组合即时生效，直接关闭。
+                                if (note.trim().isEmpty()) onClose()
                             }
                         }
                     ) { Text(stringResource(R.string.float_style_save)) }
@@ -343,15 +384,27 @@ private fun StyleCardScreen(contactId: Long, onClose: () -> Unit) {
             onDismissRequest = { scenarioMenuOpen = false },
             title = { Text(stringResource(R.string.float_scenario_title)) },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     ScenarioDialogRow(stringResource(R.string.float_scenario_none)) {
                         scenario = null
                         scenarioMenuOpen = false
                     }
-                    packs.forEach { pack ->
-                        ScenarioDialogRow(pack.label) {
-                            pendingPack = pack.code
-                            scenarioMenuOpen = false
+                    // 12 个场景包按四组分段（与目标页共用 SCENARIO_GROUPS 顺序）。
+                    SCENARIO_GROUPS.forEach { (group, labelRes) ->
+                        val groupPacks = packs.filter { it.group == group }
+                        if (groupPacks.isNotEmpty()) {
+                            Text(
+                                text = stringResource(labelRes),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                            )
+                            groupPacks.forEach { pack ->
+                                ScenarioDialogRow(pack.label) {
+                                    pendingPack = pack.code
+                                    scenarioMenuOpen = false
+                                }
+                            }
                         }
                     }
                 }
@@ -431,6 +484,90 @@ private fun ScenarioCard(scenarioLabel: String, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * P3 §八 customNote 编译确认条：compiling（转圈文字）/ failed（重试+放弃）/
+ * ready（do/dont 预览 + 采用/重新理解/放弃）。草稿期间整卡不进提示词。
+ */
+@Composable
+private fun CustomNoteDraftBar(
+    card: StyleCardEntity,
+    failed: Boolean,
+    onAdopt: () -> Unit,
+    onRetry: () -> Unit,
+    onDiscard: () -> Unit,
+) {
+    val compiled = remember(card.compiledCustomJson) {
+        card.compiledCustomJson?.let { StyleNoteRules.parse(it) }
+    }
+    Surface(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            when {
+                compiled != null -> {
+                    Text(
+                        text = stringResource(R.string.float_style_note_ask),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (compiled.dos.isNotEmpty()) {
+                        Text(
+                            text = stringResource(
+                                R.string.float_style_note_do,
+                                compiled.dos.joinToString("；"),
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    if (compiled.dont.isNotEmpty()) {
+                        Text(
+                            text = stringResource(
+                                R.string.float_style_note_dont,
+                                compiled.dont.joinToString("；"),
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
+                failed -> {
+                    Text(
+                        text = stringResource(R.string.float_style_note_failed),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                else -> {
+                    Text(
+                        text = stringResource(R.string.float_style_note_compiling),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 10.dp),
+            ) {
+                if (compiled != null) {
+                    Button(onClick = onAdopt) {
+                        Text(stringResource(R.string.float_style_note_adopt))
+                    }
+                }
+                OutlinedButton(onClick = onRetry) {
+                    Text(stringResource(R.string.float_style_note_retry))
+                }
+                OutlinedButton(onClick = onDiscard) {
+                    Text(stringResource(R.string.float_style_note_discard))
+                }
+            }
         }
     }
 }

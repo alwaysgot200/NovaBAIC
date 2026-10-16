@@ -1,5 +1,11 @@
 # P1 风格行为化 + 场景包 实施计划（细化版）
 
+> **📌 状态：已实施完成（2026-10-15，覆盖安装冒烟通过）。本文是当时的实施记录，不再代表待办。**
+> **架构事实与数字以总方案现状章节为准：
+> [`docs/2026-10-15-智能优化增强的聊天策略方案.md`](../../docs/2026-10-15-智能优化增强的聊天策略方案.md)。**
+> **阅读本文时须知（后续 P2 已改变的口径，见文末「实施后勘误」）：场景包已从 2 个扩至 12 个四组；
+> 灰度门不再是 P2 开工硬门（总方案决议 #5）；场景选择器已按四组分段。**
+>
 > 依据：`docs/2026-10-15-智能优化增强的聊天策略方案.md` §6.1–6.4、§7、§8.1、§10.2、§13 P1、§14 评审决议 #4。
 > 铁律：零上游模块改动（仅白名单 Manifest/strings.xml 追加）；新代码进 app 模块 floatball 包；GPL 头；不 commit。
 > 本文在已批准粗方案基础上细化四块：**资产逐字内容 / UI 交互 / 数据与迁移 / 提示词契约**。
@@ -509,6 +515,7 @@ ProfileMemorySync 改动点：`syncMyPersonaField` 与 `syncTheirField` 渲染 v
    - 发起一次参谋回合：分屏回答符合所选基调与意图（人工观感），logcat 无 FATAL；
    - 「恢复跟随默认风格」后副行文案正确。
 5. 灰度门（交付后人工）：≥7 天 / ≥50 真实回合 do/dont 符合率 ≥85%，达标才启动 P2。
+   〔2026-10-16 注：此门后经决议 #5 改判——P2 已不切片全量实施，本门转为合并试用期持续观察项，见文末勘误 2〕
 
 ## 九、风险与对策
 - 小模型不按 label 选值：提示词约束 + 落库归一兜底，自造值走 `~` 通道不丢。
@@ -516,3 +523,26 @@ ProfileMemorySync 改动点：`syncMyPersonaField` 与 `syncTheirField` 渲染 v
 - 显示裸 code：四口径统一走 PersonaValueCodes，单测覆盖；未命中映射回显原值不崩。
 - Room 校验失败：严格按 v3 列序追加新列、MIGRATION 与实体定义逐列对照；KSP 缓存损坏按教训 5 清理。
 - 场景误覆盖已编辑风格：切换场景只改内存 state 且有确认对话框，保存才落库。
+
+---
+
+## 实施后勘误（2026-10-16 补，以总方案与代码为准）
+
+本节列出 P1 完工后、P2 实施造成的口径变化。**P1 当期交付物（8 基调 10 意图、style_cards、
+DB v3→v4、schema v2 + label→code 惰性迁移、StyleCardActivity）与本文一致，未被推翻。**
+
+1. **场景包 2 → 12**：P2 把 `scenario_packs.json` 扩到 12 包、分四组
+   （romance/workplace/business/conflict），每包新增 `pathKind`（pursue/maintain/defend）
+   与 `group` 元数据；本文 §2.2 的两包 JSON 是 P1 历史内容，完整 12 包清单以总方案 §6.4 与
+   资产文件为准。§4.1 风格页场景下拉项（"不套用 / dating / sales_b2b"）已被四组分段选择器取代
+   （StyleCardActivity 与新建目标对话框共用）。
+2. **灰度门改性质**：本文 §八.5「≥7 天 / ≥50 回合 do/dont 符合率 ≥85% 才启动 P2」原定是
+   P2 开工硬门；2026-10-15 评审拍板 **P2 不切片全量实施**（总方案决议 #5），该门转为
+   P1/P2 合并试用期的持续观察项，不再阻断过 P2。
+3. **DB 版本**：本文的 v3→v4（仅 style_cards + scenarioCode）是正确历史；P2 已继续
+   v4→v5（goals/goal_decomps/stage_states/strategy_cards/talk_missions 五表 +
+   contact_profiles.activeCardId）。当前版本 = **5**。
+4. **fitStages 调用口径**：本文约定「P1 恒传 stageCode=null」；P2 起传真实 stageCode，
+   并增加跨包兼容规则（意图从未对本包声明门控时全站点放行，见总方案 §7）。
+5. **customNote 行为化编译仍未做**：维持本文边界（compiledCustomJson 恒 null、原文一行注入），
+   该确认流随 P3 交付。

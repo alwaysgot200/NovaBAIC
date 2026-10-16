@@ -83,6 +83,9 @@ interface ContactProfileDao {
 
     @Query("UPDATE contact_profiles SET scenarioCode = :code, updatedAt = :now WHERE id = :id")
     suspend fun setScenario(id: Long, code: String?, now: Long)
+
+    @Query("UPDATE contact_profiles SET activeCardId = :cardId, updatedAt = :now WHERE id = :id")
+    suspend fun setActiveCard(id: Long, cardId: Long?, now: Long)
 }
 
 /** 说话风格卡（v4）：全局卡 (my_default,0) 与按人卡 (contact,contactId) 各至多一行。 */
@@ -97,6 +100,27 @@ interface StyleCardDao {
 
     @Query("SELECT * FROM style_cards WHERE scope = :scope AND contactId = :contactId")
     fun observe(scope: String, contactId: Long): Flow<StyleCardEntity?>
+
+    /** P3 §八：customNote 编译结果写回为待确认草稿（confirmed=0）。 */
+    @Query(
+        "UPDATE style_cards SET compiledCustomJson = :json, confirmed = 0, updatedAt = :now " +
+            "WHERE id = :id",
+    )
+    suspend fun setCompiledDraft(id: Long, json: String, now: Long)
+
+    /** P3 §八：用户确认编译结果，整卡生效。 */
+    @Query("UPDATE style_cards SET confirmed = 1, updatedAt = :now WHERE id = :id")
+    suspend fun confirmCard(id: Long, now: Long)
+
+    /** P3 §八：放弃 customNote（同时清旧编译），纯选项组合即时生效。 */
+    @Query(
+        "UPDATE style_cards SET customNote = NULL, compiledCustomJson = NULL, confirmed = 1, " +
+            "updatedAt = :now WHERE id = :id",
+    )
+    suspend fun clearCustomNote(id: Long, now: Long)
+
+    @Query("SELECT * FROM style_cards WHERE id = :id")
+    suspend fun findById(id: Long): StyleCardEntity?
 
     @Query("DELETE FROM style_cards WHERE scope = 'contact' AND contactId = :contactId")
     suspend fun deleteContactCard(contactId: Long)
@@ -223,6 +247,10 @@ interface SessionBindingDao {
     @Query("UPDATE session_bindings SET lastExtractAt = :at WHERE conversationId = :conversationId")
     suspend fun setLastExtractAt(conversationId: Long, at: Long)
 
+    /** v6：仅来信文本指纹确实变化时调用（调用方负责指纹判重，防 OCR 抖动反复刷）。 */
+    @Query("UPDATE session_bindings SET lastIncomingAt = :at WHERE conversationId = :conversationId")
+    suspend fun setLastIncomingAt(conversationId: Long, at: Long)
+
     @Query(
         """
         UPDATE session_bindings SET digest = :digest, digestCoveredTurns = :coveredTurns,
@@ -322,4 +350,244 @@ interface MergeRecordDao {
 
     @Query("DELETE FROM merge_records WHERE mergedAt < :threshold")
     suspend fun purgeOlderThan(threshold: Long)
+}
+
+// ─────────────────────────────── P2：三级目标 + 策略卡 ───────────────────────────────
+
+/** 三级目标 DAO（v5）：状态机与互斥上限由 Repository 组合 DAO 原语实现。 */
+@Dao
+interface GoalDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(goal: GoalEntity): Long
+
+    @Query("SELECT * FROM goals WHERE id = :id")
+    suspend fun find(id: Long): GoalEntity?
+
+    @Query("SELECT * FROM goals WHERE id = :id")
+    fun observe(id: Long): Flow<GoalEntity?>
+
+    @Query("SELECT * FROM goals WHERE contactId = :contactId ORDER BY horizon DESC, priority DESC, updatedAt DESC")
+    fun observeByContact(contactId: Long): Flow<List<GoalEntity>>
+
+    @Query(
+        """
+        SELECT * FROM goals
+        WHERE contactId = :contactId AND horizon = :horizon
+            AND status IN ('$GOAL_PROVISIONAL', '$GOAL_ACTIVE')
+        ORDER BY priority DESC, updatedAt DESC
+        """,
+    )
+    suspend fun listActive(contactId: Long, horizon: Int): List<GoalEntity>
+
+    @Query(
+        """
+        SELECT * FROM goals
+        WHERE contactId = :contactId AND horizon = :horizon
+            AND status IN ('$GOAL_PROVISIONAL', '$GOAL_ACTIVE')
+        ORDER BY priority DESC, updatedAt DESC
+        """,
+    )
+    fun observeActive(contactId: Long, horizon: Int): Flow<List<GoalEntity>>
+
+    @Query("SELECT COUNT(*) FROM goals WHERE contactId = :contactId AND horizon = :horizon AND status IN ('$GOAL_PROVISIONAL', '$GOAL_ACTIVE')")
+    suspend fun countActive(contactId: Long, horizon: Int): Int
+
+    /** 采纳 provisional 行是状态转换而非新增：计数需排除被采纳的那一行本身。 */
+    @Query("SELECT COUNT(*) FROM goals WHERE contactId = :contactId AND horizon = :horizon AND id != :exceptId AND status IN ('$GOAL_PROVISIONAL', '$GOAL_ACTIVE')")
+    suspend fun countActiveExcept(contactId: Long, horizon: Int, exceptId: Long): Int
+
+    @Query("SELECT * FROM goals WHERE contactId = :contactId AND horizon = $HORIZON_L2 AND status = '$GOAL_PROVISIONAL' AND promptCount < 2 ORDER BY priority DESC, updatedAt DESC")
+    suspend fun listPromptableProvisionalL2(contactId: Long): List<GoalEntity>
+
+    /** L1 观察期建议 7 天未确认 → 惰性归档（Repository 在 T1 取数时调用）。 */
+    @Query("UPDATE goals SET status = '$GOAL_ABANDONED', updatedAt = :now WHERE contactId = :contactId AND horizon = $HORIZON_L1 AND status = '$GOAL_PROVISIONAL' AND createdAt < :threshold")
+    suspend fun archiveStaleProvisionalL1(contactId: Long, threshold: Long, now: Long): Int
+
+    @Query("UPDATE goals SET status = :status, reviewedAt = :now, updatedAt = :now WHERE id = :id")
+    suspend fun setStatus(id: Long, status: String, now: Long)
+
+    @Query("UPDATE goals SET promptCount = promptCount + 1, updatedAt = :now WHERE id = :id")
+    suspend fun incrementPromptCount(id: Long, now: Long)
+
+    @Query("UPDATE goals SET confirmed = :confirmed, status = :status, promptCount = 0, reviewedAt = :now, updatedAt = :now WHERE id = :id")
+    suspend fun setConfirmed(id: Long, confirmed: Boolean, status: String, now: Long)
+
+    @Query("UPDATE goals SET progressNote = :note, failStreak = :failStreak, updatedAt = :now WHERE id = :id")
+    suspend fun setProgress(id: Long, note: String?, failStreak: Int, now: Long)
+
+    @Query("UPDATE goals SET failStreak = :failStreak, status = :status, reviewedAt = :now, updatedAt = :now WHERE id = :id")
+    suspend fun setFailStreak(id: Long, failStreak: Int, status: String, now: Long)
+}
+
+/** 目标编译产物 DAO（v5）：同 kind 取 version 最大且未被取代的一行。 */
+@Dao
+interface GoalDecompDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(decomp: GoalDecompEntity): Long
+
+    @Query("SELECT * FROM goal_decomps WHERE id = :id")
+    suspend fun find(id: Long): GoalDecompEntity?
+
+    @Query(
+        """
+        SELECT * FROM goal_decomps
+        WHERE goalId = :goalId AND kind = :kind AND supersededBy IS NULL
+        ORDER BY version DESC LIMIT 1
+        """,
+    )
+    suspend fun latest(goalId: Long, kind: String): GoalDecompEntity?
+
+    @Query(
+        """
+        SELECT * FROM goal_decomps
+        WHERE goalId = :goalId AND kind = :kind AND supersededBy IS NULL
+        ORDER BY version DESC LIMIT 1
+        """,
+    )
+    fun observeLatest(goalId: Long, kind: String): Flow<GoalDecompEntity?>
+
+    @Query("UPDATE goal_decomps SET supersededBy = :byId WHERE id = :oldId")
+    suspend fun supersede(oldId: Long, byId: Long)
+
+    /** 按（goal, kind, version）精确定位（P3：stage_states.roadmapVersion 存的是版本号而非行 id）。 */
+    @Query(
+        """
+        SELECT * FROM goal_decomps
+        WHERE goalId = :goalId AND kind = :kind AND version = :version LIMIT 1
+        """,
+    )
+    suspend fun byVersion(goalId: Long, kind: String, version: Int): GoalDecompEntity?
+
+    /** P3 reroute 采用：新行置确认态，其余未取代旧行全部指向新行。 */
+    @Query("UPDATE goal_decomps SET confirmed = :confirmed WHERE id = :id")
+    suspend fun setConfirmed(id: Long, confirmed: Boolean)
+
+    @Query(
+        """
+        UPDATE goal_decomps SET supersededBy = :byId
+        WHERE goalId = :goalId AND kind = :kind AND id != :byId AND supersededBy IS NULL
+        """,
+    )
+    suspend fun supersedeOthers(goalId: Long, kind: String, byId: Long)
+
+    @Query("SELECT MAX(version) FROM goal_decomps WHERE goalId = :goalId AND kind = :kind")
+    suspend fun maxVersion(goalId: Long, kind: String): Int?
+}
+
+/** 联系人阶段状态 DAO（v5，复合主键）。 */
+@Dao
+interface StageStateDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(state: StageStateEntity)
+
+    @Query("SELECT * FROM stage_states WHERE contactId = :contactId AND scenarioCode = :scenarioCode")
+    suspend fun get(contactId: Long, scenarioCode: String): StageStateEntity?
+
+    @Query("SELECT * FROM stage_states WHERE contactId = :contactId AND scenarioCode = :scenarioCode")
+    fun observe(contactId: Long, scenarioCode: String): Flow<StageStateEntity?>
+
+    @Query("UPDATE stage_states SET locked = :locked WHERE contactId = :contactId AND scenarioCode = :scenarioCode")
+    suspend fun setLocked(contactId: Long, scenarioCode: String, locked: Boolean)
+}
+
+/** 阶段变迁时间线 DAO（v6，P3）：追加写 + 最近 N 条读取 + 滚动裁剪。 */
+@Dao
+interface StageHistoryDao {
+
+    @Insert
+    suspend fun insert(entry: StageHistoryEntity): Long
+
+    @Query("SELECT * FROM stage_history WHERE contactId = :contactId AND scenarioCode = :scenarioCode ORDER BY at DESC, id DESC LIMIT :limit")
+    suspend fun recent(contactId: Long, scenarioCode: String, limit: Int = 50): List<StageHistoryEntity>
+
+    @Query("SELECT * FROM stage_history WHERE contactId = :contactId AND scenarioCode = :scenarioCode ORDER BY at DESC, id DESC LIMIT :limit")
+    fun observeRecent(contactId: Long, scenarioCode: String, limit: Int = 50): Flow<List<StageHistoryEntity>>
+
+    /** 同站连续 edge 命中计数（reroute 触发条件之一：连续 retreat×2）。 */
+    @Query(
+        """
+        SELECT COUNT(*) FROM stage_history
+        WHERE contactId = :contactId AND scenarioCode = :scenarioCode
+            AND toCode = :stageCode AND edge = :edge
+            AND id > COALESCE((SELECT id FROM stage_history
+                WHERE contactId = :contactId AND scenarioCode = :scenarioCode
+                    AND edge != :edge ORDER BY id DESC LIMIT 1), 0)
+        """,
+    )
+    suspend fun consecutiveAtStage(contactId: Long, scenarioCode: String, stageCode: String, edge: String): Int
+
+    /** 每联系人×场景只保留最近 [keep] 条。 */
+    @Query(
+        """
+        DELETE FROM stage_history
+        WHERE contactId = :contactId AND scenarioCode = :scenarioCode
+            AND id NOT IN (SELECT id FROM stage_history
+                WHERE contactId = :contactId AND scenarioCode = :scenarioCode
+                ORDER BY at DESC, id DESC LIMIT :keep)
+        """,
+    )
+    suspend fun trim(contactId: Long, scenarioCode: String, keep: Int = 50)
+}
+
+/** 策略卡 DAO（v5）：最新草稿/已确认卡查询，确认时归档同联系人其余卡。 */
+@Dao
+interface StrategyCardDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(card: StrategyCardEntity): Long
+
+    @Query("SELECT * FROM strategy_cards WHERE id = :id")
+    suspend fun find(id: Long): StrategyCardEntity?
+
+    @Query("SELECT * FROM strategy_cards WHERE contactId = :contactId AND status = :status ORDER BY version DESC LIMIT 1")
+    suspend fun latest(contactId: Long, status: String): StrategyCardEntity?
+
+    @Query("SELECT * FROM strategy_cards WHERE contactId = :contactId ORDER BY version DESC LIMIT 1")
+    suspend fun latestAny(contactId: Long): StrategyCardEntity?
+
+    @Query("SELECT * FROM strategy_cards WHERE contactId = :contactId ORDER BY version DESC LIMIT 1")
+    fun observeLatest(contactId: Long): Flow<StrategyCardEntity?>
+
+    @Query("UPDATE strategy_cards SET status = :status WHERE contactId = :contactId AND id != :keepId AND status != '$CARD_ARCHIVED'")
+    suspend fun archiveOthers(contactId: Long, keepId: Long, status: String = CARD_ARCHIVED)
+}
+
+/** 本轮任务令台账 DAO（v5）：插入/回填/最近列表 + 每联系人每会话各留 60 条。 */
+@Dao
+interface TalkMissionDao {
+
+    @Insert
+    suspend fun insert(mission: TalkMissionEntity): Long
+
+    @Query("SELECT * FROM talk_missions WHERE contactId = :contactId AND result = '$MISSION_PENDING' ORDER BY id DESC LIMIT 1")
+    suspend fun latestPendingForContact(contactId: Long): TalkMissionEntity?
+
+    @Query("SELECT * FROM talk_missions WHERE conversationId = :conversationId AND result = '$MISSION_PENDING' ORDER BY id DESC LIMIT 1")
+    suspend fun latestPendingForConversation(conversationId: Long): TalkMissionEntity?
+
+    @Query("UPDATE talk_missions SET result = :result WHERE id = :id")
+    suspend fun settle(id: Long, result: String)
+
+    /** P3 §九：行内「✓采纳」：回写用户采用的建议编号（1 起）。 */
+    @Query("UPDATE talk_missions SET adoptedIndex = :index WHERE id = :id")
+    suspend fun adopt(id: Long, index: Int)
+
+    @Query("SELECT * FROM talk_missions WHERE contactId = :contactId ORDER BY id DESC LIMIT :limit")
+    fun observeRecentForContact(contactId: Long, limit: Int): Flow<List<TalkMissionEntity>>
+
+    /** Judge 节流计数用：倒序最近若干条任务令（含已裁决）。 */
+    @Query("SELECT * FROM talk_missions WHERE contactId = :contactId ORDER BY id DESC LIMIT :limit")
+    suspend fun recentForContact(contactId: Long, limit: Int): List<TalkMissionEntity>
+
+    @Query("SELECT * FROM talk_missions WHERE conversationId = :conversationId ORDER BY id DESC LIMIT :limit")
+    fun observeRecentForConversation(conversationId: Long, limit: Int): Flow<List<TalkMissionEntity>>
+
+    @Query("DELETE FROM talk_missions WHERE contactId = :contactId AND id NOT IN (SELECT id FROM talk_missions WHERE contactId = :contactId ORDER BY id DESC LIMIT :keep)")
+    suspend fun trimContact(contactId: Long, keep: Int)
+
+    @Query("DELETE FROM talk_missions WHERE contactId IS NULL AND conversationId = :conversationId AND id NOT IN (SELECT id FROM talk_missions WHERE conversationId = :conversationId ORDER BY id DESC LIMIT :keep)")
+    suspend fun trimConversation(conversationId: Long, keep: Int)
 }

@@ -86,6 +86,10 @@ class AdvisorContactDirectory @Inject constructor(
         contacts.saveDigest(contactId, digest, coveredTurns)
     }
 
+    override suspend fun markIncomingAt(conversationId: Long, at: Long) {
+        contacts.setLastIncomingAt(conversationId, at)
+    }
+
     private suspend fun toRef(profile: ContactProfileEntity): ContactRef {
         val names = LinkedHashSet<String>()
         names += profile.displayName

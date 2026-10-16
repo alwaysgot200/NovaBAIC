@@ -1,49 +1,69 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  ~ 悬浮球专用标识：彩色白羽扇（与应用图标 ic_logo_advisor 同形，小尺寸重绘）。
+  ~ 悬浮球专用标识：白羽扇（与应用图标 ic_logo_advisor 同形，小尺寸重绘）。
   ~ 应用图标的精细渐变版（108 视口、aapt:attr 渐变、亚像素细线）在 56dp
-  ~ 悬浮球里会光栅化成小白块；本文件按 24 视口重绘：全实色（不依赖渐变
-  ~ 光栅化）、扇骨加粗到 1.35、铆钉与星光放大，白扇面/金扇柄/蓝扇骨/
-  ~ 青星光在蓝色球盘上逐项可辨。改品牌图形时两处须同步。
+  ~ 悬浮球里会光栅化糊块；本文件按 48 视口重绘，设计要点：
+  ~   1) 扇面是绝对主角：两外羽尖直达视口极边（0.2/47.8），ImageView 42dp
+  ~      （占 44dp 球径约 95%），羽尖与圆盘描边仅约 1dp 间隙，近而不裁；
+  ~      五羽尖扇贝外轮廓本身即读作「扇子」，一眼可记；
+  ~   2) 扇骨只做柔和褶皱：5 条半透浅蓝细线自扇轴辐射（旧版 3 条粗实蓝
+  ~      线在小尺寸下像中间插了把叉子）；
+  ~   3) 全实色填充（金柄/金铆钉棕心/青星光），不依赖渐变光栅化。
+  ~ 改品牌图形时与 ic_logo_advisor 两处同步。
   -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="24dp"
-    android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
 
-    <!-- 扇柄：金色实色（小尺寸用渐变两端的中间色，不用 aapt:attr 渐变） -->
+    <!-- 扇柄（先绘，压在扇面与铆钉之下）：金色实色，圆角收尾；随扇面同步等比放大 -->
     <path
-        android:fillColor="#FFD69E3D"
-        android:pathData="M10.9,14.8 L13.1,14.8 L12.8,20.2 C12.7,21.0 11.3,21.0 11.2,20.2 Z" />
+        android:fillColor="#FFD9A23E"
+        android:pathData="M22.2,28.4 L25.8,28.4 L25.4,42.0
+            A1.71,1.71 0 0 1 22.6,42.0 Z" />
 
-    <!-- 扇面：单片白色实色，顶部中央起冠，两侧弧线收成扇肩 -->
+    <!-- 扇面：白色实色，五羽尖扇贝轮廓（两外尖+两内尖+中央冠）。以扇轴
+         (24,28.8) 为锚等比放大到外羽尖 x0.2/47.8（视口极边），配合
+         ImageView 54dp，羽尖与圆盘描边仅约 0.5dp 间隙、近而不裁；
+         羽冠 y3.4；谷口保持品牌同款浅凹。 -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M3.5,15.4
-            C3.9,10.9 6.7,8.7 9.0,8.4
-            C9.4,5.9 10.9,4.8 12.0,4.8
-            C13.1,4.8 14.6,5.9 15.0,8.4
-            C17.3,8.7 20.1,10.9 20.5,15.4
-            C16.0,17.2 8.0,17.2 3.5,15.4 Z" />
+        android:pathData="M0.2,24.8
+            Q2.8,21.2 5.7,13.6
+            Q9.7,12.8 14.0,6.1
+            Q19.0,8.2 24,3.4
+            Q29.0,8.2 34.0,6.1
+            Q38.3,12.8 42.3,13.6
+            Q45.2,21.2 47.8,24.8
+            Q24,33.9 0.2,24.8 Z" />
 
-    <!-- 三根扇骨：实色中蓝加粗（自扇轴向羽尖辐射，小尺寸仍清晰） -->
+    <!-- 两侧护骨：极淡亮线，沿扇面下沿辐射，强化扇骨汇聚感 -->
     <path
-        android:strokeColor="#FF6E92CE"
-        android:strokeWidth="1.35"
+        android:strokeColor="#80C9DDF5"
+        android:strokeWidth="0.8"
         android:strokeLineCap="round"
-        android:pathData="M12,15.2 L9.0,8.6 M12,15.2 L12,5.2 M12,15.2 L15.0,8.6" />
+        android:pathData="M24,28.8 L0.2,24.8 M24,28.8 L47.8,24.8" />
 
-    <!-- AI 星光：青色四角星，放大后落在扇面右上方（与应用图标构图一致） -->
+    <!-- 三道主褶皱：半透浅蓝细线，自扇轴向内羽尖辐射（只暗示折痕，不抢轮廓） -->
+    <path
+        android:strokeColor="#A6BFD6F2"
+        android:strokeWidth="1.1"
+        android:strokeLineCap="round"
+        android:pathData="M24,28.8 L14.0,6.1 M24,28.8 L24,4.1 M24,28.8 L34.0,6.1" />
+
+    <!-- AI 星光：青色四角星，小而亮，扇面扩到极边后内移到右上方圆内安全区
+         （星尖与描边留约 0.6dp），与内羽尖保持间距 -->
     <path
         android:fillColor="#FF9FECFF"
-        android:pathData="M18.4,4.2 L19.3,5.5 L20.6,6.4 L19.3,7.3 L18.4,8.6 L17.5,7.3 L16.2,6.4 L17.5,5.5 Z" />
+        android:pathData="M38.2,5 L37.2,7.1 L35.1,8.2 L37.2,9.3
+            L38.2,11 L39.2,9.3 L41.3,8.2 L39.2,7.1 Z" />
 
-    <!-- 扇轴铆钉：金底棕心，压住扇骨汇聚点（放大以保证小尺寸可辨） -->
+    <!-- 扇轴铆钉：金底棕心，压住褶皱汇聚点 -->
     <path
         android:fillColor="#FFEAC571"
-        android:pathData="M12,15.2 m-1.1,0 a1.1,1.1 0 1 0 2.2,0 a1.1,1.1 0 1 0 -2.2,0 Z" />
+        android:pathData="M24,29.2 m-2.77,0 a2.77,2.77 0 1 0 5.54,0 a2.77,2.77 0 1 0 -5.54,0 Z" />
     <path
         android:fillColor="#FF8A5E1C"
-        android:pathData="M12,15.2 m-0.58,0 a0.58,0.58 0 1 0 1.16,0 a0.58,0.58 0 1 0 -1.16,0 Z" />
+        android:pathData="M24,29.2 m-1.39,0 a1.39,1.39 0 1 0 2.78,0 a1.39,1.39 0 1 0 -2.78,0 Z" />
 </vector>

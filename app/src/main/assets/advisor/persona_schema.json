@@ -5,7 +5,7 @@
         { "code": "male", "label": "男" },
         { "code": "female", "label": "女" }
       ] },
-    { "key": "ageRange", "owner": "their", "group": "基本信息", "type": "enum", "label": "年龄段", "allowCustom": false, "salience": "low",
+    { "key": "ageRange", "owner": "their", "group": "基本信息", "type": "enum", "label": "年龄段", "allowCustom": false, "salience": "low", "staleAfterDays": 365,
       "options": [
         { "code": "under20", "label": "20以下" },
         { "code": "20s", "label": "20-29" },
@@ -13,14 +13,14 @@
         { "code": "40s", "label": "40-49" },
         { "code": "50plus", "label": "50+" }
       ] },
-    { "key": "city", "owner": "their", "group": "基本信息", "type": "text", "label": "所在城市", "salience": "normal" },
+    { "key": "city", "owner": "their", "group": "基本信息", "type": "text", "label": "所在城市", "salience": "normal", "staleAfterDays": 365 },
     { "key": "hometown", "owner": "their", "group": "基本信息", "type": "text", "label": "家乡", "salience": "low" },
 
-    { "key": "occupation", "owner": "their", "group": "职业教育", "type": "text", "label": "职业", "salience": "normal" },
-    { "key": "position", "owner": "their", "group": "职业教育", "type": "text", "label": "职位", "salience": "normal" },
-    { "key": "company", "owner": "their", "group": "职业教育", "type": "text", "label": "公司", "salience": "normal" },
-    { "key": "industry", "owner": "their", "group": "职业教育", "type": "text", "label": "所在行业", "salience": "normal" },
-    { "key": "seniority", "owner": "their", "group": "职业教育", "type": "enum", "label": "资历层级", "salience": "normal",
+    { "key": "occupation", "owner": "their", "group": "职业教育", "type": "text", "label": "职业", "salience": "normal", "staleAfterDays": 365 },
+    { "key": "position", "owner": "their", "group": "职业教育", "type": "text", "label": "职位", "salience": "normal", "staleAfterDays": 180 },
+    { "key": "company", "owner": "their", "group": "职业教育", "type": "text", "label": "公司", "salience": "normal", "staleAfterDays": 365 },
+    { "key": "industry", "owner": "their", "group": "职业教育", "type": "text", "label": "所在行业", "salience": "normal", "staleAfterDays": 365 },
+    { "key": "seniority", "owner": "their", "group": "职业教育", "type": "enum", "label": "资历层级", "salience": "normal", "staleAfterDays": 365,
       "options": [
         { "code": "junior", "label": "新人" },
         { "code": "executor", "label": "执行层" },
@@ -85,7 +85,7 @@
       ] },
 
     { "key": "interests", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "兴趣爱好", "salience": "normal" },
-    { "key": "recentTopics", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "近期关注话题", "salience": "normal" },
+    { "key": "recentTopics", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "近期关注话题", "salience": "normal", "staleAfterDays": 90 },
 
     { "key": "relationType", "owner": "their", "group": "关系", "type": "enum", "label": "关系类型", "salience": "normal",
       "options": [
@@ -97,6 +97,7 @@
         { "code": "friend", "label": "朋友" },
         { "code": "family", "label": "家人" },
         { "code": "crush", "label": "暧昧对象" },
+        { "code": "group", "label": "群聊" },
         { "code": "other", "label": "其他" }
       ] },
     { "key": "relationStage", "owner": "their", "group": "关系", "type": "text", "label": "关系阶段", "salience": "normal" },
@@ -111,8 +112,8 @@
 
     { "key": "needs", "owner": "their", "group": "商机", "type": "textarea", "label": "核心需求", "memory": "fact", "salience": "high" },
     { "key": "painPoints", "owner": "their", "group": "商机", "type": "textarea", "label": "痛点", "memory": "fact", "salience": "high" },
-    { "key": "budget", "owner": "their", "group": "商机", "type": "text", "label": "预算水平", "memory": "fact", "salience": "normal" },
-    { "key": "intentStage", "owner": "their", "group": "商机", "type": "enum", "label": "意向阶段", "memory": "event", "salience": "high",
+    { "key": "budget", "owner": "their", "group": "商机", "type": "text", "label": "预算水平", "memory": "fact", "salience": "normal", "staleAfterDays": 180 },
+    { "key": "intentStage", "owner": "their", "group": "商机", "type": "enum", "label": "意向阶段", "memory": "event", "salience": "high", "staleAfterDays": 180,
       "options": [
         { "code": "ice", "label": "破冰", "impl": "建立信任，确认对接人与业务背景" },
         { "code": "inquiry", "label": "询盘", "impl": "澄清需求与决策链，不急于报价" },
@@ -123,12 +124,36 @@
         { "code": "after", "label": "售后", "impl": "兑现承诺，经营复购与转介绍" }
       ] },
     { "key": "objections", "owner": "their", "group": "商机", "type": "tags", "label": "主要顾虑", "memory": "fact", "salience": "high" },
-    { "key": "timeline", "owner": "their", "group": "商机", "type": "text", "label": "采购时间窗", "memory": "fact", "salience": "normal" },
+    { "key": "timeline", "owner": "their", "group": "商机", "type": "text", "label": "采购时间窗", "memory": "fact", "salience": "normal", "staleAfterDays": 180 },
 
     { "key": "commitments", "owner": "their", "group": "承诺与禁忌", "type": "textarea", "label": "承诺待办", "memory": "agreement", "salience": "high" },
     { "key": "nextMeeting", "owner": "their", "group": "承诺与禁忌", "type": "date", "label": "下次约定", "memory": "agreement", "salience": "normal" },
     { "key": "taboos", "owner": "their", "group": "承诺与禁忌", "type": "textarea", "label": "雷区禁忌", "salience": "high" },
     { "key": "preferredTime", "owner": "their", "group": "承诺与禁忌", "type": "text", "label": "方便联系时间", "salience": "normal" },
+
+    { "key": "groupType", "owner": "their", "group": "群属性", "type": "enum", "label": "群类型", "salience": "normal", "showIfContactType": ["group"],
+      "options": [
+        { "code": "work", "label": "工作群", "impl": "公共工作场合：措辞专业、对事不对人，敏感话题私下沟通" },
+        { "code": "interest", "label": "兴趣群", "impl": "同好社群：先围绕共同兴趣贡献内容，不急于推销" },
+        { "code": "parent", "label": "家长群", "impl": "家长公共场合：配合老师安排，不闲聊刷屏、不公开比较孩子" },
+        { "code": "neighbor", "label": "邻里群", "impl": "邻里公共场合：友善克制，公共事务对事不对人" }
+      ] },
+    { "key": "groupScale", "owner": "their", "group": "群属性", "type": "enum", "label": "群规模", "allowCustom": false, "salience": "low", "showIfContactType": ["group"],
+      "options": [
+        { "code": "small", "label": "小群（30人内）" },
+        { "code": "medium", "label": "中群（30-200人）" },
+        { "code": "large", "label": "大群（200人以上）" }
+      ] },
+    { "key": "groupAtmosphere", "owner": "their", "group": "群属性", "type": "tags", "label": "群氛围", "salience": "normal", "showIfContactType": ["group"],
+      "options": [
+        { "code": "formal", "label": "正式严肃" },
+        { "code": "active", "label": "活跃热闹" },
+        { "code": "quiet", "label": "潜水为主" },
+        { "code": "sensitive", "label": "关系敏感" }
+      ] },
+    { "key": "keyRoles", "owner": "their", "group": "群属性", "type": "textarea", "label": "关键角色", "salience": "high", "staleAfterDays": 365, "showIfContactType": ["group"],
+      "implTpl": "群内关键人：{v}，公开沟通注意其立场与影响" },
+    { "key": "groupTaboos", "owner": "their", "group": "群属性", "type": "textarea", "label": "群内禁忌", "salience": "high", "showIfContactType": ["group"] },
 
     { "key": "my_occupation", "owner": "my", "group": "我的职业", "type": "text", "label": "我的职业", "extract": false, "salience": "normal" },
     { "key": "my_position", "owner": "my", "group": "我的职业", "type": "text", "label": "我的职位", "extract": false, "salience": "normal" },

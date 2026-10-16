@@ -792,23 +792,41 @@ function Get-AppOverlayBlocks {
     })
 }
 
-# 悬浮球窗口中心 (块内 mAttrs=(x,y)(w x h)); 30s 内未出现返回 $null。
+# 悬浮球窗口中心; 30s 内未出现返回 $null。
+# 优先真实 frame（API 35+ 上 mAttrs 坐标未计 inset，与可触区偏差约 48px）；
+# 窗口刚创建时 frame 可能缺/为 0x0——此时不回退 mAttrs，循环等 layout 完成再取，
+# 仅超时后才用 mAttrs 兜底（坐标可能偏 inset，仅比拿不到坐标强）。
 function Get-BallCenter {
     param([Parameter(Mandatory = $true)][string] $Device)
 
     $deadline = (Get-Date).AddSeconds(30)
+    $attrsCenter = $null
     while ((Get-Date) -lt $deadline) {
         foreach ($block in (Get-AppOverlayBlocks -Device $Device)) {
-            $m = [regex]::Match($block, 'mAttrs=\{\((\d+),(\d+)\)\((\d+)x(\d+)\)')
-            if ($m.Success -and [int] $m.Groups[3].Value -lt 200) {
-                $x = [int] $m.Groups[1].Value; $y = [int] $m.Groups[2].Value
-                $w = [int] $m.Groups[3].Value; $h = [int] $m.Groups[4].Value
-                return [pscustomobject]@{ X = ($x + [int]($w / 2)); Y = ($y + [int]($h / 2)) }
+            $f = [regex]::Match($block, 'frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
+            if (-not $f.Success) {
+                $f = [regex]::Match($block, 'frame=\[Rect\((\d+),\s*(\d+)\s*-\s*(\d+),\s*(\d+)\)\]')
+            }
+            if ($f.Success) {
+                $l = [int] $f.Groups[1].Value; $t = [int] $f.Groups[2].Value
+                $r = [int] $f.Groups[3].Value; $b = [int] $f.Groups[4].Value
+                if (($r - $l) -gt 20 -and ($r - $l) -lt 200 -and ($b - $t) -gt 20 -and ($b - $t) -lt 200) {
+                    return [pscustomobject]@{ X = [int](($l + $r) / 2); Y = [int](($t + $b) / 2) }
+                }
+            }
+            if (-not $attrsCenter) {
+                $m = [regex]::Match($block, 'mAttrs=\{\((\d+),(\d+)\)\((\d+)x(\d+)\)')
+                if ($m.Success -and [int] $m.Groups[3].Value -lt 200) {
+                    $attrsCenter = [pscustomobject]@{
+                        X = ([int] $m.Groups[1].Value + [int]($m.Groups[3].Value / 2))
+                        Y = ([int] $m.Groups[2].Value + [int]($m.Groups[4].Value / 2))
+                    }
+                }
             }
         }
         Start-Sleep -Seconds 2
     }
-    return $null
+    return $attrsCenter
 }
 
 # 分屏浮窗是否可见 (宽为 match_parent 的 App overlay 块)。
@@ -821,15 +839,25 @@ function Test-SplitVisible {
     return $false
 }
 
-# 扇形菜单窗口是否可见 (大于悬浮球的 App overlay 块: 扇形窗口约 300x560)。
+# 扇形菜单窗口是否可见 (App overlay 中大于悬浮球的竖形块: 实测 frame 约 196x351)。
+# 球=88x88、分屏=屏宽，均不会误命中；优先 frame，回退 mAttrs。
 function Test-FanMenuVisible {
     param([Parameter(Mandatory = $true)][string] $Device)
 
     foreach ($block in (Get-AppOverlayBlocks -Device $Device)) {
-        $m = [regex]::Match($block, 'mAttrs=\{\(\d+,\d+\)\((\d+)x(\d+)\)')
-        if ($m.Success -and [int] $m.Groups[1].Value -ge 250 -and [int] $m.Groups[2].Value -ge 300) {
-            return $true
+        $w = 0; $h = 0
+        $f = [regex]::Match($block, 'frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
+        if (-not $f.Success) {
+            $f = [regex]::Match($block, 'frame=\[Rect\((\d+),\s*(\d+)\s*-\s*(\d+),\s*(\d+)\)\]')
         }
+        if ($f.Success) {
+            $w = [int] $f.Groups[3].Value - [int] $f.Groups[1].Value
+            $h = [int] $f.Groups[4].Value - [int] $f.Groups[2].Value
+        } else {
+            $m = [regex]::Match($block, 'mAttrs=\{\(\d+,\d+\)\((\d+)x(\d+)\)')
+            if ($m.Success) { $w = [int] $m.Groups[1].Value; $h = [int] $m.Groups[2].Value }
+        }
+        if ($w -ge 150 -and $w -le 320 -and $h -ge 250 -and $h -le 600) { return $true }
     }
     return $false
 }

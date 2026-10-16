@@ -48,6 +48,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -75,6 +77,8 @@ import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
 import com.verlintas.baic2.floatball.advisor.ContactRepository
+import com.verlintas.baic2.floatball.advisor.GoalRepository
+import com.verlintas.baic2.floatball.advisor.StrategyCardRepository
 import com.verlintas.baic2.floatball.advisor.FieldOption
 import com.verlintas.baic2.floatball.advisor.PersonaFieldDef
 import com.verlintas.baic2.floatball.advisor.PersonaFieldType
@@ -137,6 +141,16 @@ class AdvisorProfileActivity : ComponentActivity() {
     @Inject
     lateinit var settingsRepository: SettingsRepository
 
+    @Inject
+    lateinit var goalRepository: GoalRepository
+
+    @Inject
+    lateinit var strategyCards: StrategyCardRepository
+
+    @Inject
+    lateinit var strategyRuntime:
+        com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -150,6 +164,8 @@ class AdvisorProfileActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val initialContact = intent.getLongExtra(EXTRA_CONTACT_ID, -1L)
         val initialConversation = intent.getLongExtra(EXTRA_CONVERSATION_ID, -1L)
+        val initialTab = intent.getStringExtra(EXTRA_TAB).orEmpty()
+        val initialGoalId = intent.getLongExtra(EXTRA_GOAL_ID, -1L)
         setContent {
             val themeMode by settingsRepository.themeMode
                 .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
@@ -171,6 +187,8 @@ class AdvisorProfileActivity : ComponentActivity() {
                 ProfileNav(
                     initialContactId = initialContact,
                     currentConversationId = initialConversation,
+                    initialTab = initialTab,
+                    initialGoalId = initialGoalId,
                     onClose = { finish() },
                 )
             }
@@ -180,6 +198,14 @@ class AdvisorProfileActivity : ComponentActivity() {
     companion object {
         const val EXTRA_CONTACT_ID = "extra_contact_id"
         const val EXTRA_CONVERSATION_ID = "extra_conversation_id"
+
+        /** 打开联系人页时默认选中的 Tab；取值 [TAB_GOALS]，缺省为画像 Tab。 */
+        const val EXTRA_TAB = "extra_tab"
+
+        /** 与 [EXTRA_TAB]=[TAB_GOALS] 配合：>0 时自动打开该目标的编辑弹窗。 */
+        const val EXTRA_GOAL_ID = "extra_goal_id"
+
+        const val TAB_GOALS = "goals"
     }
 }
 
@@ -189,6 +215,8 @@ private enum class ProfileScreen { LIST, DETAIL, MINE }
 private fun ProfileNav(
     initialContactId: Long,
     currentConversationId: Long,
+    initialTab: String,
+    initialGoalId: Long,
     onClose: () -> Unit,
 ) {
     var screen by remember { mutableStateOf(ProfileScreen.LIST) }
@@ -218,6 +246,8 @@ private fun ProfileNav(
         ProfileScreen.DETAIL -> ContactDetailScreen(
             contactId = selectedId,
             currentConversationId = currentConversationId,
+            initialTab = initialTab,
+            initialGoalId = initialGoalId,
             onBack = { screen = ProfileScreen.LIST },
         )
 
@@ -374,14 +404,20 @@ private fun MergeUndoBar(record: MergeRecordEntity, onUndo: () -> Unit) {
 
 // ------------------------------------------------------------ detail
 
+private const val TAB_INDEX_PROFILE = 0
+private const val TAB_INDEX_GOALS = 1
+
 @Composable
 private fun ContactDetailScreen(
     contactId: Long,
     currentConversationId: Long,
+    initialTab: String,
+    initialGoalId: Long,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val activity = advisorActivity()
     val contacts = rememberContactRepository()
     val schemas = rememberPersonaSchemas()
     val profileSync = rememberProfileSync()
@@ -401,142 +437,185 @@ private fun ContactDetailScreen(
     LaunchedEffect(contactId) { refreshBindings() }
 
     val current = profile
+    var tab by remember(contactId) {
+        mutableStateOf(
+            if (initialTab == AdvisorProfileActivity.TAB_GOALS) TAB_INDEX_GOALS else TAB_INDEX_PROFILE,
+        )
+    }
     PageScaffold(
         title = current?.displayName ?: stringResource(R.string.float_profile_title),
         onClose = null,
         onBack = onBack,
-    ) {
-        if (current == null) {
-            Text(stringResource(R.string.float_profile_gone))
-            return@PageScaffold
-        }
-
-        // 类型 + 改名
-        FlowChips(
-            options = listOf(CONTACT_TYPE_PERSON to R.string.float_profile_type_person,
-                CONTACT_TYPE_GROUP to R.string.float_profile_type_group),
-            selected = current.contactType,
-        ) { type ->
-            scope.launch { contacts.setContactType(contactId, type) }
-        }
-
-        var name by remember(current.id, current.displayName) { mutableStateOf(current.displayName) }
-        LabeledField(stringResource(R.string.float_profile_name), name, { name = it })
-        var goal by remember(current.id, current.goal) { mutableStateOf(current.goal.orEmpty()) }
-        LabeledField(stringResource(R.string.float_profile_goal), goal, { goal = it }, minLines = 2)
-        StyleEntryCard(contactId = contactId)
-        Button(onClick = {
-            scope.launch {
-                contacts.renameContact(contactId, name)
-                contacts.updateGoal(contactId, goal)
-                toast(context, R.string.float_profile_saved)
+        tabBar = {
+            TabRow(selectedTabIndex = tab) {
+                Tab(
+                    selected = tab == TAB_INDEX_PROFILE,
+                    onClick = { tab = TAB_INDEX_PROFILE },
+                    text = { Text(stringResource(R.string.float_goal_tab_profile)) },
+                )
+                Tab(
+                    selected = tab == TAB_INDEX_GOALS,
+                    onClick = { tab = TAB_INDEX_GOALS },
+                    text = { Text(stringResource(R.string.float_goal_tab_goals)) },
+                )
             }
-        }) { Text(stringResource(R.string.float_profile_save)) }
-
-        // 当前会话改绑（L3 手动绑定/切人修正）
-        if (currentConversationId > 0) {
-            val boundHere = boundTitles.any { it.first == currentConversationId }
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(12.dp),
-                ) {
-                    Text(
-                        text = stringResource(
-                            if (boundHere) R.string.float_profile_bound_current else R.string.float_profile_rebind_current,
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f),
+        },
+    ) {
+        if (tab == TAB_INDEX_GOALS) {
+            // P2 目标 Tab：L3/L2/L1 目标、阶段、任务令台账与策略卡入口。
+            GoalsTab(
+                contactId = contactId,
+                initialGoalId = if (initialGoalId > 0) initialGoalId else null,
+                goals = activity.goalRepository,
+                cards = activity.strategyCards,
+                assets = activity.styleAssets,
+                contacts = contacts,
+                schemas = schemas,
+                runtime = activity.strategyRuntime,
+                onOpenStrategyCard = {
+                    context.startActivity(
+                        android.content.Intent(context, StrategyCardActivity::class.java)
+                            .putExtra(StrategyCardActivity.EXTRA_CONTACT_ID, contactId)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
                     )
-                    if (!boundHere) {
-                        Button(onClick = {
-                            scope.launch {
-                                contacts.rebindConversation(currentConversationId, contactId)
-                                refreshBindings()
-                            }
-                        }) { Text(stringResource(R.string.float_profile_bind)) }
+                },
+                onOpenSettings = {
+                    context.startActivity(
+                        android.content.Intent(context, FloatSettingsActivity::class.java)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                },
+            )
+        } else if (current == null) {
+            Text(stringResource(R.string.float_profile_gone))
+        } else {
+            // 类型 + 改名
+            FlowChips(
+                options = listOf(CONTACT_TYPE_PERSON to R.string.float_profile_type_person,
+                    CONTACT_TYPE_GROUP to R.string.float_profile_type_group),
+                selected = current.contactType,
+            ) { type ->
+                scope.launch { contacts.setContactType(contactId, type) }
+            }
+
+            var name by remember(current.id, current.displayName) { mutableStateOf(current.displayName) }
+            LabeledField(stringResource(R.string.float_profile_name), name, { name = it })
+            var goal by remember(current.id, current.goal) { mutableStateOf(current.goal.orEmpty()) }
+            LabeledField(stringResource(R.string.float_profile_goal), goal, { goal = it }, minLines = 2)
+            StyleEntryCard(contactId = contactId)
+            Button(onClick = {
+                scope.launch {
+                    contacts.renameContact(contactId, name)
+                    contacts.updateGoal(contactId, goal)
+                    toast(context, R.string.float_profile_saved)
+                }
+            }) { Text(stringResource(R.string.float_profile_save)) }
+
+            // 当前会话改绑（L3 手动绑定/切人修正）
+            if (currentConversationId > 0) {
+                val boundHere = boundTitles.any { it.first == currentConversationId }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(12.dp),
+                    ) {
+                        Text(
+                            text = stringResource(
+                                if (boundHere) R.string.float_profile_bound_current else R.string.float_profile_rebind_current,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (!boundHere) {
+                            Button(onClick = {
+                                scope.launch {
+                                    contacts.rebindConversation(currentConversationId, contactId)
+                                    refreshBindings()
+                                }
+                            }) { Text(stringResource(R.string.float_profile_bind)) }
+                        }
                     }
                 }
             }
-        }
 
-        // 关联会话 + 按人搜索
-        SectionTitle(stringResource(R.string.float_profile_conversations))
-        boundTitles.forEach { (_, title) ->
-            Text("· $title", style = MaterialTheme.typography.bodyMedium)
-        }
-        PersonHistorySearch(contactId)
+            // 关联会话 + 按人搜索
+            SectionTitle(stringResource(R.string.float_profile_conversations))
+            boundTitles.forEach { (_, title) ->
+                Text("· $title", style = MaterialTheme.typography.bodyMedium)
+            }
+            PersonHistorySearch(contactId)
 
-        // 画像字段（schema 驱动分组）
-        val theirDefs = schemas.get().theirFields.groupBy { it.group }
-        theirDefs.forEach { (group, defs) ->
-            SectionTitle(group)
-            defs.forEach { def ->
-                FieldRow(
-                    def = def,
-                    entity = fields.firstOrNull { it.field == def.key },
-                    onConfirm = {
-                        scope.launch {
-                            profileSync.confirmAndSync(
-                                contactId = contactId,
-                                field = def.key,
-                                conversationId = boundTitles.firstOrNull()?.first,
-                            )
-                        }
+            // 画像字段（schema 驱动分组）；P3：群实体字段按 contactType 显隐。
+            val theirDefs = schemas.get().fieldsFor("their", current.contactType).groupBy { it.group }
+            theirDefs.forEach { (group, defs) ->
+                SectionTitle(group)
+                defs.forEach { def ->
+                    FieldRow(
+                        def = def,
+                        entity = fields.firstOrNull { it.field == def.key },
+                        onConfirm = {
+                            scope.launch {
+                                profileSync.confirmAndSync(
+                                    contactId = contactId,
+                                    field = def.key,
+                                    conversationId = boundTitles.firstOrNull()?.first,
+                                )
+                            }
+                        },
+                        onReject = { scope.launch { contacts.rejectDraft(contactId, def.key) } },
+                        onEdit = { editing = def },
+                    )
+                }
+            }
+
+            // 群成员二级画像（仅群档案）
+            if (current.contactType == CONTACT_TYPE_GROUP) {
+                GroupMembersSection(contactId)
+            }
+
+            // 合并
+            SectionTitle(stringResource(R.string.float_profile_merge))
+            OutlinedButton(onClick = { mergeOpen = true }) {
+                Text(stringResource(R.string.float_profile_merge_pick))
+            }
+            if (mergeOpen) {
+                MergePicker(
+                    targetId = contactId,
+                    onDismiss = { mergeOpen = false },
+                    onMerged = {
+                        mergeOpen = false
+                        scope.launch { refreshBindings() }
                     },
-                    onReject = { scope.launch { contacts.rejectDraft(contactId, def.key) } },
-                    onEdit = { editing = def },
                 )
             }
-        }
 
-        // 群成员二级画像（仅群档案）
-        if (current.contactType == CONTACT_TYPE_GROUP) {
-            GroupMembersSection(contactId)
-        }
-
-        // 合并
-        SectionTitle(stringResource(R.string.float_profile_merge))
-        OutlinedButton(onClick = { mergeOpen = true }) {
-            Text(stringResource(R.string.float_profile_merge_pick))
-        }
-        if (mergeOpen) {
-            MergePicker(
-                targetId = contactId,
-                onDismiss = { mergeOpen = false },
-                onMerged = {
-                    mergeOpen = false
-                    scope.launch { refreshBindings() }
+            // 危险区：清除上游相关记忆（软删除） + 删除 advisor 档案
+            DangerZone(
+                displayName = current.displayName,
+                onForget = {
+                    scope.launch {
+                        val count = profileSync.forgetContact(contactId)
+                        android.widget.Toast.makeText(
+                            context,
+                            context.getString(R.string.float_profile_forgot_done, count),
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                },
+                onDelete = {
+                    scope.launch {
+                        contacts.deleteContact(contactId)
+                        onBack()
+                    }
                 },
             )
         }
-
-        // 危险区：清除上游相关记忆（软删除） + 删除 advisor 档案
-        DangerZone(
-            displayName = current.displayName,
-            onForget = {
-                scope.launch {
-                    val count = profileSync.forgetContact(contactId)
-                    android.widget.Toast.makeText(
-                        context,
-                        context.getString(R.string.float_profile_forgot_done, count),
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                }
-            },
-            onDelete = {
-                scope.launch {
-                    contacts.deleteContact(contactId)
-                    onBack()
-                }
-            },
-        )
     }
 
     editing?.let { def ->
@@ -1288,13 +1367,14 @@ private fun PageScaffold(
     title: String,
     onClose: (() -> Unit)?,
     onBack: (() -> Unit)? = null,
+    tabBar: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .then(if (tabBar == null) Modifier.verticalScroll(rememberScrollState()) else Modifier)
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -1315,7 +1395,19 @@ private fun PageScaffold(
                         }
                     }
                 }
-                content()
+                // 带 TabRow 时标签栏固定在顶部，仅各 Tab 内容独立滚动。
+                if (tabBar != null) {
+                    tabBar()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        content()
+                    }
+                } else {
+                    content()
+                }
             }
         }
     }

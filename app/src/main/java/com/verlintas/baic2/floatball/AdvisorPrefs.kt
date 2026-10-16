@@ -78,6 +78,12 @@ class AdvisorPrefs @Inject constructor(
         val dedupLevel: Int = DEDUP_STANDARD,
         /** 连续模式单次会话 token 预算（输入+输出），0=不限；达到后自动停录。 */
         val sessionTokenBudget: Long = 0L,
+        /**
+         * 三级目标/策略卡模式（P2 §11 设置）：
+         * 0=关闭（只走 P1 风格）；1=智能（默认，目标/阶段/策略卡全启用）；
+         * 2=增强（预留位，读到时回退为智能）。
+         */
+        val strategyMode: Int = STRATEGY_SMART,
     ) {
         /** OCR 层文本相似度阈值（FrameDiffEngine 用）：越严格阈值越高，越少发问。 */
         val ocrDedupSimilarity: Float
@@ -160,6 +166,14 @@ class AdvisorPrefs @Inject constructor(
             },
             sessionTokenBudget = prefs.getLong(KEY_SESSION_BUDGET, 0L)
                 .takeIf { it in TOKEN_BUDGET_OPTIONS } ?: 0L,
+            strategyMode = prefs.getInt(KEY_STRATEGY_MODE, STRATEGY_SMART).let {
+                // P3：2=增强（双调用）已开放；非法值回退智能档。
+                if (it == STRATEGY_OFF || it == STRATEGY_SMART || it == STRATEGY_ENHANCED) {
+                    it
+                } else {
+                    STRATEGY_SMART
+                }
+            },
         )
 
     private val _tokenStats = MutableStateFlow(loadTokenStats())
@@ -261,6 +275,17 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(sessionTokenBudget = value) }
     }
 
+    /** 三级目标/策略卡模式（0 关 / 1 智能，默认；2 增强=每回合多一次快速战术预分析）。 */
+    fun setStrategyMode(mode: Int) {
+        val value = when (mode) {
+            STRATEGY_OFF -> STRATEGY_OFF
+            STRATEGY_ENHANCED -> STRATEGY_ENHANCED
+            else -> STRATEGY_SMART
+        }
+        prefs.edit().putInt(KEY_STRATEGY_MODE, value).apply()
+        _state.update { it.copy(strategyMode = value) }
+    }
+
     /** 记录一个主参谋回合的实际用量（模型 Usage 事件；缺测按 0 计），累计持久化。 */
     fun recordTurnUsage(inputTokens: Long, outputTokens: Long) {
         val current = _tokenStats.value
@@ -351,6 +376,7 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_ANSWER_LENGTH = "answer_length"
         const val KEY_DEDUP_LEVEL = "dedup_level"
         const val KEY_SESSION_BUDGET = "session_token_budget"
+        const val KEY_STRATEGY_MODE = "strategy_mode"
         const val KEY_TOTAL_INPUT = "usage_total_input"
         const val KEY_TOTAL_OUTPUT = "usage_total_output"
         const val KEY_TOTAL_TURNS = "usage_total_turns"
@@ -385,5 +411,10 @@ class AdvisorPrefs @Inject constructor(
 
         /** 连续模式 token 预算档（0=不限）。 */
         val TOKEN_BUDGET_OPTIONS = setOf(0L, 20_000L, 50_000L, 100_000L)
+
+        /** 策略模式档。 */
+        const val STRATEGY_OFF = 0
+        const val STRATEGY_SMART = 1
+        const val STRATEGY_ENHANCED = 2
     }
 }

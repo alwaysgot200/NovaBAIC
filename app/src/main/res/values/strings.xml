@@ -119,14 +119,12 @@
     <string name="float_ask_failed">出错了：%1$s</string>
     <string name="float_ask_question_label">【屏幕内容】</string>
     <string name="float_screen_unchanged">画面与上次几乎相同，未重复分析</string>
-    <string name="float_answer_label">【参谋】</string>
     <string name="float_ask_blank">屏幕内容为空（可能息屏或该应用禁止截屏）</string>
     <string name="float_ask_error_timeout">等待回答超时，请检查网络后重试</string>
     <string name="float_ask_error_no_response">没有收到回答，请稍后重试</string>
     <string name="float_ask_error_network">网络连接失败，请检查网络后重试</string>
     <string name="float_bubble_collapsed">【屏幕内容】已发送 %1$d 字 ▸ 点击展开</string>
     <string name="float_bubble_collapse">▾ 收起</string>
-    <string name="float_bubble_usage">本轮 token：输入 %1$d · 输出 %2$d</string>
     <string name="float_input_hint">问问「老参谋」…</string>
     <string name="float_input_send">发送</string>
     <string name="float_input_stop">停止</string>
@@ -135,7 +133,6 @@
     <string name="float_voice_unavailable">此设备不支持语音识别</string>
     <string name="float_voice_listening">正在聆听…</string>
     <string name="float_plus_to_main">附件请在完整对话中使用，已为你打开会话</string>
-    <string name="float_ask_system">你是屏幕问答助手。用户给你一段由 OCR 从手机当前屏幕识别出的文本（可能有识别噪声，可能缺少排版）。请用简体中文简洁地回答：如果用户的问题与屏幕内容相关，就基于内容作答；否则概述屏幕要点。不要复述原文。</string>
 
     <!-- 悬浮球 · 分屏顶栏（紧凑单行 + 即时方向 + 自动占位） -->
     <string name="float_ask_close_x">✕</string>
@@ -152,8 +149,23 @@
     <string name="float_dir_input_cancel">取消</string>
     <string name="float_copy_desc">复制回复</string>
     <string name="float_copy_done">已复制</string>
+    <!-- P3 §九：行内纠偏（采纳 / 长按三档 / 依据小字） -->
+    <string name="float_suggestion_adopt">✓采纳</string>
+    <string name="float_suggestion_adopted">✓已采纳</string>
+    <string name="float_correction_too_direct">太直接了</string>
+    <string name="float_correction_too_soft">太软了</string>
+    <string name="float_correction_change">换个方向</string>
+    <string name="float_regen_used">本回合已重写过一次</string>
+    <string name="float_ask_regen_failed">重写失败，请重试</string>
+    <string name="float_basis_label">依据：</string>
+    <string name="float_basis_wrong">记错了</string>
+    <string name="float_basis_correct_hint">正确的说法是什么？</string>
+    <string name="float_basis_correct_save">保存</string>
+    <string name="float_basis_correct_cancel">取消</string>
+    <string name="float_basis_correct_empty">请输入正确的信息</string>
+    <string name="float_basis_correct_done">已记下，后续会参考更正</string>
     <string-array name="float_dir_fallback">
-        <item>摸清对方诉求</item>
+        <item>摸清核心诉求</item>
         <item>推进报价</item>
         <item>化解顾虑</item>
         <item>促成下次行动</item>
@@ -173,7 +185,6 @@
     <string name="float_profile_type_group">群聊</string>
     <string name="float_profile_name">显示名（改名后旧名仍保留为别名）</string>
     <string name="float_profile_goal">业务目标（仅老参谋可见，不会写入通用记忆）</string>
-    <string name="float_profile_style">对 TA 的语言风格</string>
     <string name="float_profile_save">保存</string>
     <string name="float_profile_saved">已保存</string>
     <string name="float_profile_rebind_current">把当前参谋会话绑定到此人（切人修正）</string>
@@ -197,7 +208,6 @@
     <string name="float_profile_merge_fail_generic">合并失败，请重试。</string>
     <string name="float_profile_merged_undo">已把「%1$s」并入「%2$s」</string>
     <string name="float_profile_undo">撤销</string>
-    <string name="float_profile_style_custom">自定义风格（留空跟随我的默认风格）</string>
     <string name="float_profile_danger">危险操作</string>
     <string name="float_profile_forget">清除此人相关记忆</string>
     <string name="float_profile_forget_title">清除相关记忆</string>
@@ -249,6 +259,17 @@
     <string name="float_style_preview_empty">尚未选择基调或意图，将使用基础参谋风格</string>
     <string name="float_style_save">保存</string>
     <string name="float_style_saved">风格已保存</string>
+    <!-- P3 §八 customNote 编译确认流 -->
+    <string name="float_style_note_compiling">正在理解你的补充…</string>
+    <string name="float_style_note_ask">这样理解对吗？</string>
+    <string name="float_style_note_do">要这样做：%1$s</string>
+    <string name="float_style_note_dont">避免：%1$s</string>
+    <string name="float_style_note_failed">没能理解这句补充，可以重新理解或放弃</string>
+    <string name="float_style_note_adopt">理解正确，采用</string>
+    <string name="float_style_note_retry">重新理解</string>
+    <string name="float_style_note_discard">放弃这句补充</string>
+    <string name="float_style_note_adopted">补充已生效</string>
+    <string name="float_style_note_discarded">已放弃这句补充</string>
     <string name="float_style_follow_default">恢复跟随默认风格</string>
     <string name="float_style_follow_default_confirm">删除这位联系人的专属风格，之后统一使用你的默认说话风格？</string>
     <string name="float_style_none">未设置（使用基础风格）</string>
@@ -258,8 +279,6 @@
     <string name="float_style_custom_edit">✎ 自定义…</string>
     <string name="float_style_custom_done">✓ 完成</string>
     <string name="float_style_example">示例</string>
-    <string name="float_style_do">要</string>
-    <string name="float_style_dont">不要</string>
     <string name="float_scenario_title">适用场景</string>
     <string name="float_scenario_none">不套用场景</string>
     <string name="float_scenario_hint">切换场景会用其默认风格覆盖当前选择</string>
@@ -335,6 +354,169 @@
     <string name="float_keepalive_auto_start_letv">乐视手机：自启动管理 → 允许应用自启动</string>
     <string name="float_keepalive_auto_start_zte">ZTE 手机：掌心管家 → 自启动管理 → 允许应用自启动</string>
     <string name="float_keepalive_auto_start_unknown">请在系统管家/安全中心中允许本应用「自启动」与「后台运行」，找不到入口时可点按直接打开应用详情页设置。</string>
+
+    <!-- 悬浮球 · P2 三级目标 + 策略卡 -->
+    <!-- 场景分组（场景选择器五组分段） -->
+    <string name="float_scenario_group_romance">情感关系</string>
+    <string name="float_scenario_group_workplace">职场</string>
+    <string name="float_scenario_group_business">商业</string>
+    <string name="float_scenario_group_conflict">冲突维权</string>
+    <string name="float_scenario_group_social">群聊社群</string>
+
+    <!-- P3：L1 Judge 高置信完成建议条（绝不自动勾选） -->
+    <string name="float_l1_complete_hint">看起来已达成：%1$s？</string>
+    <string name="float_l1_complete_mark">标记完成</string>
+    <string name="float_l1_complete_not_yet">还没</string>
+
+    <!-- 画像页：画像/目标 Tab -->
+    <string name="float_goal_tab_profile">画像</string>
+    <string name="float_goal_tab_goals">目标</string>
+    <string name="float_goal_global_quick">我的理想自我 · 默认策略</string>
+    <string name="float_goal_global_quick_hint">默认策略卡与聊天策略模式在「设置 → 我的聊天策略」里管理</string>
+
+    <!-- 目标分区与新建 -->
+    <string name="float_goal_section_l3">远期愿景</string>
+    <string name="float_goal_section_l2">中期目标</string>
+    <string name="float_goal_section_l1">近期目标</string>
+    <string name="float_goal_new_l3">＋ 新建远期愿景</string>
+    <string name="float_goal_new_l2">＋ 新建中期目标</string>
+    <string name="float_goal_new_l1">＋ 新建近期目标</string>
+    <string name="float_goal_empty_l3">还没有远期愿景。定一个大方向，老参谋会帮你拆出中期目标和自我修炼项。</string>
+    <string name="float_goal_empty_l2">还没有中期目标。可以从远期愿景的 AI 建议里采纳，也可以自己建。</string>
+    <string name="float_goal_empty_l1">还没有近期目标。保存中期目标后，AI 会针对当前站给出 1~3 个本周可执行的建议。</string>
+    <string name="float_goal_horizon">层级</string>
+    <string name="float_goal_horizon_l3">远期愿景（3 个月以上）</string>
+    <string name="float_goal_horizon_l2">中期目标（1~3 个月）</string>
+    <string name="float_goal_horizon_l1">近期目标（本周级）</string>
+    <string name="float_goal_title_label">目标标题</string>
+    <string name="float_goal_criteria">成功判据（可选，AI 会补全）</string>
+    <string name="float_goal_deadline">截止日期（yyyy-MM-dd，可选）</string>
+    <string name="float_goal_scenario">适用场景</string>
+    <string name="float_goal_template_hint">点模板快速填入（可再改）</string>
+    <string name="float_goal_parent_l2">关联中期目标</string>
+    <string name="float_goal_parent_required">近期目标必须先关联一个生效中的中期目标</string>
+    <string name="float_goal_save_compiling">已保存，正在后台生成路线与建议…</string>
+    <string name="float_goal_limit_l3">远期愿景同时只能有 1 个生效，请先归档旧的</string>
+    <string name="float_goal_limit_l2">中期目标最多同时 2 个生效，请先归档或完成</string>
+    <string name="float_goal_limit_l1">近期目标最多同时 3 个生效，请先完成或归档</string>
+    <string name="float_goal_badge_provisional">观察期</string>
+    <string name="float_goal_badge_ai">AI 建议</string>
+    <string name="float_goal_badge_review">待复盘：连续几轮没推进，考虑换个打法</string>
+    <string name="float_goal_confirm_provisional">✓ 确认</string>
+    <string name="float_goal_archive">归档</string>
+    <string name="float_goal_edit">编辑</string>
+    <string name="float_goal_done">完成</string>
+    <string name="float_goal_adopt">✓ 采纳</string>
+    <string name="float_goal_ignore">忽略</string>
+    <string name="float_goal_reactivate">重新激活</string>
+    <string name="float_goal_recompile">重新生成</string>
+    <string name="float_goal_practices">自我修炼</string>
+    <string name="float_goal_outcomes_title">AI 建议的中期目标（采纳后进入路线规划）</string>
+    <string name="float_goal_adopt_candidate">采纳</string>
+    <string name="float_goal_decomp_working">正在后台分析，稍后回来刷新…</string>
+    <string name="float_goal_deadline_label">截止 %1$s</string>
+    <string name="float_goal_progress_note">最近进展：%1$s</string>
+    <string name="float_goal_roadmap_practices">本站修炼建议</string>
+    <string name="float_goal_invalid_date">截止日期格式不对，请按 yyyy-MM-dd 填写</string>
+
+    <!-- 阶段进度条 -->
+    <string name="float_stage_progress">关系阶段</string>
+    <string name="float_stage_current">当前</string>
+    <string name="float_stage_terminal">已到站 · 长期经营</string>
+    <string name="float_stage_terminal_defend">已到站 · 止损收尾</string>
+    <string name="float_stage_pick_title">手动调整阶段（改站会清空当前站信号计数并锁定本站）</string>
+    <string name="float_stage_roadmap_goal">本站目标：%1$s</string>
+    <string name="float_stage_evidence">依据：%1$s</string>
+    <string name="float_stage_locked">已锁定（点锁解除，锁定中不会自动跳站）</string>
+    <string name="float_stage_history_title">历程</string>
+    <string name="float_stage_history_empty">暂无阶段变迁</string>
+    <string name="float_stage_edge_init">起步</string>
+    <string name="float_stage_edge_advance">推进</string>
+    <string name="float_stage_edge_branch">分叉</string>
+    <string name="float_stage_edge_retreat">回撤</string>
+    <string name="float_stage_edge_skip">跳站</string>
+    <string name="float_stage_edge_manual">手动</string>
+    <string name="float_stage_edge_reroute">重规划</string>
+
+    <!-- P3 分叉轻确认条 -->
+    <string name="float_branch_offer">局势出现新分支：%1$s，要切过去吗？</string>
+    <string name="float_branch_accept">切过去</string>
+    <string name="float_branch_reject">先不</string>
+
+    <!-- P3 reroute 重规划 -->
+    <string name="float_reroute_hint">路线不对？重规划</string>
+    <string name="float_reroute_busy">正在重规划路线…</string>
+    <string name="float_reroute_offer">新路线已生成，当前站将调整为「%1$s」，采用吗？</string>
+    <string name="float_reroute_accept">采用新路线</string>
+    <string name="float_reroute_reject">先不</string>
+    <string name="float_reroute_btn">重新规划路线</string>
+    <string name="float_reroute_timeout">在这站停得比预期久，要换条路线吗？</string>
+    <string name="float_reroute_pending">新路线草稿待确认，当前站将调整为「%1$s」。</string>
+
+    <!-- 策略卡入口/状态 -->
+    <string name="float_goal_card_entry">策略卡</string>
+    <string name="float_goal_card_draft">草稿待审核 v%1$d</string>
+    <string name="float_goal_card_confirmed">已确认生效 v%1$d</string>
+    <string name="float_goal_card_none">未生成</string>
+
+    <!-- 任务令台账 -->
+    <string name="float_mission_ledger">本轮策略台账</string>
+    <string name="float_mission_ledger_empty">还没有本轮策略记录，策略激活后的每回合任务令会记在这里</string>
+    <string name="float_mission_result_pending">待裁</string>
+    <string name="float_mission_result_advanced">推进</string>
+    <string name="float_mission_result_held">维持</string>
+    <string name="float_mission_result_regressed">倒退</string>
+    <string name="float_mission_result_ignored">未采纳</string>
+    <string name="float_mission_time_justnow">刚刚</string>
+    <string name="float_mission_time_min">%1$d 分钟前</string>
+    <string name="float_mission_time_hour">%1$d 小时前</string>
+    <string name="float_mission_time_day">%1$d 天前</string>
+
+    <!-- 设置：我的聊天策略 -->
+    <string name="float_settings_strategy_section">我的聊天策略</string>
+    <string name="float_strategy_mode_hint">智能模式：每回合先按目标、关系阶段与红线定本轮策略，再写回复；关闭后只用说话风格</string>
+    <string name="float_strategy_mode_off">关闭</string>
+    <string name="float_strategy_mode_smart">智能</string>
+    <string name="float_strategy_mode_enhanced">增强</string>
+    <string name="float_strategy_mode_enhanced_hint">增强：每回合多一次快速分析，响应略慢、更克制</string>
+    <string name="float_strategy_default_card">默认策略卡</string>
+    <string name="float_strategy_default_card_hint">对所有联系人生效；联系人确认专属卡后覆盖默认卡</string>
+    <string name="float_strategy_compile_now">立即编译</string>
+    <string name="float_strategy_compiling">已开始后台生成…</string>
+
+    <!-- 策略卡审核页 -->
+    <string name="float_strategy_card_title_default">默认策略卡</string>
+    <string name="float_strategy_card_title_contact">%1$s 的策略卡</string>
+    <string name="float_strategy_role_line">角色自我提醒（你将以第一人称照此聊天）</string>
+    <string name="float_strategy_section_self">自我约束</string>
+    <string name="float_strategy_section_their">对方推论</string>
+    <string name="float_strategy_section_their_group">群内推论</string>
+    <string name="float_strategy_section_topic">话题素材</string>
+    <string name="float_strategy_section_taboos">红线（本轮绝对禁止）</string>
+    <string name="float_strategy_add_item">＋ 加一条</string>
+    <string name="float_strategy_item_delete">删除</string>
+    <string name="float_strategy_item_user_tag">你的修改</string>
+    <string name="float_strategy_confirm">✓ 确认生效</string>
+    <string name="float_strategy_discard">忽略此草稿</string>
+    <string name="float_strategy_recompile">重新编译</string>
+    <string name="float_strategy_empty">还没有策略卡。老参谋可以基于你的人设、对方画像与场景红线编一张草稿，你审核后生效。</string>
+    <string name="float_strategy_empty_group">还没有策略卡。老参谋可以基于你的人设、群整体画像与群内红线编一张草稿，你审核后生效。</string>
+    <string name="float_strategy_compile_start">已开始生成草稿，完成后自动显示</string>
+    <string name="float_strategy_confirmed">策略卡已生效</string>
+    <string name="float_strategy_discarded">草稿已忽略</string>
+    <string name="float_strategy_empty_topic">本段为空：可手动补充适合本场景的可聊话题</string>
+
+    <!-- 分屏策略条 -->
+    <string name="float_mission_planning">正在定本轮策略…</string>
+    <string name="float_mission_line_prefix">本轮策略</string>
+    <string name="float_mission_provisional_q">我理解你这阶段的目标是「%1$s」，对吗？</string>
+    <string name="float_mission_yes">✓ 对</string>
+    <string name="float_mission_edit">✎ 改一下</string>
+    <string name="float_mission_skip">本次先跳过</string>
+    <string name="float_mission_actions">这样做</string>
+    <string name="float_mission_forbidden">本轮不做</string>
+    <string name="float_mission_signals">留意信号</string>
+    <string name="float_mission_success">达成标志</string>
 
     <!-- 品牌统一为「老参谋」：以下键覆盖上游库（device:impl / feature:settings）
          的同名资源。Android 资源合并中 app 优先级高于依赖库，无需改动上游文件；

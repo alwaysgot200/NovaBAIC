@@ -22,6 +22,7 @@ package com.verlintas.baic2.floatball
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.util.Log
 import com.verlintas.baic2.R
 import com.verlintas.baic2.core.data.repository.AgentRepository
 import com.verlintas.baic2.core.data.repository.ConversationRepository
@@ -43,6 +44,24 @@ import com.verlintas.baic2.device.api.ScreenshotProvider
 import com.verlintas.baic2.floatball.ScreenPerceiver.Perception
 import com.verlintas.baic2.floatball.advisor.AdvisorResponder
 import com.verlintas.baic2.floatball.advisor.ChatBriefBuilder
+import com.verlintas.baic2.floatball.advisor.GoalRepository
+import com.verlintas.baic2.floatball.advisor.MissionJudgeRunner
+import com.verlintas.baic2.floatball.advisor.StrategyBrief
+import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
+import com.verlintas.baic2.floatball.advisor.data.GOAL_ACTIVE
+import com.verlintas.baic2.floatball.advisor.data.HORIZON_L1
+import com.verlintas.baic2.floatball.advisor.data.HORIZON_L2
+import com.verlintas.baic2.floatball.advisor.data.MISSION_IGNORED
+import com.verlintas.baic2.floatball.advisor.data.MISSION_PENDING
+import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_BRANCH
+import com.verlintas.baic2.floatball.advisor.strategy.EDGE_KIND_BRANCH
+import com.verlintas.baic2.floatball.advisor.strategy.EdgeDef
+import com.verlintas.baic2.floatball.advisor.strategy.PlanStreamFilter
+import com.verlintas.baic2.floatball.advisor.strategy.StageGraph
+import com.verlintas.baic2.floatball.advisor.strategy.StrategyPrompt
+import com.verlintas.baic2.floatball.advisor.strategy.Tactician
+import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
+import kotlinx.serialization.encodeToString
 import com.verlintas.baic2.floatball.advisor.PersonaExtractor
 import com.verlintas.baic2.floatball.brief.ContactBriefSection
 import com.verlintas.baic2.floatball.contact.ContactDirectory
@@ -108,8 +127,13 @@ class ScreenAdvisor @Inject constructor(
     private val geometryProvider: ScreenGeometryProvider,
     private val noiseRules: NoiseRules,
     private val chatBriefBuilder: ChatBriefBuilder,
+    private val strategyBrief: StrategyBrief,
+    private val goalRepository: GoalRepository,
+    private val missionJudge: MissionJudgeRunner,
     private val personaExtractor: PersonaExtractor,
     private val responder: AdvisorResponder,
+    private val strategyRuntime: com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime,
+    private val tacticalAdvisor: com.verlintas.baic2.floatball.advisor.TacticalAdvisor,
 ) {
 
     /** 面板渲染所需的一切：会话消息 + 正在流式的回答 + 阶段状态。 */
@@ -120,6 +144,22 @@ class ScreenAdvisor @Inject constructor(
         val status: Status = Status.Idle,
         /** 最近一个完成回合的模型上报用量（面板小字；新回合开始清空）。 */
         val lastUsage: TurnTokens? = null,
+        /**
+         * 本会话最近任务令（P3 §九）：驱动参谋气泡行内「✓采纳」——
+         * 只在最新 assistant 气泡、且存在 pending 任务令时可点。
+         */
+        val missions: List<MissionMark> = emptyList(),
+        /** P3 §九：assistant 消息 id → 本回合依据关键词（内存态，随会话切换清空）。 */
+        val basisByMessage: Map<Long, List<String>> = emptyMap(),
+        /** P3 §九：已用过一次长按重写的「被修正回合」触发消息 id（每回合限一次）。 */
+        val regeneratedTurns: Set<Long> = emptySet(),
+    )
+
+    /** 任务令在气泡行内交互所需的最小投影。 */
+    data class MissionMark(
+        val id: Long,
+        val pending: Boolean,
+        val adoptedIndex: Int?,
     )
 
     /** 单回合 token 用量（模型 Usage；个别供应商不上报则为 0）。 */
@@ -159,6 +199,263 @@ class ScreenAdvisor @Inject constructor(
      */
     private val _budgetExceeded = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val budgetExceeded: SharedFlow<Unit> = _budgetExceeded.asSharedFlow()
+
+    /**
+     * 分屏策略条状态（P2 §5/§7.2）：三态互斥——
+     * planning（定本轮策略中，最短展示 [PLAN_HINT_MIN_MS]）→
+     * provisional（观察期 L2 轻确认问句）/ missionLine（本轮任务令，可展开看动作/红线）。
+     * 非策略回合（无联系人/无场景阶段）恒为全空，分屏不显示该条。
+     */
+    data class MissionUiState(
+        val planning: Boolean = false,
+        val missionLine: String? = null,
+        val expanded: Boolean = false,
+        val missionDetail: MissionDetail? = null,
+        val provisional: ProvisionalPrompt? = null,
+        val pendingBranch: PendingBranch? = null,
+        /** P3：连续 retreat×2 命中后展示「路线不对？重规划」入口（可与任务令并存）。 */
+        val rerouteHint: Boolean = false,
+        /** 重规划草稿生成中（入口按钮置忙）。 */
+        val rerouteBusy: Boolean = false,
+        /** P3：新路线草稿待确认（与分叉提议同级，优先于任务令展示）。 */
+        val pendingReroute: PendingReroute? = null,
+    ) {
+        /** 任务令详情（展开态内容）。 */
+        data class MissionDetail(
+            val mission: String,
+            val actions: List<String>,
+            val forbidden: List<String>,
+            val signalsToWatch: List<String>,
+            val successWhen: String,
+        )
+
+        /** 观察期 L2 轻确认问句。 */
+        data class ProvisionalPrompt(val goalId: Long, val title: String)
+
+        /** P3 有向图分叉待确认（branch 边命中，需用户拍板才切支线）。 */
+        data class PendingBranch(
+            val contactId: Long,
+            val scenarioCode: String,
+            val targetCode: String,
+            val targetLabel: String,
+            val reason: String,
+            val pathTag: String?,
+        )
+
+        /** P3 reroute 待确认：采用后按 stageMapping 迁站并激活新版路线。 */
+        data class PendingReroute(
+            val goalId: Long,
+            val decompId: Long,
+            val targetLabel: String,
+        )
+    }
+
+    private val _missionUi = MutableStateFlow(MissionUiState())
+    val missionUi: StateFlow<MissionUiState> = _missionUi.asStateFlow()
+
+    /** 观察期 L2：用户确认（转 active）。 */
+    suspend fun confirmProvisionalGoal(goalId: Long) {
+        runCatching { goalRepository.confirmProvisionalL2(goalId) }
+        _missionUi.update { it.copy(provisional = null) }
+    }
+
+    /** 观察期 L2：本次先跳过（仅 +1，达到沉默上限由 Repository 归档）。 */
+    suspend fun skipProvisionalGoal(goalId: Long) {
+        runCatching { goalRepository.skipProvisionalL2(goalId) }
+        _missionUi.update { it.copy(provisional = null) }
+    }
+
+    /** 编辑观察期 L2 前先关闭问句（目标页编辑完成由目标页自行刷新）。 */
+    fun dismissProvisionalGoal() {
+        _missionUi.update { it.copy(provisional = null) }
+    }
+
+    /** P3：接受 Judge 发现的分叉支线——按 branch 边移动阶段并写 history。 */
+    suspend fun acceptPendingBranch() {
+        val offer = _missionUi.value.pendingBranch ?: return
+        runCatching {
+            val pack = strategyBrief.pack(offer.contactId) ?: return@runCatching
+            val stage = goalRepository.stage(offer.contactId, offer.scenarioCode) ?: return@runCatching
+            val activeL2 = goalRepository.activeGoals(offer.contactId, HORIZON_L2)
+                .firstOrNull { it.status == GOAL_ACTIVE }?.id
+            val roadmap = goalRepository.activeRoadmap(offer.contactId, offer.scenarioCode, activeL2)
+            val graph = StageGraph.resolve(pack, roadmap)
+            val edge = graph.outgoingFrom(stage.stageCode)
+                .firstOrNull { it.kind == EDGE_KIND_BRANCH && it.to == offer.targetCode }
+                ?: EdgeDef(from = stage.stageCode, to = offer.targetCode, kind = EDGE_KIND_BRANCH, pathTag = offer.pathTag)
+            val now = System.currentTimeMillis()
+            val applied = StageGraph.applyEdge(stage, edge, graph, now, offer.reason) ?: return@runCatching
+            goalRepository.commitStage(applied, STAGE_EDGE_BRANCH, offer.reason, from = stage, now = now)
+        }.onFailure { android.util.Log.d(TAG, "accept branch failed", it) }
+        _missionUi.update { it.copy(pendingBranch = null) }
+    }
+
+    /** P3：暂不切支线（仅关闭提议；下回合信号再次命中时 Judge 可重新提议）。 */
+    fun rejectPendingBranch() {
+        _missionUi.update { it.copy(pendingBranch = null) }
+    }
+
+    /**
+     * P3：用户点「路线不对？重规划」。找当前联系人的 active L2，慢车道生成新路线草稿；
+     * 成功后挂 pendingReroute 轻确认条，失败静默收起忙碌态（降级矩阵）。
+     */
+    fun requestReroute() {
+        val contactId = _activeContact.value?.contactId ?: return
+        if (_missionUi.value.rerouteBusy || _missionUi.value.pendingReroute != null) return
+        _missionUi.update { it.copy(rerouteBusy = true) }
+        advisorScope.launch {
+            val goalId = runCatching {
+                goalRepository.activeGoals(contactId, HORIZON_L2).firstOrNull { it.status == GOAL_ACTIVE }?.id
+            }.getOrNull()
+            if (goalId == null) {
+                _missionUi.update { it.copy(rerouteBusy = false) }
+                return@launch
+            }
+            strategyRuntime.requestReroute(goalId) { plan ->
+                _missionUi.update {
+                    if (plan != null) {
+                        it.copy(
+                            rerouteBusy = false,
+                            rerouteHint = false,
+                            pendingReroute = MissionUiState.PendingReroute(
+                                goalId = plan.goalId,
+                                decompId = plan.decompId,
+                                targetLabel = plan.targetLabel,
+                            ),
+                        )
+                    } else {
+                        it.copy(rerouteBusy = false)
+                    }
+                }
+            }
+        }
+    }
+
+    /** P3：采用新路线（迁站 + 激活新版 decomp）。 */
+    fun acceptPendingReroute() {
+        val pending = _missionUi.value.pendingReroute ?: return
+        advisorScope.launch {
+            val ok = strategyRuntime.acceptReroute(pending.goalId, pending.decompId)
+            _missionUi.update { it.copy(pendingReroute = null) }
+            if (ok) {
+                // 下次回合 assess 会按新钉住的 roadmapVersion 重新取景；此处无需缓存操作。
+                android.util.Log.d(TAG, "reroute accepted: goal=${pending.goalId}")
+            }
+        }
+    }
+
+    /** P3：先不（草稿留存不激活，状态机继续跑旧版）。 */
+    fun rejectPendingReroute() {
+        val pending = _missionUi.value.pendingReroute ?: return
+        _missionUi.update { it.copy(pendingReroute = null) }
+        advisorScope.launch { strategyRuntime.rejectReroute(pending.decompId) }
+    }
+
+    /**
+     * P3：回合收尾规则层 retreat 裁决后调用——同站连续 retreat 命中达阈值，
+     * 在分屏条亮「路线不对？重规划」入口（只建议，绝不静默重规划）。
+     */
+    private suspend fun maybeShowRerouteHint(contactId: Long, scenarioCode: String, stageCode: String) {
+        val count = runCatching {
+            goalRepository.consecutiveEdgeAtStage(
+                contactId = contactId,
+                scenarioCode = scenarioCode,
+                stageCode = stageCode,
+                edge = com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_RETREAT,
+            )
+        }.getOrDefault(0)
+        if (count >= REROUTE_RETREAT_HITS) {
+            _missionUi.update { it.copy(rerouteHint = true) }
+        }
+    }
+
+    /** 展开/收起任务令详情。 */
+    fun toggleMissionExpanded() {
+        _missionUi.update { state ->
+            if (state.missionLine == null) state else state.copy(expanded = !state.expanded)
+        }
+    }
+
+    /** 新回合开始：进入 planning 态，清空上一回合任务令/问句。 */
+    private fun beginMissionUi() {
+        _missionUi.value = MissionUiState(planning = true)
+    }
+
+    /** 正文首字到达：清除 planning（最短展示由调用方 delay 保证）。 */
+    private fun clearPlanningUi() {
+        _missionUi.update { it.copy(planning = false) }
+    }
+
+    /** 回合结束无策略内容时复位（不留上一回合的条）。 */
+    private fun resetMissionUi() {
+        _missionUi.value = MissionUiState()
+    }
+
+    /**
+     * 回合成功收尾（P2 §5/§7.2）：剥离器截到的 <plan> 经 Tactician 解析成功才入
+     * talk_missions 台账；分屏策略条按「观察期 L2 轻确认 ＞ 本轮任务令」择一展示。
+     * 任何失败只 Log.d，不影响已落库的参谋回答（plan 缺失退化为无条/仅问句）。
+     */
+    private suspend fun finalizeMission(
+        snapshot: StrategyBrief.Snapshot?,
+        filter: PlanStreamFilter?,
+        conversationId: Long,
+        contact: ContactRef?,
+        turnMessageId: Long,
+    ) {
+        if (snapshot == null) {
+            resetMissionUi()
+            return
+        }
+        val planRaw = filter?.plan()
+        val plan = planRaw?.let { raw ->
+            runCatching { Tactician.parsePlan(raw) }.getOrNull()
+        }
+        if (plan != null && plan.mission.isNotBlank()) {
+            runCatching {
+                goalRepository.insertMission(
+                    TalkMissionEntity(
+                        conversationId = conversationId,
+                        contactId = contact?.contactId,
+                        turnMessageId = turnMessageId,
+                        stageCode = snapshot.context.stage.stageCode,
+                        goalId = snapshot.context.activeL1?.id ?: snapshot.context.activeL2?.id,
+                        mission = plan.mission,
+                        actionsJson = strategyJson.encodeToString(plan.actions),
+                        forbiddenJson = strategyJson.encodeToString(plan.forbidden),
+                        signalsJson = strategyJson.encodeToString(plan.signalsToWatch),
+                        planBlockJson = planRaw,
+                        createdAt = System.currentTimeMillis(),
+                    ),
+                )
+            }.onFailure { android.util.Log.d(TAG, "insert mission failed", it) }
+        }
+        val prompt = snapshot.provisionalL2
+            ?.takeIf { it.title.isNotBlank() }
+            ?.let { MissionUiState.ProvisionalPrompt(it.id, it.title) }
+        val detail = plan?.takeIf { prompt == null && it.mission.isNotBlank() }?.let {
+            MissionUiState.MissionDetail(
+                mission = it.mission,
+                actions = it.actions,
+                forbidden = it.forbidden,
+                signalsToWatch = it.signalsToWatch,
+                successWhen = it.successWhen,
+            )
+        }
+        // P3：T1 阶段 Judge 可能已挂上分叉提议，回合末重建状态时保留（与轻确认条同生命周期）；
+        // reroute 入口/草稿同此（finalize 可能在后台 retreat 裁决前后发生，各字段独立保留）。
+        val prev = _missionUi.value
+        _missionUi.value = MissionUiState(
+            planning = false,
+            missionLine = detail?.mission,
+            expanded = false,
+            missionDetail = detail,
+            provisional = prompt,
+            pendingBranch = prev.pendingBranch,
+            rerouteHint = prev.rerouteHint,
+            pendingReroute = prev.pendingReroute,
+        )
+    }
 
     /** 连续参谋开录前由服务层调用：清零本次会话级 token 计数。 */
     fun resetSessionUsage() = prefs.resetSessionUsage()
@@ -625,7 +922,8 @@ class ScreenAdvisor @Inject constructor(
 
     /** 一次尝试的结果：成功 / 零文本失败（可重试）/ 已有部分输出失败（不重试）。 */
     private sealed interface TurnOutcome {
-        data object Done : TurnOutcome
+        /** @param assistantMessageId 落库的参谋回复消息 id（P3 §九依据小字挂接用）。 */
+        data class Done(val assistantMessageId: Long) : TurnOutcome
         data class ZeroOutputFailure(val reason: String) : TurnOutcome
         data class PartialOutputFailure(val reason: String, val partial: String) : TurnOutcome
     }
@@ -644,6 +942,7 @@ class ScreenAdvisor @Inject constructor(
         val boundDigest: String?,
         val brief: ChatBriefBuilder.Brief?,
         val facts: ContactFacts?,
+        val strategy: StrategyBrief.Snapshot?,
     )
 
     /**
@@ -680,6 +979,21 @@ class ScreenAdvisor @Inject constructor(
         val incoming = IncomingCue.latestIncoming(screenBody)
         val recallCue = IncomingCue.recallQuery(screenBody, goal, RECALL_QUERY_CHARS)
 
+        // P3 §12.2：来信指纹确已变化（非 OCR 抖动的同屏重复）才写来信时间戳，
+        // 供 StrategyBrief 的 24h 中性时序信号消费。共享会话无绑定行，UPDATE 静默无效。
+        if (incoming != null) {
+            val priorIncoming = allMessages.asReversed().asSequence()
+                .drop(1) // 跳过本回合 question 自身
+                .filter { it.role == ChatRole.USER }
+                .mapNotNull { IncomingCue.latestIncoming(stripScreenLabel(it.content)) }
+                .firstOrNull()
+            if (priorIncoming == null || !PromptDedup.isDuplicate(incoming, priorIncoming)) {
+                runCatching {
+                    contactDirectory.markIncomingAt(conversationId, System.currentTimeMillis())
+                }
+            }
+        }
+
         // T1 并行取数（v4 §11）：核心记忆/通用召回/滚动摘要/ChatBrief/
         // 交往脉络五类只读数据并发，互不依赖；任一失败 runCatching 静默降级，
         // 绝不让参谋回合开天窗（P-7）。
@@ -704,10 +1018,99 @@ class ScreenAdvisor @Inject constructor(
                     runCatching { contactDirectory.digest(c.contactId) }.getOrNull()?.digest
                 }
             }
-            val briefDeferred = async {
+            val strategyDeferred = async {
                 contact?.let { c ->
                     runCatching {
-                        chatBriefBuilder.build(c.contactId, screenBody, goal)
+                        // 先取景，再对「上一回合遗留的 pending 任务令」做条件裁决；
+                        // Judge 可能推动阶段跃迁，裁决落库后重新取景，保证本回合
+                        // 提示词与分屏条用新站（裁决失败静默沿用第一次取景结果）。
+                        val first = strategyBrief.assess(
+                            contactId = c.contactId,
+                            conversationId = conversationId,
+                            incomingText = incoming.orEmpty(),
+                            screenBody = screenBody,
+                        ) ?: return@runCatching null
+                        val judgeText = incoming ?: screenBody
+                        val lastReply = runCatching {
+                            historyGateway.recentScreenTurns(conversationId, screenLabel)
+                                .lastOrNull()?.replyContent
+                        }.getOrNull()
+                        // P3 §十：只把 active L1（≤3）交给 Judge 判 completedL1。
+                        val activeL1ForJudge = runCatching {
+                            goalRepository.activeGoals(c.contactId, HORIZON_L1)
+                                .filter { it.status == GOAL_ACTIVE }
+                                .take(GoalRepository.CAP_L1)
+                        }.getOrDefault(emptyList())
+                        val outcome = runCatching {
+                            missionJudge.judgePending(
+                                contactId = c.contactId,
+                                pack = first.context.pack,
+                                stage = first.context.stage,
+                                roadmap = first.context.roadmap,
+                                incomingText = judgeText,
+                                replyText = lastReply,
+                                activeL1 = activeL1ForJudge,
+                            )
+                        }.getOrNull()
+                        val judged = outcome?.judged == true
+                        outcome?.branch?.let { b ->
+                            _missionUi.update {
+                                it.copy(
+                                    pendingBranch = MissionUiState.PendingBranch(
+                                        contactId = c.contactId,
+                                        scenarioCode = first.context.pack.code,
+                                        targetCode = b.targetCode,
+                                        targetLabel = b.targetLabel,
+                                        reason = b.reason,
+                                        pathTag = b.pathTag,
+                                    ),
+                                )
+                            }
+                        }
+                        // P3 §十：高置信完成只入内存建议态，GoalTab 出建议条，绝不自动勾选。
+                        outcome?.l1Completions?.forEach { suggestion ->
+                            goalRepository.suggestL1Completion(
+                                goalId = suggestion.goalId,
+                                title = suggestion.title,
+                                evidence = suggestion.evidence,
+                            )
+                        }
+                        if (judged) {
+                            runCatching {
+                                strategyBrief.assess(
+                                    contactId = c.contactId,
+                                    conversationId = conversationId,
+                                    incomingText = incoming.orEmpty(),
+                                    screenBody = screenBody,
+                                    countProvisionalPrompt = false,
+                                )
+                            }.getOrDefault(first)
+                        } else {
+                            first
+                        }
+                    }.getOrNull()
+                }
+            }
+            val briefDeferred = async {
+                contact?.let { c ->
+                    // 风格段站码与业务目标抑制依赖策略取景结果，先 await 再组装 brief。
+                    val snap = strategyDeferred.await()
+                    runCatching {
+                        val relevanceSignals = snap?.context?.let { ctx ->
+                            (ctx.runtimeStage?.advanceSignals.orEmpty() +
+                                ctx.runtimeStage?.retreatSignals.orEmpty() +
+                                ctx.pack.retreatSignals).toSet()
+                        }.orEmpty()
+                        chatBriefBuilder.build(
+                            contactId = c.contactId,
+                            latestScreenText = screenBody,
+                            goalOverride = goal,
+                            stageCode = snap?.context?.stage?.stageCode,
+                            packStageCodes = snap?.stageCodes,
+                            suppressGoal = snap?.suppressGoal == true,
+                            relevanceSignals = relevanceSignals,
+                            pathKind = snap?.context?.pack?.pathKind,
+                        )
                     }.getOrNull()
                 }
             }
@@ -722,6 +1125,7 @@ class ScreenAdvisor @Inject constructor(
                 boundDigest = digestDeferred.await(),
                 brief = briefDeferred.await(),
                 facts = factsDeferred.await(),
+                strategy = strategyDeferred.await(),
             )
         }
 
@@ -773,6 +1177,16 @@ class ScreenAdvisor @Inject constructor(
                 "entity=${sources.facts?.entityNotes?.size ?: 0}->${entityKept.size}, " +
                 "due=${dueNotes.size}, deal=${sources.facts?.dealFacts?.size ?: 0}->${dealKept.size}",
         )
+        sources.strategy?.let { snap ->
+            // P2 步骤6：先只观察取数；strategySection/outputProtocol 在步骤7 拼入提示词。
+            android.util.Log.d(
+                TAG,
+                "strategy snapshot: pack=${snap.context.pack.code}, stage=${snap.context.stage.stageCode}, " +
+                    "l2=${snap.context.activeL2?.id}, l1=${snap.context.activeL1?.id}, " +
+                    "card=${snap.context.card != null}, retreat=${snap.context.retreatHits}, " +
+                    "provisional=${snap.provisionalL2?.id}, suppressGoal=${snap.suppressGoal}",
+            )
+        }
 
         val memoryContext = MemoryPrompt.context(
             core = sources.core,
@@ -801,15 +1215,54 @@ class ScreenAdvisor @Inject constructor(
         val directionSection = _direction.value.selected
             ?.takeIf { it.isNotBlank() }
             ?.let { "$DIRECTION_SECTION\n$it\n$DIRECTION_REQUIRE" }
+        // P2 策略段（角色/阶段/近期目标/红线/自我约束/素材/态势）+ 两段式输出协议：
+        // 仅在策略取景命中（绑定联系人且有场景阶段）时出现，否则链路与 P1 完全一致。
+        val strategySnapshot = sources.strategy
+        // P3 §七：增强档 + 智能通道回合，主调用之前串行一次战术预分析。
+        // 轻通道（lean）不插以控成本；任何失败静默回退一段式（行为退化为档 1）。
+        val tacticalBrief = if (
+            settings.strategyMode == AdvisorPrefs.STRATEGY_ENHANCED &&
+            !lean &&
+            strategySnapshot != null
+        ) {
+            runCatching {
+                tacticalAdvisor.preAnalyze(
+                    ctx = strategySnapshot.context,
+                    latestIncoming = incoming ?: screenBody,
+                )
+            }.onFailure {
+                android.util.Log.d(TAG, "$REASON_ENHANCED_FALLBACK: preAnalyze failed", it)
+            }.getOrNull().also {
+                if (it == null) android.util.Log.d(TAG, "$REASON_ENHANCED_FALLBACK: empty/rejected brief")
+            }
+        } else {
+            null
+        }
+        val strategySection = strategySnapshot?.let { snap ->
+            runCatching { StrategyPrompt.strategySection(snap.context, tacticalBrief) }
+                .onFailure { android.util.Log.d(TAG, "strategySection render failed", it) }
+                .getOrNull()
+        }
+        val outputProtocolSection = if (strategySnapshot != null) {
+            StrategyPrompt.outputProtocol()
+        } else {
+            null
+        }
+        // 每回合独立一个剥离器（非线程安全，设计为单流使用）。
+        val planFilter = strategySnapshot?.let { PlanStreamFilter() }
+        val planningStartAt = if (strategySnapshot != null) System.currentTimeMillis() else null
+        if (strategySnapshot != null) beginMissionUi() else resetMissionUi()
         // 规约总纲置 system prompt 首位（v4 §8.1）：renderSystemPrompt 会把
         // custom 拼在最前，总纲因此先于上游一切基线条目。
         val customSystemPrompt = listOfNotNull(
             PREAMBLE_SECTION,
             styleWithLength,
+            strategySection,
             sources.brief?.styleSection,
             directionSection,
             sources.brief?.section,
             contactSection,
+            outputProtocolSection,
         )
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
@@ -849,6 +1302,8 @@ class ScreenAdvisor @Inject constructor(
                         triggerMessageId = question.id,
                         firstTextTimeoutMs = firstTextTimeoutMs,
                         onUsage = usageSink,
+                        planFilter = planFilter,
+                        planningStartAt = planningStartAt,
                     )
                 } else {
                     collectAdvisorOnce(
@@ -860,11 +1315,33 @@ class ScreenAdvisor @Inject constructor(
                         triggerMessageId = question.id,
                         firstTextTimeoutMs = firstTextTimeoutMs,
                         onUsage = usageSink,
+                        planFilter = planFilter,
+                        planningStartAt = planningStartAt,
                     )
                 }
                 when (outcome) {
                     is TurnOutcome.Done -> {
                         recordTurnUsage(turnInput, turnOutput, tightRetry, settings.sessionTokenBudget)
+                        // P3 §九：依据关键词挂到新参谋气泡（内存态）。
+                        if (outcome.assistantMessageId > 0L) {
+                            val basis = sources.brief?.basis.orEmpty()
+                            if (basis.isNotEmpty()) {
+                                _transcript.update { st ->
+                                    st.copy(
+                                        basisByMessage = st.basisByMessage +
+                                            (outcome.assistantMessageId to basis),
+                                    )
+                                }
+                            }
+                        }
+                        // P2：plan 块解析入库 + 分屏策略条（任务令/观察期轻确认）。
+                        finalizeMission(
+                            snapshot = strategySnapshot,
+                            filter = planFilter,
+                            conversationId = conversationId,
+                            contact = contact,
+                            turnMessageId = question.id,
+                        )
                         // 后台滚动摘要 + 画像萃取：独立协程，不占串行队列、不阻塞 UI。
                         // 上一回合的沉淀仍在跑则跳过（素材每次按全量回合重算，不丢信息）。
                         advisorScope.launch {
@@ -873,6 +1350,30 @@ class ScreenAdvisor @Inject constructor(
                                     runCatching { maybeRefreshDigest(conversationId, contact) }
                                     if (contact != null) {
                                         runCatching { maybeExtractPersona(conversationId, contact) }
+                                        // P2 Judge 规则层：本回合 retreat 命中 → 上一回合
+                                        // pending 任务令直接 regressed（LLM 层在下回合 T1）。
+                                        strategySnapshot?.let { snap ->
+                                            runCatching {
+                                                val retreated = missionJudge.applyRuleRetreat(
+                                                    contactId = contact.contactId,
+                                                    pack = snap.context.pack,
+                                                    stage = snap.context.stage,
+                                                    roadmap = snap.context.roadmap,
+                                                    incomingText = incoming ?: screenBody,
+                                                )
+                                                // P3：连续 retreat×2 → 亮重规划入口（裁决可能已回站，重取当前站码）。
+                                                if (retreated) {
+                                                    val currentCode = goalRepository
+                                                        .stage(contact.contactId, snap.context.pack.code)
+                                                        ?.stageCode ?: snap.context.stage.stageCode
+                                                    maybeShowRerouteHint(
+                                                        contact.contactId,
+                                                        snap.context.pack.code,
+                                                        currentCode,
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 } finally {
                                     consolidationLock.unlock()
@@ -882,6 +1383,8 @@ class ScreenAdvisor @Inject constructor(
                         return
                     }
                     is TurnOutcome.PartialOutputFailure -> {
+                        // 已出文本后失败：计划提示不再停留；plan 即使截到也不入台账（回合未成功）。
+                        clearPlanningUi()
                         if (outcome.partial.isNotBlank()) {
                             conversationRepository.append(
                                 ChatMessage(
@@ -1069,6 +1572,8 @@ class ScreenAdvisor @Inject constructor(
         triggerMessageId: Long,
         firstTextTimeoutMs: Long,
         onUsage: (Long, Long) -> Unit,
+        planFilter: PlanStreamFilter? = null,
+        planningStartAt: Long? = null,
     ): TurnOutcome = kotlinx.coroutines.coroutineScope {
         val chunks = responder.stream(
             config = config,
@@ -1080,13 +1585,30 @@ class ScreenAdvisor @Inject constructor(
         val live = StringBuilder()
         var sawText = false
         var failureReason: String? = null
+        // 正文首字揭示：策略回合在首段可见输出到达后，保证「正在定本轮策略」
+        // 最短展示 PLAN_HINT_MIN_MS 再清除，避免提示一闪而过。
+        var bodyRevealed = false
+        var pendingReveal = false
+        suspend fun revealBody() {
+            if (bodyRevealed) return
+            bodyRevealed = true
+            if (planFilter != null && planningStartAt != null) {
+                val elapsed = System.currentTimeMillis() - planningStartAt
+                if (elapsed < PLAN_HINT_MIN_MS) delay(PLAN_HINT_MIN_MS - elapsed)
+            }
+            clearPlanningUi()
+        }
 
         fun handle(chunk: AdvisorResponder.Chunk) {
             when (chunk) {
                 is AdvisorResponder.Chunk.Delta -> {
                     sawText = true
-                    live.append(chunk.text)
-                    _transcript.update { it.copy(streaming = live.toString()) }
+                    val visible = planFilter?.feed(chunk.text) ?: chunk.text
+                    if (visible.isNotEmpty()) {
+                        live.append(visible)
+                        pendingReveal = true
+                        _transcript.update { it.copy(streaming = live.toString()) }
+                    }
                 }
                 is AdvisorResponder.Chunk.Usage -> onUsage(chunk.inputTokens, chunk.outputTokens)
                 is AdvisorResponder.Chunk.Failure -> failureReason = chunk.reason
@@ -1100,6 +1622,10 @@ class ScreenAdvisor @Inject constructor(
                     val result = chunks.receiveCatching()
                     if (result.isClosed) break
                     handle(result.getOrThrow())
+                    if (pendingReveal) {
+                        revealBody()
+                        pendingReveal = false
+                    }
                     if (sawText) break
                 }
             }
@@ -1122,7 +1648,13 @@ class ScreenAdvisor @Inject constructor(
             return@coroutineScope TurnOutcome.ZeroOutputFailure(failureReason ?: REASON_NO_RESPONSE)
         }
         try {
-            for (chunk in chunks) handle(chunk)
+            for (chunk in chunks) {
+                handle(chunk)
+                if (pendingReveal) {
+                    revealBody()
+                    pendingReveal = false
+                }
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -1137,7 +1669,12 @@ class ScreenAdvisor @Inject constructor(
         if (failureReason != null) {
             return@coroutineScope TurnOutcome.PartialOutputFailure(failureReason ?: "unknown", live.toString())
         }
-        conversationRepository.append(
+        // 未闭合 plan 的截留文本在此补还（endStream），保证落库消息完整。
+        planFilter?.endStream()?.takeIf { it.isNotEmpty() }?.let { tail ->
+            live.append(tail)
+            _transcript.update { it.copy(streaming = live.toString()) }
+        }
+        val assistantMessageId = conversationRepository.append(
             ChatMessage(
                 conversationId = conversationId,
                 role = ChatRole.ASSISTANT,
@@ -1147,7 +1684,7 @@ class ScreenAdvisor @Inject constructor(
         )
         _transcript.update { it.copy(streaming = null, status = Status.Idle) }
         _turnCompletions.tryEmit(Unit)
-        TurnOutcome.Done
+        TurnOutcome.Done(assistantMessageId)
     }
 
     /**
@@ -1164,6 +1701,8 @@ class ScreenAdvisor @Inject constructor(
         triggerMessageId: Long,
         firstTextTimeoutMs: Long,
         onUsage: (Long, Long) -> Unit,
+        planFilter: PlanStreamFilter? = null,
+        planningStartAt: Long? = null,
     ): TurnOutcome = kotlinx.coroutines.coroutineScope {
         val events: ReceiveChannel<AgentEvent> = agentLoop.run(
             config = config,
@@ -1178,24 +1717,47 @@ class ScreenAdvisor @Inject constructor(
         val live = StringBuilder()
         var sawText = false
         var completed = false
+        var completedMessageId: Long? = null
         var failureReason: String? = null
+        // 正文首字揭示（与 lean 通道同口径）；思考过程不算正文。
+        var bodyRevealed = false
+        suspend fun revealBody() {
+            if (bodyRevealed) return
+            bodyRevealed = true
+            if (planFilter != null && planningStartAt != null) {
+                val elapsed = System.currentTimeMillis() - planningStartAt
+                if (elapsed < PLAN_HINT_MIN_MS) delay(PLAN_HINT_MIN_MS - elapsed)
+            }
+            clearPlanningUi()
+        }
 
         suspend fun handle(event: AgentEvent) {
             when (event) {
                 is AgentEvent.TextDelta -> {
                     sawText = true
-                    live.append(event.text)
-                    _transcript.update { it.copy(streaming = live.toString()) }
+                    val visible = planFilter?.feed(event.text) ?: event.text
+                    if (visible.isNotEmpty()) {
+                        live.append(visible)
+                        _transcript.update { it.copy(streaming = live.toString()) }
+                        revealBody()
+                    }
                 }
                 // 推理模型的思考过程也算「活信号」：思考超过首字超时不应误重试。
                 is AgentEvent.ThinkingDelta -> sawText = true
                 is AgentEvent.AssistantMessage -> {
                     sawText = true
-                    if (event.message.content.isNotBlank()) {
+                    // 上游最终消息是完整文本：用一次性剥离去掉 <plan> 块（增量剥离可能跨 chunk）。
+                    val visibleContent = if (planFilter != null) {
+                        PlanStreamFilter.split(event.message.content).first
+                    } else {
+                        event.message.content
+                    }
+                    if (visibleContent.isNotBlank()) {
                         completed = true
-                        conversationRepository.append(
+                        completedMessageId = conversationRepository.append(
                             event.message.copy(
                                 conversationId = conversationId,
+                                content = visibleContent,
                                 createdAt = System.currentTimeMillis(),
                             ),
                         )
@@ -1206,7 +1768,7 @@ class ScreenAdvisor @Inject constructor(
                         // 末条消息为空但已有流式文本：以累积文本为准落库，
                         // 不写空气泡、不丢已生成内容。
                         completed = true
-                        conversationRepository.append(
+                        completedMessageId = conversationRepository.append(
                             ChatMessage(
                                 conversationId = conversationId,
                                 role = ChatRole.ASSISTANT,
@@ -1276,11 +1838,12 @@ class ScreenAdvisor @Inject constructor(
 
         val reason = failureReason
         when {
-            completed -> TurnOutcome.Done
+            completed -> TurnOutcome.Done(completedMessageId ?: 0L)
             reason != null -> TurnOutcome.PartialOutputFailure(reason, live.toString())
             // 兜底：上游有文本流出却没给 AssistantMessage 收尾，保住已生成内容。
             live.isNotBlank() -> {
-                conversationRepository.append(
+                planFilter?.endStream()?.takeIf { it.isNotEmpty() }?.let { live.append(it) }
+                val fallbackId = conversationRepository.append(
                     ChatMessage(
                         conversationId = conversationId,
                         role = ChatRole.ASSISTANT,
@@ -1290,7 +1853,7 @@ class ScreenAdvisor @Inject constructor(
                 )
                 _transcript.update { it.copy(streaming = null, status = Status.Idle) }
                 _turnCompletions.tryEmit(Unit)
-                TurnOutcome.Done
+                TurnOutcome.Done(fallbackId)
             }
             else -> TurnOutcome.ZeroOutputFailure(REASON_NO_RESPONSE)
         }
@@ -1314,19 +1877,201 @@ class ScreenAdvisor @Inject constructor(
     private fun subscribeConversation(conversationId: Long) {
         if (_transcript.value.conversationId == conversationId && observeJob != null) return
         observeJob?.cancel()
+        // 先切状态再挂收集器：若收集器先发射、状态后更新，会话守卫会把首次
+        // 发射整条丢弃，导致 missions 停留为上一会话的数据；同时清掉全部
+        // 会话相关瞬态，杜绝跨会话泄漏（missions/依据/重生成名额/消息）。
+        _transcript.update {
+            it.copy(
+                conversationId = conversationId,
+                messages = emptyList(),
+                missions = emptyList(),
+                basisByMessage = emptyMap(),
+                regeneratedTurns = emptySet(),
+            )
+        }
         observeJob = advisorScope.launch {
-            conversationRepository.observeMessages(conversationId).collect { messages ->
-                _transcript.update {
-                    if (it.conversationId == conversationId) it.copy(messages = messages) else it
+            launch {
+                conversationRepository.observeMessages(conversationId).collect { messages ->
+                    _transcript.update {
+                        if (it.conversationId == conversationId) it.copy(messages = messages) else it
+                    }
+                }
+            }
+            launch {
+                // P3 §九：任务令 pending/已采纳驱动参谋气泡行内「✓采纳」。
+                goalRepository.observeRecentMissionsForConversation(conversationId).collect { rows ->
+                    _transcript.update { st ->
+                        if (st.conversationId != conversationId) {
+                            st
+                        } else {
+                            st.copy(
+                                missions = rows.map {
+                                    MissionMark(
+                                        id = it.id,
+                                        pending = it.result == MISSION_PENDING,
+                                        adoptedIndex = it.adoptedIndex,
+                                    )
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
-        _transcript.update { it.copy(conversationId = conversationId) }
     }
 
     /** 浮窗关闭时清掉流式/状态等瞬态，会话与消息保持原样。 */
     fun resetTransient() {
         _transcript.update { it.copy(streaming = null, status = Status.Idle) }
+    }
+
+    // ── P3 §九：行内纠偏（采纳 / 长按三档重写 / 记错了） ─────────────────
+
+    /**
+     * 长按建议条的三档固定反馈：只用固定中文修正指令，不新造 LLM 自由文本。
+     * 指令拼进重写 system prompt，走轻通道（无工具直连）即时重生成。
+     */
+    enum class CorrectionKind(val directive: String) {
+        TOO_DIRECT(
+            "上一版太直接了。请更含蓄委婉：先共情接住对方情绪，再用商量、留余地的方式表达，" +
+                "避免命令式和结论式措辞，不要一上来就亮底牌。",
+        ),
+        TOO_SOFT(
+            "上一版太软了。请更明确、有立场地表达诉求与边界，态度友好但不含糊，" +
+                "给出具体可执行的说法。",
+        ),
+        CHANGE_DIRECTION(
+            "上一版方向不对。请换一个角度：先判断对方真正的顾虑或诉求，" +
+                "给出与上一版明显不同的新思路，不要沿着上一版的说法小修小补。",
+        ),
+    }
+
+    /**
+     * 行内「✓采纳」：回写本会话最新 pending 任务令的 adoptedIndex（1 起）。
+     * 复制该条正文由 UI 负责；无 pending 任务令时静默不写。
+     */
+    suspend fun adoptSuggestion(index: Int) {
+        val conversationId = _transcript.value.conversationId
+        if (conversationId <= 0L) return
+        val mission = goalRepository.latestPendingMissionForConversation(conversationId) ?: return
+        goalRepository.adoptMission(mission.id, index)
+    }
+
+    /** 长按三档入口：串行队列内轻通道重写，每回合限一次（名额失败时退回）。 */
+    fun regenerateSuggestionAsync(kind: CorrectionKind) {
+        advisorScope.launch {
+            turnMutex.withLock {
+                runCatching { regenerateSuggestion(kind) }
+                    .onFailure { Log.e(TAG, REASON_REGENERATE_FAILED, it) }
+            }
+        }
+    }
+
+    private suspend fun regenerateSuggestion(kind: CorrectionKind) {
+        val st0 = _transcript.value
+        val conversationId = st0.conversationId
+        if (conversationId <= 0L || st0.status !is Status.Idle) return
+        val messages = st0.messages.takeIf { it.isNotEmpty() }
+            ?: historyGateway.recentMessages(conversationId, HISTORY_LOAD_MESSAGES)
+        val lastUser = messages.lastOrNull { it.role == ChatRole.USER } ?: return
+        if (lastUser.id in st0.regeneratedTurns) return
+        val priorReply = messages.lastOrNull { it.role == ChatRole.ASSISTANT }
+            ?.content?.takeIf { it.isNotBlank() } ?: return
+
+        val settings = prefs.state.value
+        val boundedConfig = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
+            ?.copy(maxTokens = settings.answerMaxTokens)
+            ?: run {
+                _transcript.updateStatus(Status.Error(REASON_NO_CONFIG))
+                return
+            }
+
+        // 先占名额：重复长按只生效一次；下方失败路径会退回。
+        _transcript.update { it.copy(regeneratedTurns = it.regeneratedTurns + lastUser.id) }
+        _transcript.updateStatus(Status.Thinking)
+        val oldMission = goalRepository.latestPendingMissionForConversation(conversationId)
+        try {
+            // 原任务令作废；重写成功后以新行挂新任务令（adoptedIndex 归零）。
+            oldMission?.let { goalRepository.settleMission(it.id, MISSION_IGNORED) }
+            // 去掉尾部参谋回复：重写基于「对方来信」重新作答，旧回复仅作对照。
+            val history = messages.dropLastWhile { it.role == ChatRole.ASSISTANT }
+            val systemPrompt = REGEN_SYSTEM_PROMPT
+                .replace(REGEN_DIRECTIVE_PLACEHOLDER, kind.directive)
+                .replace(
+                    REGEN_PRIOR_PLACEHOLDER,
+                    priorReply.take(REGEN_PRIOR_MAX_CHARS),
+                )
+            val outcome = collectLeanOnce(
+                config = boundedConfig,
+                conversationId = conversationId,
+                systemPrompt = systemPrompt,
+                history = history,
+                maxTokens = settings.answerMaxTokens,
+                triggerMessageId = lastUser.id,
+                firstTextTimeoutMs = REGEN_FIRST_TEXT_TIMEOUT_MS,
+                onUsage = { _, _ -> },
+            )
+            if (outcome !is TurnOutcome.Done) {
+                // 零文本/部分失败：恢复名额与旧任务令（仍 pending 可采纳），
+                // 用户可重试长按或直接采纳旧建议。
+                oldMission?.let { goalRepository.settleMission(it.id, MISSION_PENDING) }
+                _transcript.update {
+                    it.copy(
+                        regeneratedTurns = it.regeneratedTurns - lastUser.id,
+                        status = Status.Error(REASON_REGENERATE_FAILED),
+                    )
+                }
+                return
+            }
+            oldMission?.let { old ->
+                goalRepository.insertMission(
+                    old.copy(
+                        id = 0L,
+                        result = MISSION_PENDING,
+                        adoptedIndex = null,
+                        planBlockJson = null,
+                        createdAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.e(TAG, REASON_REGENERATE_FAILED, error)
+            // 异常路径同样恢复名额与旧任务令（仍 pending 可采纳）。
+            oldMission?.let { goalRepository.settleMission(it.id, MISSION_PENDING) }
+            _transcript.update {
+                it.copy(
+                    regeneratedTurns = it.regeneratedTurns - lastUser.id,
+                    status = Status.Error(REASON_REGENERATE_FAILED),
+                )
+            }
+        }
+    }
+
+    /**
+     * 「记错了」：把用户修正写进记忆（走 MemoryRepository 冲突裁决，绝不直删）。
+     * @param basis 气泡展示的原依据关键词（仅供拼装备注，不用作删除目标）。
+     * @param correction 用户在输入框里确认/编辑后的正确说法。
+     * @return true=已写入；false=空内容。
+     */
+    suspend fun correctBasisMemory(basis: List<String>, correction: String): Boolean {
+        val text = correction.trim()
+        if (text.isEmpty()) return false
+        val conversationId = _transcript.value.conversationId.takeIf { it > 0 }
+        val tagged = if (basis.isEmpty()) {
+            text
+        } else {
+            "$text（老参谋依据更正，原依据：${basis.joinToString("、")}）"
+        }
+        return runCatching {
+            memoryRepository.addNote(
+                kind = NoteKind.FACT,
+                content = tagged,
+                importance = 4,
+                conversationId = conversationId,
+            )
+        }.onFailure { Log.e(TAG, "correctBasisMemory failed", it) }.isSuccess
     }
 
     /** 管道外意外异常（如收集侧崩溃）的兜底上报。 */
@@ -1361,6 +2106,9 @@ class ScreenAdvisor @Inject constructor(
         const val REASON_NO_TEXT = "no_text"
         const val REASON_NO_CONFIG = "no_config"
 
+        /** P3 reroute：同站连续 retreat 命中达此数即建议重规划（不自动）。 */
+        const val REROUTE_RETREAT_HITS = 2
+
         /** 即时方向的会话键：共享会话用；绑定联系人拼 `c:<contactId>`。 */
         const val DIRECTION_KEY_SHARED = "shared"
 
@@ -1392,9 +2140,32 @@ class ScreenAdvisor @Inject constructor(
         const val REASON_NETWORK = "network"
         const val REASON_NO_RESPONSE = "no_response"
 
+        /** P3 §七：增强档战术预调用失败/被拒（超时/解析失败），静默退化为智能档。 */
+        const val REASON_ENHANCED_FALLBACK = "enhanced_fallback"
+
+        /** P3 §九：长按三档重写失败（展示层映射中文文案）。 */
+        const val REASON_REGENERATE_FAILED = "regenerate_failed"
+
+        /** P3 §九：长按重写轻通道 system prompt（占位符运行时替换）。 */
+        const val REGEN_DIRECTIVE_PLACEHOLDER = "{DIRECTIVE}"
+        const val REGEN_PRIOR_PLACEHOLDER = "{PRIOR_REPLY}"
+        const val REGEN_PRIOR_MAX_CHARS = 1500
+        const val REGEN_FIRST_TEXT_TIMEOUT_MS = 12_000L
+        const val REGEN_SYSTEM_PROMPT =
+            "你是用户的聊天参谋。用户对上一条建议回复不满意，你要基于聊天记录里对方最后一条来信" +
+                "重新给出可直接发送的中文回复。\n\n" +
+                "用户的修正要求：\n{DIRECTIVE}\n\n" +
+                "上一版回复（仅供对照，不要复述其中的措辞，也不要解释你改了什么）：\n" +
+                "{PRIOR_REPLY}\n\n" +
+                "输出要求：只给 2~3 条备选回复，每条以「1. 」「2. 」编号开头，" +
+                "每条不超过 60 字；不要寒暄、不要分析、不要输出计划或标签。"
+
         /** 连续（差分）参谋的强制重试预算：坏网络下不堵死帧队列。 */
         const val TIGHT_RETRY_TIMES = 1
         const val TIGHT_RETRY_TIMEOUT_SEC = 8
+
+        /** 「正在定本轮策略…」最短展示时长（避免一闪而过；正文首字到达后补差）。 */
+        const val PLAN_HINT_MIN_MS = 400L
 
         /** 多屏滚动前发 back 收拢 IME 后的复检等待。 */
         const val KEYBOARD_COLLAPSE_WAIT_MS = 300L

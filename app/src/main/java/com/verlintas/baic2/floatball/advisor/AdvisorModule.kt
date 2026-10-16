@@ -24,6 +24,8 @@ import androidx.room.Room
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.MIGRATION_2_3
 import com.verlintas.baic2.floatball.advisor.data.MIGRATION_3_4
+import com.verlintas.baic2.floatball.advisor.data.MIGRATION_4_5
+import com.verlintas.baic2.floatball.advisor.data.MIGRATION_5_6
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -44,6 +46,6 @@ object AdvisorModule {
         Room.databaseBuilder(context, AdvisorDatabase::class.java, "advisor.db")
             // 版本迁移必须显式声明：画像/绑定是用户数据，禁止任何静默清库兜底。
             // 漏写迁移应在开发期直接崩溃暴露，而不是上线后删用户数据。
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .build()
 }

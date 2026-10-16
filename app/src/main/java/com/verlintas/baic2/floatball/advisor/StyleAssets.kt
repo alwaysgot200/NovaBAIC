@@ -21,11 +21,14 @@
 package com.verlintas.baic2.floatball.advisor
 
 import android.content.Context
+import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 
 /** 说话基调（单选）：[voiceRule] 是注入提示词的一句话行为准则。 */
 @Serializable
@@ -38,6 +41,8 @@ data class StyleTone(
 /**
  * 本轮意图（多选）：do/dont 是行为级约束；good/bad 给模型的对照示例；
  * [fitStages] 为空表示全阶段适用，否则只在所列阶段渲染（P1 调用传 stageCode=null，不过滤）。
+ * [pathKind] P3：非空时为专属路径（pursue/maintain/defend），只在同路径场景包渲染；
+ * 防守/回撤类意图声明 defend，避免在推进/经营场景上浮。
  */
 @Serializable
 data class StyleIntent(
@@ -48,6 +53,7 @@ data class StyleIntent(
     val good: String = "",
     val bad: String = "",
     val fitStages: List<String>? = null,
+    val pathKind: String? = null,
 )
 
 @Serializable
@@ -79,6 +85,10 @@ data class ScenarioStage(
 /**
  * 场景包：P1 只用 label/relationTypes/defaultTone/defaultIntents（一键预填风格卡）；
  * stages/retreatSignals/taboos/goalTemplates 资产先行，P2 阶段机与红线门消费。
+ * [pathKind] P2：pursue 推进 / maintain 经营 / defend 防守（默认 pursue）；
+ * [group] P2：romance/workplace/business/conflict，场景选择器分组用；
+ * P3：social 为群聊组（群=单一对方实体）。
+ * [topicBank] P3：maintain 路径的可聊话题池（资产驱动，编译策略卡时进入话题库）。
  */
 @Serializable
 data class ScenarioPack(
@@ -91,6 +101,9 @@ data class ScenarioPack(
     val stages: List<ScenarioStage> = emptyList(),
     val retreatSignals: List<String> = emptyList(),
     val taboos: List<String> = emptyList(),
+    val pathKind: String = PATH_PURSUE,
+    val group: String = GROUP_ROMANCE,
+    val topicBank: List<String> = emptyList(),
 )
 
 @Serializable
@@ -115,16 +128,52 @@ class StyleAssets @Inject constructor(
         cachedPlaybook ?: load<StylePlaybook>(PLAYBOOK_ASSET).also { cachedPlaybook = it }
 
     fun scenarioPacks(): ScenarioPackBundle =
-        cachedPacks ?: load<ScenarioPackBundle>(PACKS_ASSET).also { cachedPacks = it }
+        cachedPacks ?: loadPacks().also { cachedPacks = it }
 
     private inline fun <reified T> load(assetPath: String): T =
         context.assets.open(assetPath).bufferedReader(Charsets.UTF_8).use { reader ->
             json.decodeFromString(reader.readText())
         }
 
+    /**
+     * 场景包逐个容错解析（§4/降级矩阵）：单个包字段缺失/类型错误只跳过该包并 Log.e 一次，
+     * 不影响其余包注册；整体文件非 JSON 时返回空集合（调用方回退无场景基线）。
+     */
+    private fun loadPacks(): ScenarioPackBundle {
+        val raw = context.assets.open(PACKS_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val array = runCatching { json.parseToJsonElement(raw).jsonObject["packs"]?.jsonArray }
+            .getOrElse {
+                Log.e(TAG, "scenario_packs.json unreadable, strategy packs disabled", it)
+                return ScenarioPackBundle(emptyList())
+            } ?: return ScenarioPackBundle(emptyList())
+        val packs = array.mapNotNull { element ->
+            runCatching { json.decodeFromJsonElement(ScenarioPack.serializer(), element) }
+                .getOrElse {
+                    Log.e(TAG, "one scenario pack skipped due to parse error", it)
+                    null
+                }
+        }
+        return ScenarioPackBundle(packs)
+    }
+
     private companion object {
         const val PLAYBOOK_ASSET = "advisor/style_playbook.json"
         const val PACKS_ASSET = "advisor/scenario_packs.json"
+        const val TAG = "StyleAssets"
         val json = Json { ignoreUnknownKeys = true }
     }
 }
+
+/** 路径类型：推进（争取关系/交易）/ 经营（存量维护）/ 防守（冲突处理）。 */
+const val PATH_PURSUE = "pursue"
+const val PATH_MAINTAIN = "maintain"
+const val PATH_DEFEND = "defend"
+
+/** 场景分组（选择器分段展示）。 */
+const val GROUP_ROMANCE = "romance"
+const val GROUP_WORKPLACE = "workplace"
+const val GROUP_BUSINESS = "business"
+const val GROUP_CONFLICT = "conflict"
+
+/** P3：群聊/社群（群=单一对方实体，maintain 路径）。 */
+const val GROUP_SOCIAL = "social"

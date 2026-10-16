@@ -78,4 +78,10 @@ interface ContactDirectory {
 
     /** 存该联系人的滚动摘要（回合配对数由实现侧或调用方维护均可）。 */
     suspend fun saveDigest(contactId: Long, digest: String, coveredTurns: Int)
+
+    /**
+     * P3 §12.2：帧感知确认「对方新来信」（文本指纹确已变化）后写来信时间戳，
+     * 供 24h 中性时序信号消费。仅绑定会话生效；任何失败由调用方静默降级。
+     */
+    suspend fun markIncomingAt(conversationId: Long, at: Long)
 }
