@@ -34,6 +34,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NoteLinkEntity::class,
         NoteRevisionEntity::class,
         MemoryHoldEntity::class,
+        CuratorRunEntity::class,
+        MemoryAliasEntity::class,
         CoreMemoryEntity::class,
         PlanEntity::class,
         AutomationEntity::class,
@@ -41,7 +43,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SnapshotEntity::class,
         ScheduledTaskEntity::class,
     ],
-    version = 18,
+    version = 21,
     exportSchema = true,
 )
 abstract class Baic2Database : RoomDatabase() {
@@ -62,6 +64,10 @@ abstract class Baic2Database : RoomDatabase() {
 
     abstract fun memoryHoldDao(): MemoryHoldDao
 
+    abstract fun curatorRunDao(): CuratorRunDao
+
+    abstract fun memoryAliasDao(): MemoryAliasDao
+
     abstract fun coreMemoryDao(): CoreMemoryDao
 
     abstract fun planDao(): PlanDao
@@ -75,6 +81,65 @@ abstract class Baic2Database : RoomDatabase() {
     abstract fun scheduledTaskDao(): ScheduledTaskDao
 
     companion object {
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Notification-triggered automations: package + keyword filters.
+                db.execSQL(
+                    "ALTER TABLE automations ADD COLUMN notificationPackagesJson TEXT NOT NULL DEFAULT '[]'",
+                )
+                db.execSQL("ALTER TABLE automations ADD COLUMN notificationKeyword TEXT")
+            }
+        }
+
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // "妈妈" -> "张兰": alias resolution for recall and priming.
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS memory_aliases (
+                        alias TEXT PRIMARY KEY NOT NULL,
+                        entity TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                // The dream cycle reviews a handful of notes per pass.
+                db.execSQL(
+                    "ALTER TABLE curator_runs ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
+                )
+            }
+        }
+
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Consolidation becomes observable: what ran, what it changed,
+                // and whether the plan parsed - empty is not failure.
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS curator_runs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        ranAt INTEGER NOT NULL,
+                        trigger TEXT NOT NULL,
+                        conversationId INTEGER,
+                        messages INTEGER NOT NULL,
+                        windowFrom INTEGER NOT NULL,
+                        windowTo INTEGER NOT NULL,
+                        notesScanned INTEGER NOT NULL,
+                        added INTEGER NOT NULL,
+                        revised INTEGER NOT NULL,
+                        forgotten INTEGER NOT NULL,
+                        rehearsed INTEGER NOT NULL,
+                        parsed INTEGER NOT NULL,
+                        error TEXT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_curator_runs_ranAt ON curator_runs(ranAt)",
+                )
+            }
+        }
+
         val MIGRATION_17_18 = object : Migration(17, 18) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Perishable facts (locations, "currently…") carry a horizon.

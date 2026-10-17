@@ -151,6 +151,37 @@ data class MemoryHoldEntity(
     val createdAt: Long,
 )
 
+/** Consolidation log: "empty plan" and "run failed" must be distinguishable. */
+@Entity(
+    tableName = "curator_runs",
+    indices = [Index(value = ["ranAt"])],
+)
+data class CuratorRunEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val ranAt: Long,
+    val trigger: String,
+    val conversationId: Long?,
+    val messages: Int,
+    val windowFrom: Long,
+    val windowTo: Long,
+    val notesScanned: Int,
+    val added: Int,
+    val revised: Int,
+    val forgotten: Int,
+    val rehearsed: Int,
+    val reviewed: Int,
+    val parsed: Boolean,
+    val error: String?,
+)
+
+/** "妈妈 -> 张兰": how the user refers to something vs. its stored name. */
+@Entity(tableName = "memory_aliases")
+data class MemoryAliasEntity(
+    @PrimaryKey val alias: String,
+    val entity: String,
+    val createdAt: Long,
+)
+
 @Entity(
     tableName = "runs",
     indices = [Index(value = ["conversationId"])],
@@ -209,6 +240,8 @@ data class AutomationEntity(
     val timeOfDay: String?,
     val daysOfWeekJson: String,
     val batteryBelow: Int?,
+    val notificationPackagesJson: String,
+    val notificationKeyword: String?,
     val actionsJson: String,
     val enabled: Boolean,
     val createdAt: Long,

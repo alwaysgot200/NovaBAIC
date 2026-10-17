@@ -93,6 +93,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
@@ -147,6 +148,8 @@ import com.verlintas.baic2.designsystem.component.Baic2ModeChip
 import com.verlintas.baic2.designsystem.component.ThinkingOrb
 import com.verlintas.baic2.designsystem.component.pressScale
 
+private const val MAX_EXPORT_CHARS = 400_000
+
 @Composable
 fun ChatScreen(
     onBack: () -> Unit,
@@ -196,6 +199,7 @@ fun ChatScreen(
     val attachmentError by viewModel.attachmentErrors.collectAsStateWithLifecycle()
     val notice by viewModel.notices.collectAsStateWithLifecycle()
     val runCompletion by viewModel.runCompletion.collectAsStateWithLifecycle()
+    val pendingQuestion by viewModel.pendingQuestion.collectAsStateWithLifecycle()
 
     LaunchedEffect(notice) {
         if (notice != null) {
@@ -243,7 +247,7 @@ fun ChatScreen(
         if (recognized.isNullOrBlank()) return@rememberLauncherForActivityResult
         if (auto) {
             forceFollow = true
-            viewModel.send(recognized)
+            if (!viewModel.send(recognized)) input = recognized
         } else {
             input = recognized
         }
@@ -262,6 +266,7 @@ fun ChatScreen(
     val compressTooShortHint = stringResource(R.string.chat_compress_too_short)
     val memorySavedTemplate = stringResource(R.string.chat_memory_saved)
     val memoryNoneLabel = stringResource(R.string.chat_memory_none)
+    val memoryFailedLabel = stringResource(R.string.chat_memory_failed)
     val screenPrompt = stringResource(R.string.chat_screen_prompt)
     val screenReady by viewModel.screenCaptureReady.collectAsStateWithLifecycle()
     val screenCaptureLauncher = rememberLauncherForActivityResult(
@@ -324,7 +329,7 @@ fun ChatScreen(
                 voiceAutoSend = false
                 if (combined.isNotBlank()) {
                     forceFollow = true
-                    viewModel.send(combined)
+                    if (!viewModel.send(combined)) input = combined
                 }
             } else {
                 input = combined
@@ -488,10 +493,17 @@ fun ChatScreen(
                 text = { Text(stringResource(R.string.chat_menu_export)) },
                 onClick = {
                     menuOpen = false
+                    // Intent extras cross Binder (~1 MB): cap long agentic
+                    // transcripts instead of crashing with TransactionTooLarge.
                     val text = viewModel.buildExportText(exportLabels)
+                    val capped = if (text.length > MAX_EXPORT_CHARS) {
+                        text.take(MAX_EXPORT_CHARS) + "\n\n… (export truncated)"
+                    } else {
+                        text
+                    }
                     val intent = Intent(Intent.ACTION_SEND).apply {
                         type = "text/markdown"
-                        putExtra(Intent.EXTRA_TEXT, text)
+                        putExtra(Intent.EXTRA_TEXT, capped)
                     }
                     context.startActivity(Intent.createChooser(intent, exportChooserTitle))
                 },
@@ -528,6 +540,7 @@ fun ChatScreen(
                     viewModel.reflectMemory(
                         savedTemplate = memorySavedTemplate,
                         noneLabel = memoryNoneLabel,
+                        failedLabel = memoryFailedLabel,
                     )
                 },
             )
@@ -783,10 +796,13 @@ fun ChatScreen(
             onDismissAttachmentError = viewModel::dismissAttachmentError,
             onSend = {
                 val text = input
-                input = ""
-                forceFollow = true
-                viewModel.cancelVoiceSession()
-                viewModel.send(text)
+                // Clear the box only when the turn was admitted; otherwise a
+                // held gate (post-turn upkeep) would silently eat the draft.
+                if (viewModel.send(text)) {
+                    input = ""
+                    forceFollow = true
+                    viewModel.cancelVoiceSession()
+                }
             },
             onStop = viewModel::stop,
         )
@@ -909,6 +925,55 @@ fun ChatScreen(
             dismissButton = {
                 TextButton(onClick = { viewModel.respondConfirmation(false) }) {
                     Text(stringResource(R.string.chat_confirm_reject))
+                }
+            },
+        )
+    }
+
+    pendingQuestion?.let { question ->
+        var answer by remember(question.id) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { viewModel.respondQuestion(null) },
+            title = { Text(stringResource(R.string.chat_question_title)) },
+            text = {
+                Column {
+                    Text(
+                        text = question.question,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (question.options.isNotEmpty()) {
+                        Spacer(Modifier.height(Baic2Spacing.sm))
+                        question.options.forEach { option ->
+                            OutlinedButton(
+                                onClick = { viewModel.respondQuestion(option) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                            ) {
+                                Text(option)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(Baic2Spacing.sm))
+                    OutlinedTextField(
+                        value = answer,
+                        onValueChange = { answer = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.respondQuestion(answer.ifBlank { null }) },
+                ) {
+                    Text(stringResource(R.string.chat_question_send))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.respondQuestion(null) }) {
+                    Text(stringResource(R.string.chat_question_skip))
                 }
             },
         )

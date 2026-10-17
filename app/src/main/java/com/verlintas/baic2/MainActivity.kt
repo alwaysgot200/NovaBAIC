@@ -70,6 +70,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val pendingRunId = androidx.compose.runtime.mutableStateOf<Long?>(null)
+    private val pendingConversationId = androidx.compose.runtime.mutableStateOf<Long?>(null)
 
     // 冷启动时默认只留悬浮球：拿到悬浮窗权限后立刻退到后台。
     private var autoHideWhenReady = false
@@ -94,6 +95,11 @@ class MainActivity : ComponentActivity() {
             null
         }
         overlayGranted = Settings.canDrawOverlays(this)
+        pendingConversationId.value = if (savedInstanceState == null) {
+            intent?.getLongExtra(EXTRA_OPEN_CONVERSATION_ID, -1L)?.takeIf { it >= 0L }
+        } else {
+            null
+        }
         setContent {
             val themeMode by settingsRepository.themeMode
                 .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
@@ -116,6 +122,8 @@ class MainActivity : ComponentActivity() {
                     Baic2App(
                         initialRunId = pendingRunId.value,
                         onRunDeepLinkConsumed = { pendingRunId.value = null },
+                        initialConversationId = pendingConversationId.value,
+                        onConversationDeepLinkConsumed = { pendingConversationId.value = null },
                     )
                 } else {
                     OverlayPermissionScreen(onGrant = { requestOverlayPermission() })
@@ -153,6 +161,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(backgroundRunnable)
+        // The grace period must not outlive the activity unhandled: a process
+        // kept alive by a service would otherwise stay "foreground" forever.
+        AppVisibility.foreground = false
         super.onDestroy()
     }
 
@@ -163,7 +174,9 @@ class MainActivity : ComponentActivity() {
             finishAffinity()
             return
         }
-        pendingRunId.value = intent.getLongExtra(EXTRA_OPEN_RUN_ID, -1L)?.takeIf { it >= 0L }
+        pendingRunId.value = intent.getLongExtra(EXTRA_OPEN_RUN_ID, -1L).takeIf { it >= 0L }
+        pendingConversationId.value = intent.getLongExtra(EXTRA_OPEN_CONVERSATION_ID, -1L)
+            .takeIf { it >= 0L }
     }
 
     private fun requestOverlayPermission() {
@@ -195,3 +208,6 @@ private fun Context.withLocale(locale: Locale): Context {
 
 /** Mirrors RunService.EXTRA_OPEN_RUN_ID (device:impl cannot see app classes). */
 private const val EXTRA_OPEN_RUN_ID = "open_run_id"
+
+/** Mirrors RunService.EXTRA_OPEN_CONVERSATION_ID. */
+private const val EXTRA_OPEN_CONVERSATION_ID = "open_conversation_id"

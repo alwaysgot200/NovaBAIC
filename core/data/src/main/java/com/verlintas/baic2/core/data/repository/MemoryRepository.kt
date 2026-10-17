@@ -22,20 +22,33 @@ package com.verlintas.baic2.core.data.repository
 import androidx.room.withTransaction
 import com.verlintas.baic2.core.data.db.Baic2Database
 import com.verlintas.baic2.core.data.db.CoreMemoryEntity
+import com.verlintas.baic2.core.data.db.CuratorRunEntity
+import com.verlintas.baic2.core.data.db.MemoryAliasEntity
 import com.verlintas.baic2.core.data.db.MemoryHoldEntity
 import com.verlintas.baic2.core.data.db.NoteEntity
 import com.verlintas.baic2.core.data.db.NoteLinkEntity
 import com.verlintas.baic2.core.data.db.NoteRevisionEntity
 import com.verlintas.baic2.core.data.mapper.ChatMapper
 import com.verlintas.baic2.core.model.CoreMemory
+import com.verlintas.baic2.core.model.CuratorRun
+import com.verlintas.baic2.core.model.MemoryAlias
+import com.verlintas.baic2.core.model.MemoryBackup
+import com.verlintas.baic2.core.model.MemoryBackupAlias
+import com.verlintas.baic2.core.model.MemoryBackupCodec
+import com.verlintas.baic2.core.model.MemoryBackupCore
+import com.verlintas.baic2.core.model.MemoryBackupHold
+import com.verlintas.baic2.core.model.MemoryBackupNote
 import com.verlintas.baic2.core.model.MemoryConsolidator
 import com.verlintas.baic2.core.model.MemoryHold
+import com.verlintas.baic2.core.model.MemoryReview
 import com.verlintas.baic2.core.model.MemoryScoring
+import com.verlintas.baic2.core.model.MemoryStatus
 import com.verlintas.baic2.core.model.MemoryText
 import com.verlintas.baic2.core.model.Note
 import com.verlintas.baic2.core.model.NoteKind
 import com.verlintas.baic2.core.model.NoteRevision
 import com.verlintas.baic2.core.model.NoteSource
+import com.verlintas.baic2.core.model.ReviewCandidate
 import com.verlintas.baic2.core.model.ScoredNote
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -125,6 +138,8 @@ class MemoryRepository @Inject constructor(
         source: NoteSource = NoteSource.USER,
         entities: List<String> = emptyList(),
         expiresAt: Long? = null,
+        /** Restored backups keep their original age; live writes use now. */
+        createdAt: Long? = null,
     ): AddOutcome {
         val trimmed = content.trim()
         if (trimmed.isEmpty()) return AddOutcome.Duplicate(0L)
@@ -133,7 +148,9 @@ class MemoryRepository @Inject constructor(
         val holds = db.memoryHoldDao().getRecent(SUPPRESSED_SCAN)
             .map { MemoryHold(id = it.id, content = it.content, reason = it.reason) }
         val now = System.currentTimeMillis()
-        return when (val decision = MemoryConsolidator.decide(trimmed, active, suppressedNotes, holds)) {
+        // Serialize decide+write so two writers cannot both store the same fact.
+        return db.withTransaction {
+            when (val decision = MemoryConsolidator.decide(trimmed, active, suppressedNotes, holds)) {
             is MemoryConsolidator.Decision.Held -> AddOutcome.Held(decision.holdId)
 
             is MemoryConsolidator.Decision.Suppressed -> AddOutcome.Suppressed(decision.noteId)
@@ -152,6 +169,7 @@ class MemoryRepository @Inject constructor(
                         importance = maxOf(target.importance, importance.coerceIn(1, 5)),
                         now = now,
                         expiresAt = expiresAt,
+                        messageId = messageId,
                     )
                     db.noteDao().touch(target.id, now)
                     AddOutcome.Merged(target.id, decision.previousContent)
@@ -169,7 +187,7 @@ class MemoryRepository @Inject constructor(
                         messageId = messageId,
                         whenAt = whenAt,
                         expiresAt = expiresAt,
-                        createdAt = now,
+                        createdAt = createdAt?.coerceAtLeast(1L) ?: now,
                         updatedAt = now,
                         lastAccessedAt = 0L,
                         accessCount = 0,
@@ -187,6 +205,7 @@ class MemoryRepository @Inject constructor(
                     ),
                 )
                 AddOutcome.Saved(id, decision.similarIds, decision.conflicts)
+            }
             }
         }
     }
@@ -235,23 +254,24 @@ class MemoryRepository @Inject constructor(
     ): Replacement? {
         val trimmed = content.trim()
         if (trimmed.isEmpty()) return null
-        val existing = db.noteDao().getById(id) ?: return null
-        val note = mapper.noteToModel(existing)
-        recordRevision(note)
-        val now = System.currentTimeMillis()
-        db.noteDao().replaceInPlace(
-            id = id,
-            kind = (kind ?: note.kind).name,
-            content = trimmed,
-            importance = (importance ?: note.importance).coerceIn(1, 5),
-            entities = entities?.let(MemoryText::encodeEntities).orEmpty().ifEmpty { existing.entities },
-            now = now,
-            expiresAt = expiresAt,
-            messageId = messageId,
-        )
-        db.noteDao().touch(id, now)
-        val updated = db.noteDao().getById(id)?.let(mapper::noteToModel) ?: return null
-        return Replacement(updated, note.content)
+        return db.withTransaction {
+            val existing = db.noteDao().getById(id) ?: return@withTransaction null
+            val note = mapper.noteToModel(existing)
+            recordRevision(note)
+            val now = System.currentTimeMillis()
+            db.noteDao().replaceInPlace(
+                id = id,
+                kind = (kind ?: note.kind).name,
+                content = trimmed,
+                importance = (importance ?: note.importance).coerceIn(1, 5),
+                entities = entities?.let(MemoryText::encodeEntities).orEmpty().ifEmpty { existing.entities },
+                now = now,
+                expiresAt = expiresAt,
+                messageId = messageId,
+            )
+            db.noteDao().touch(id, now)
+            db.noteDao().getById(id)?.let(mapper::noteToModel)?.let { Replacement(it, note.content) }
+        }
     }
 
     /** Old versions of a note, newest first. */
@@ -308,6 +328,244 @@ class MemoryRepository @Inject constructor(
         }
 
     suspend fun removeHold(id: Long) = db.memoryHoldDao().delete(id)
+
+    /** Consolidation log; best-effort - logging must never break a run. */
+    suspend fun recordCuratorRun(run: CuratorRun): Long =
+        db.curatorRunDao().insert(
+            CuratorRunEntity(
+                ranAt = run.ranAt,
+                trigger = run.trigger,
+                conversationId = run.conversationId,
+                messages = run.messages,
+                windowFrom = run.windowFrom,
+                windowTo = run.windowTo,
+                notesScanned = run.notesScanned,
+                added = run.added,
+                revised = run.revised,
+                forgotten = run.forgotten,
+                rehearsed = run.rehearsed,
+                reviewed = run.reviewed,
+                parsed = run.parsed,
+                error = run.error,
+            ),
+        )
+
+    suspend fun recentCuratorRuns(limit: Int = 20): List<CuratorRun> =
+        db.curatorRunDao().recent(limit).map(::curatorRunToModel)
+
+    fun observeCuratorRuns(limit: Int = 20): Flow<List<CuratorRun>> =
+        db.curatorRunDao().observeRecent(limit).map { list -> list.map(::curatorRunToModel) }
+
+    /** Epoch of the newest consolidation pass; 0 when none ever ran. */
+    suspend fun lastCuratorRunAt(): Long = db.curatorRunDao().latestRanAt() ?: 0L
+
+    /** Dream-cycle candidates: contradictions, expiring values, cold traces. */
+    suspend fun selfReviewCandidates(now: Long, limit: Int = 8): List<ReviewCandidate> =
+        MemoryReview.candidates(
+            db.noteDao().getActive(PAGE_SIZE).map(mapper::noteToModel),
+            now,
+            limit,
+        )
+
+    /** "妈妈 -> 张兰": how the user refers to something vs. its stored name. */
+    suspend fun setAlias(alias: String, entity: String): Boolean {
+        val a = alias.trim()
+        val e = entity.trim()
+        if (a.isEmpty() || e.isEmpty() || a.equals(e, ignoreCase = true)) return false
+        // Case variants must not coexist: PK is binary, lookups are NOCASE.
+        db.memoryAliasDao().delete(a)
+        db.memoryAliasDao().upsert(
+            MemoryAliasEntity(alias = a, entity = e, createdAt = System.currentTimeMillis()),
+        )
+        return true
+    }
+
+    suspend fun removeAlias(alias: String): Boolean {
+        val a = alias.trim()
+        if (a.isEmpty()) return false
+        val existed = db.memoryAliasDao().getAll().any { it.alias.equals(a, ignoreCase = true) }
+        if (existed) db.memoryAliasDao().delete(a)
+        return existed
+    }
+
+    suspend fun aliases(): List<MemoryAlias> =
+        db.memoryAliasDao().getAll().map {
+            MemoryAlias(alias = it.alias, entity = it.entity, createdAt = it.createdAt)
+        }
+
+    private suspend fun expandAliases(names: List<String>): List<String> {
+        val map = db.memoryAliasDao().getAll().associate { it.alias.lowercase() to it.entity }
+        if (map.isEmpty()) return names.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        return names.asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .flatMap { name ->
+                val canonical = map[name.lowercase()]
+                if (canonical == null) sequenceOf(name) else sequenceOf(name, canonical)
+            }
+            .distinct()
+            .toList()
+    }
+
+    /** Active notes about a name (aliases expanded), newest first. No side effects. */
+    suspend fun notesForEntity(raw: String, limit: Int = 80): List<Note> {
+        val names = expandAliases(listOf(raw))
+        if (names.isEmpty()) return emptyList()
+        val merged = LinkedHashMap<Long, Note>()
+        names.forEach { name ->
+            db.noteDao().getByEntity(MemoryText.entityLikePattern(name), limit)
+                .forEach { row -> merged[row.id] = mapper.noteToModel(row) }
+        }
+        return merged.values
+            .sortedByDescending { it.whenAt ?: it.updatedAt }
+            .take(limit)
+    }
+
+    /** Cheap snapshot for the always-on memory state line. */
+    suspend fun memoryStatus(lastUserActivityAt: Long? = null): MemoryStatus {
+        val now = System.currentTimeMillis()
+        val notes = db.noteDao().getActive(PAGE_SIZE).map(mapper::noteToModel)
+        val holds = db.memoryHoldDao().getRecent(SUPPRESSED_SCAN).size
+        val lastRun = recentCuratorRuns(1).firstOrNull()
+        return MemoryStatus(
+            activeNotes = notes.size,
+            pinned = notes.count { it.pinned },
+            expiringSoon = notes.count { note ->
+                val expires = note.expiresAt ?: return@count false
+                expires > now && expires - now <= 86_400_000L
+            },
+            expired = notes.count { it.isExpired(now) },
+            holds = holds,
+            lastConsolidatedAt = lastRun?.ranAt ?: 0L,
+            lastConsolidation = lastRun?.takeIf { it.succeeded }?.let {
+                "added ${it.added}, revised ${it.revised}, forgotten ${it.forgotten}"
+            },
+            lastUserActivityAt = lastUserActivityAt,
+        )
+    }
+
+    private fun curatorRunToModel(entity: CuratorRunEntity) = CuratorRun(
+        id = entity.id,
+        ranAt = entity.ranAt,
+        trigger = entity.trigger,
+        conversationId = entity.conversationId,
+        messages = entity.messages,
+        windowFrom = entity.windowFrom,
+        windowTo = entity.windowTo,
+        notesScanned = entity.notesScanned,
+        added = entity.added,
+        revised = entity.revised,
+        forgotten = entity.forgotten,
+        rehearsed = entity.rehearsed,
+        reviewed = entity.reviewed,
+        parsed = entity.parsed,
+        error = entity.error,
+    )
+
+    /** Portable JSON snapshot: notes + core memory + holds. */
+    suspend fun exportBackup(): String {
+        val notes = db.noteDao().getAllActive().map(mapper::noteToModel)
+        val core = getCore()
+        val holds = db.memoryHoldDao().getAllOnce().map { it.content to it.reason }
+            .map { (content, reason) -> MemoryHold(content = content, reason = reason) }
+        return MemoryBackupCodec.encode(
+            MemoryBackup(
+                version = 1,
+                exportedAt = System.currentTimeMillis(),
+                core = if (core.user.isNotBlank() || core.context.isNotBlank()) {
+                    MemoryBackupCore(user = core.user, context = core.context)
+                } else {
+                    null
+                },
+                notes = notes.map { note ->
+                    MemoryBackupNote(
+                        content = note.content,
+                        kind = note.kind.wire(),
+                        importance = note.importance,
+                        source = note.source.wire(),
+                        entities = note.entities,
+                        whenAt = note.whenAt,
+                        expiresAt = note.expiresAt,
+                        createdAt = note.createdAt.takeIf { it > 0 },
+                    )
+                },
+                holds = holds.map { MemoryBackupHold(content = it.content, reason = it.reason) },
+                aliases = aliases().map { MemoryBackupAlias(alias = it.alias, entity = it.entity) },
+            ),
+        )
+    }
+
+    data class ImportResult(
+        val valid: Boolean = true,
+        val imported: Int = 0,
+        val merged: Int = 0,
+        val skipped: Int = 0,
+        val holds: Int = 0,
+        val coreUpdated: Boolean = false,
+    )
+
+    /**
+     * Imports a backup through the normal write protocol: holds and
+     * suppression still apply, near-duplicates reconsolidate instead of
+     * piling up, and nothing is overwritten.
+     */
+    suspend fun importBackup(text: String): ImportResult {
+        val backup = MemoryBackupCodec.decode(text).getOrElse { return ImportResult(valid = false) }
+        var imported = 0
+        var merged = 0
+        var skipped = 0
+        // Holds first: a restored promise must protect its notes from step one.
+        var addedHolds = 0
+        val existingHolds = listHolds().map { it.content }.toSet()
+        backup.holds.forEach { hold ->
+            if (hold.content.isNotBlank() && hold.content !in existingHolds) {
+                addHold(hold.content, hold.reason)
+                addedHolds++
+            }
+        }
+        // Aliases next, so imports recall correctly under the same names.
+        backup.aliases.forEach { alias -> setAlias(alias.alias, alias.entity) }
+        backup.notes.forEach { note ->
+            if (note.content.isBlank()) return@forEach
+            when (
+                addNote(
+                    kind = NoteKind.fromWire(note.kind),
+                    content = note.content,
+                    importance = note.importance,
+                    whenAt = note.whenAt,
+                    source = NoteSource.fromWire(note.source),
+                    entities = note.entities,
+                    expiresAt = note.expiresAt,
+                    createdAt = note.createdAt,
+                )
+            ) {
+                is AddOutcome.Saved -> imported++
+                is AddOutcome.Merged -> merged++
+                is AddOutcome.Duplicate,
+                is AddOutcome.Suppressed,
+                is AddOutcome.Held,
+                -> skipped++
+            }
+        }
+        var coreUpdated = false
+        backup.core?.let { core ->
+            if (core.user.isNotBlank() || core.context.isNotBlank()) {
+                setCore(
+                    user = core.user.takeIf { it.isNotBlank() },
+                    context = core.context.takeIf { it.isNotBlank() },
+                )
+                coreUpdated = true
+            }
+        }
+        return ImportResult(
+            valid = true,
+            imported = imported,
+            merged = merged,
+            skipped = skipped,
+            holds = addedHolds,
+            coreUpdated = coreUpdated,
+        )
+    }
 
     /**
      * Closest notes by text similarity, for the "no confident match" exit:
@@ -421,12 +679,8 @@ class MemoryRepository @Inject constructor(
         limit: Int = 6,
         feedback: Boolean = true,
     ): List<ScoredNote> {
-        val names = entities.asSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
-            .take(6)
-            .toList()
+        // Aliases resolve to the canonical name the notes are filed under.
+        val names = expandAliases(entities).take(6)
         if (names.isEmpty()) return emptyList()
         val merged = LinkedHashMap<Long, Note>()
         names.forEach { entity ->
@@ -445,12 +699,13 @@ class MemoryRepository @Inject constructor(
     }
 
     /** Distinct entity names known to memory, for context-dependent priming. */
-    suspend fun knownEntities(): List<String> =
-        db.noteDao().activeEntityBlobs()
+    suspend fun knownEntities(): List<String> {
+        val names = db.noteDao().activeEntityBlobs()
             .asSequence()
             .flatMap { MemoryText.decodeEntities(it).asSequence() }
-            .distinct()
-            .toList()
+        val aliasKeys = db.memoryAliasDao().getAll().asSequence().map { it.alias }
+        return (names + aliasKeys).distinct().toList()
+    }
 
     /**
      * Cue-driven recall. When [spread] is on, the top cue hits act as seeds and
@@ -524,8 +779,17 @@ class MemoryRepository @Inject constructor(
     suspend fun noteAsOf(note: Note, at: Long): Note? {
         if (note.suppressed || note.createdAt > at) return null
         if (note.archived && note.updatedAt <= at) return null
-        val revision = db.noteRevisionDao().revisionAsOf(note.id, at) ?: return note
-        return note.copy(content = revision.content, importance = revision.importance)
+        // Clamp temporal state so post-`at` touches do not leak into the
+        // historical ranking (retrievability would read as "just recalled").
+        val revision = db.noteRevisionDao().revisionAsOf(note.id, at)
+        return note.copy(
+            content = revision?.content ?: note.content,
+            importance = revision?.importance ?: note.importance,
+            entities = revision?.let { MemoryText.decodeEntities(it.entities) }
+                ?.ifEmpty { note.entities } ?: note.entities,
+            updatedAt = minOf(note.updatedAt, at),
+            lastAccessedAt = minOf(note.lastAccessedAt, at),
+        )
     }
 
     /** Fire together, wire together: co-recalled notes gain link weight. */

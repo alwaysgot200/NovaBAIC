@@ -165,3 +165,47 @@ data class MemoryHold(
     val content: String,
     val reason: String? = null,
 )
+
+/**
+ * How the user refers to something vs. the name it is stored under:
+ * "妈妈" -> "张兰". Aliases feed entity recall and priming, and may be
+ * pinyin/latin spellings the user is likely to type.
+ */
+data class MemoryAlias(
+    val alias: String,
+    val entity: String,
+    val createdAt: Long = 0L,
+)
+
+/** One note selected for the dream-cycle self-review, with the reason. */
+data class ReviewCandidate(
+    val note: Note,
+    val reason: String,
+)
+
+/**
+ * One consolidation pass as it actually happened: when it ran, what it looked
+ * at, what it changed, and whether the plan parsed. "Empty plan" and "run
+ * failed" must never look the same again.
+ */
+data class CuratorRun(
+    val id: Long = 0L,
+    val ranAt: Long,
+    /** idle (left foreground) | overflow (many turns) | time (long gap) | manual. */
+    val trigger: String,
+    val conversationId: Long? = null,
+    val messages: Int = 0,
+    val windowFrom: Long = 0L,
+    val windowTo: Long = 0L,
+    val notesScanned: Int = 0,
+    val added: Int = 0,
+    val revised: Int = 0,
+    val forgotten: Int = 0,
+    val rehearsed: Int = 0,
+    /** Notes handed to the curator for the dream-cycle self-review. */
+    val reviewed: Int = 0,
+    val parsed: Boolean = true,
+    val error: String? = null,
+) {
+    val succeeded: Boolean get() = error == null && parsed
+}

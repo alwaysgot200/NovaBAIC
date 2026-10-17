@@ -122,6 +122,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
     suspend fun getByConversation(conversationId: Long): List<MessageEntity>
 
+    /** Newest message of a role strictly before [before], across conversations. */
+    @Query("SELECT MAX(createdAt) FROM messages WHERE role = :role AND createdAt < :before")
+    suspend fun latestAtBefore(role: String, before: Long): Long?
+
     @Query(
         "SELECT * FROM messages WHERE conversationId = :conversationId " +
             "AND id >= :afterId AND id < :beforeId ORDER BY id ASC",
@@ -311,6 +315,9 @@ interface SnapshotDao {
 
     @Query("DELETE FROM message_snapshots")
     suspend fun deleteAll()
+
+    @Query("DELETE FROM message_snapshots WHERE conversationId = :conversationId")
+    suspend fun deleteForConversation(conversationId: Long)
 }
 
 @Dao
@@ -410,6 +417,9 @@ interface AutomationDao {
     @Insert
     suspend fun insert(entity: AutomationEntity): Long
 
+    @Update
+    suspend fun update(entity: AutomationEntity)
+
     @Query("SELECT * FROM automations ORDER BY id DESC")
     fun observeAll(): Flow<List<AutomationEntity>>
 
@@ -440,6 +450,9 @@ interface PlanDao {
 
     @Query("DELETE FROM plans")
     suspend fun deleteAll()
+
+    @Query("DELETE FROM plans WHERE conversationId = :conversationId")
+    suspend fun deleteForConversation(conversationId: Long)
 }
 
 @Dao
@@ -453,6 +466,10 @@ interface NoteDao {
 
     @Query("SELECT * FROM notes WHERE archived = 0 ORDER BY pinned DESC, updatedAt DESC LIMIT :limit")
     suspend fun getActive(limit: Int): List<NoteEntity>
+
+    /** Unbounded variant for backups: nothing may be silently truncated. */
+    @Query("SELECT * FROM notes WHERE archived = 0 ORDER BY pinned DESC, updatedAt DESC")
+    suspend fun getAllActive(): List<NoteEntity>
 
     /**
      * Notes that existed at [at]: created before it, and either still active or
@@ -485,9 +502,17 @@ interface NoteDao {
 
     @Query(
         "UPDATE notes SET content = :content, importance = :importance, " +
-            "expiresAt = COALESCE(:expiresAt, expiresAt), updatedAt = :now WHERE id = :id",
+            "expiresAt = COALESCE(:expiresAt, expiresAt), " +
+            "messageId = COALESCE(:messageId, messageId), updatedAt = :now WHERE id = :id",
     )
-    suspend fun update(id: Long, content: String, importance: Int, now: Long, expiresAt: Long? = null)
+    suspend fun update(
+        id: Long,
+        content: String,
+        importance: Int,
+        now: Long,
+        expiresAt: Long? = null,
+        messageId: Long? = null,
+    )
 
     @Query(
         "UPDATE notes SET content = :content, importance = :importance, entities = :entities, " +
@@ -581,8 +606,41 @@ interface MemoryHoldDao {
     @Query("SELECT * FROM memory_holds ORDER BY id DESC LIMIT 200")
     fun observeAll(): Flow<List<MemoryHoldEntity>>
 
+    /** Unbounded variant for backups. */
+    @Query("SELECT * FROM memory_holds ORDER BY id DESC")
+    suspend fun getAllOnce(): List<MemoryHoldEntity>
+
     @Query("DELETE FROM memory_holds WHERE id = :id")
     suspend fun delete(id: Long)
+}
+
+@Dao
+interface CuratorRunDao {
+
+    @Insert
+    suspend fun insert(entity: CuratorRunEntity): Long
+
+    @Query("SELECT * FROM curator_runs ORDER BY ranAt DESC LIMIT :limit")
+    suspend fun recent(limit: Int): List<CuratorRunEntity>
+
+    @Query("SELECT * FROM curator_runs ORDER BY ranAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<CuratorRunEntity>>
+
+    @Query("SELECT MAX(ranAt) FROM curator_runs")
+    suspend fun latestRanAt(): Long?
+}
+
+@Dao
+interface MemoryAliasDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: MemoryAliasEntity)
+
+    @Query("DELETE FROM memory_aliases WHERE alias = :alias COLLATE NOCASE")
+    suspend fun delete(alias: String)
+
+    @Query("SELECT * FROM memory_aliases ORDER BY alias ASC")
+    suspend fun getAll(): List<MemoryAliasEntity>
 }
 
 @Dao
