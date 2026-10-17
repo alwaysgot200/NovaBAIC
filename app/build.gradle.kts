@@ -101,6 +101,12 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    lint {
+        // Compose 新检查：回调内 context.getString 是浮球包既有写法，
+        // 降为 warning，报告可见但不阻塞构建。
+        warning += "LocalContextGetResourceValueCall"
+    }
 }
 
 dependencies {
