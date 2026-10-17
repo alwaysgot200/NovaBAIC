@@ -14,6 +14,8 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  # enablement: true 自动启用 Pages 需要仓库管理权限。
+  administration: write
 
 concurrency:
   group: pages
@@ -40,6 +42,9 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          # 仓库尚未启用 Pages 时自动启用（fork 仓库默认未启用）。
+          enablement: true
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
