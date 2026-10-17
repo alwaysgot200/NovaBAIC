@@ -1,23 +1,18 @@
 name: Release
 
+# 唯一触发方式：git push origin vXX.XX.XX。标签推送时一次性完成
+# 校验、构建、发布；平时 push 不跑任何 CI，也不产出中间制品。
 on:
   push:
     tags:
-      - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "要发布的标签（必须指向 laocanmou 最新提交，如 v0.2.1）"
-        required: true
-        type: string
+      - "v*.*.*"
 
 permissions:
   contents: write
-  actions: write
 
 # 发布流程不可取消：同一个标签只允许一条发布线，且绝不中断进行中的发布。
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -25,38 +20,26 @@ env:
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
 jobs:
-  # 第一道门：标签必须打在 laocanmou 分支的最新提交上。
-  # GitHub 的 tag 推送事件无法按分支过滤，因此在作业内显式校验，
-  # 防止误把 main（上游镜像）或 laocanmou 的旧提交发布出去。
-  guard:
-    name: Verify tag is on laocanmou tip
+  release:
+    name: Build and publish
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Resolve and validate tag
-        id: meta
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
+      # 第一道门：标签必须形如 vXX.XX.XX，且打在 laocanmou 分支的最新提交上。
+      # GitHub 的 tag 推送事件无法按分支过滤，因此在作业内显式校验，
+      # 防止误把 main（上游镜像）或 laocanmou 的旧提交发布出去。
+      - name: Verify tag is on laocanmou tip
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            TAG="$INPUT_TAG"
-          else
-            TAG="$REF_NAME"
-          fi
+          TAG="$GITHUB_REF_NAME"
           case "$TAG" in
-            v[0-9]*) ;;
+            v[0-9]*.[0-9]*.[0-9]*) ;;
             *)
-              echo "::error::版本标签必须以 v 加版本号开头（例如 v0.2.1），当前标签：$TAG"
+              echo "::error::版本标签必须形如 v0.3.0（vXX.XX.XX），当前标签：$TAG"
               exit 1
               ;;
           esac
@@ -78,26 +61,10 @@ jobs:
           fi
 
           if [ "$TAG_COMMIT" != "$TIP_COMMIT" ]; then
-            cat >&2 <<EOF
-          ::error::标签 $TAG 没有指向 laocanmou 分支的最新提交，拒绝发布。
-          请确认：1) laocanmou 已推送到远端；2) 在其最新提交上打标签；3) 标签与 app/build.gradle.kts 的 versionName 一致。
-          EOF
+            echo "::error::标签 $TAG 没有指向 laocanmou 分支的最新提交，拒绝发布。"
+            echo "请确认：1) laocanmou 已推送到远端；2) 在其最新提交上打标签；3) 标签与 app/build.gradle.kts 的 versionName 一致。"
             exit 1
           fi
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-  # 第二道门：完整构建。仓库检查、单测、lint、版本一致性、签名包全部通过后，
-  # 才把 APK 作为构件交给发布作业。
-  build:
-    name: Build signed release APK
-    needs: guard
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.guard.outputs.tag }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -122,7 +89,7 @@ jobs:
 
       - name: Verify versionName matches tag
         env:
-          TAG: ${{ needs.guard.outputs.tag }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           VN="$(sed -n 's/.*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
@@ -189,7 +156,7 @@ jobs:
 
       - name: Verify APK version matches tag
         env:
-          TAG: ${{ needs.guard.outputs.tag }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           APK="$(ls app/build/outputs/apk/release/*.apk | head -n1)"
@@ -208,43 +175,15 @@ jobs:
           APK="$(ls *.apk | head -n1)"
           sha256sum "$APK" > app-release.apk.sha256
 
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-apk
-          if-no-files-found: error
-          path: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/apk/release/*.sha256
-
-  # 第三道门：构建成功后才创建 GitHub Release 并刷新站点镜像。
-  publish:
-    name: Publish GitHub release
-    needs: [guard, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download release artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-apk
-          path: release
-
-      - name: Create GitHub release
+      # 构建产物直接从工作区上传发布，不经过中间制品。
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.guard.outputs.tag }}
-          name: ${{ needs.guard.outputs.tag }}
+          name: ${{ github.ref_name }}
           files: |
-            release/*.apk
-            release/*.sha256
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/*.sha256
           generate_release_notes: true
           draft: false
-          # 带连字符的语义化预发布标签（如 v0.2.1-rc1）标记为 prerelease。
-          prerelease: ${{ contains(needs.guard.outputs.tag, '-') }}
-
-      # Release events created with GITHUB_TOKEN do not trigger other
-      # workflows, so ask the site deployment to mirror the new APK.
-      - name: Refresh the site mirror
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"
+          # 带连字符的预发布标签（如 v0.3.1-rc1）标记为 prerelease。
+          prerelease: ${{ contains(github.ref_name, '-') }}
