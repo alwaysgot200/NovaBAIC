@@ -61,13 +61,21 @@ jobs:
               ;;
           esac
 
-          git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG"
-          git fetch --quiet origin "refs/heads/laocanmou:refs/remotes/origin/laocanmou"
+          # 显式拉取标签到本地（actions/checkout 未必带 tag）。
+          git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
 
-          TAG_COMMIT="$(git rev-list -n1 "$TAG")"
-          TIP_COMMIT="$(git rev-parse origin/laocanmou)"
+          # 标签解引用到 commit；laocanmou 最新提交直接问远端，
+          # 不依赖本地 remote-tracking ref（避免 checkout refspec 差异导致失败）。
+          TAG_COMMIT="$(git rev-list -n1 "$TAG" 2>/dev/null || true)"
+          TIP_COMMIT="$(git ls-remote origin refs/heads/laocanmou | awk '{print $1}')"
+
           echo "标签 $TAG -> $TAG_COMMIT"
           echo "origin/laocanmou 最新提交 -> $TIP_COMMIT"
+
+          if [ -z "$TAG_COMMIT" ] || [ -z "$TIP_COMMIT" ]; then
+            echo "::error::无法解析标签 $TAG 或 laocanmou 分支的提交，请检查网络/权限。"
+            exit 1
+          fi
 
           if [ "$TAG_COMMIT" != "$TIP_COMMIT" ]; then
             cat >&2 <<EOF
