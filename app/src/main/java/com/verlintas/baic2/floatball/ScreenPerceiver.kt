@@ -83,8 +83,13 @@ class ScreenPerceiver @Inject constructor(
 
     /**
      * 单次参谋的感知入口。[preheatedText] 为预热结果，命中即省去二次遍历。
+     * [awaitProjection] 供授权后重跑：投影服务正在异步启动，跳过就绪快检
+     * 直接采集（capture 自带就绪等待），避免把启动窗口误判为 NeedsProjection。
      */
-    suspend fun quickPerceive(preheatedText: String? = null): Perception {
+    suspend fun quickPerceive(
+        preheatedText: String? = null,
+        awaitProjection: Boolean = false,
+    ): Perception {
         if (accessibility.connected.value) {
             val text = preheatedText ?: readA11yText()
             if (!text.isNullOrBlank() && text.length >= MIN_TEXT_CHARS) {
@@ -93,7 +98,7 @@ class ScreenPerceiver @Inject constructor(
             // 文本稀薄：当前帧大概率图片为主，走像素路径。
             a11yScreenshotWithRetry()?.let { return it }
         }
-        return projectionPerception()
+        return projectionPerception(awaitProjection)
     }
 
     /** 阶梯②：无障碍截图 API（同进程、无对话框、无投影指示灯）。 */
@@ -121,8 +126,10 @@ class ScreenPerceiver @Inject constructor(
     }
 
     /** 阶梯④：MediaProjection（调用方保证已授权或已走完授权流程）。 */
-    suspend fun projectionPerception(): Perception {
-        if (!screenshotProvider.ready.value) return Perception.NeedsProjection
+    suspend fun projectionPerception(awaitReady: Boolean = false): Perception {
+        // awaitReady：授权刚通过的瞬间投影服务尚在 startForegroundService 的
+        // 异步启动窗口内，就绪快检必为 false；直接进 capture（内部等待就绪）。
+        if (!awaitReady && !screenshotProvider.ready.value) return Perception.NeedsProjection
         repeat(2) { attempt ->
             val bytes = screenshotProvider.capture().getOrNull()
             if (bytes != null) {

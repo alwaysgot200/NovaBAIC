@@ -44,6 +44,7 @@ import com.verlintas.baic2.device.api.ScreenshotProvider
 import com.verlintas.baic2.floatball.ScreenPerceiver.Perception
 import com.verlintas.baic2.floatball.advisor.AdvisorResponder
 import com.verlintas.baic2.floatball.advisor.ChatBriefBuilder
+import com.verlintas.baic2.floatball.advisor.ContactNames
 import com.verlintas.baic2.floatball.advisor.GoalRepository
 import com.verlintas.baic2.floatball.advisor.MissionJudgeRunner
 import com.verlintas.baic2.floatball.advisor.StrategyBrief
@@ -73,6 +74,7 @@ import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -653,8 +655,13 @@ class ScreenAdvisor @Inject constructor(
     /**
      * 单次参谋。文本感知命中时不需要撤窗（无障碍树只含活动应用窗口）；
      * 像素路径由服务层事先撤掉自身浮层。投影拍到的帧用完即释放。
+     * [awaitProjection] 供 MediaProjection 授权同意后的重跑：投影服务正在
+     * 异步启动，感知阶梯须等待就绪而非立刻回 NeedsConsent。
      */
-    fun adviseOnce(preheated: String?): Flow<Event> = flow {
+    fun adviseOnce(
+        preheated: String?,
+        awaitProjection: Boolean = false,
+    ): Flow<Event> = flow {
         // 多屏上滑拼接（§6.6）：像素路径且前置条件全满足时，先滚动采集多屏，
         // 成功则直接进入回合；返回 null 静默回退现行单屏感知阶梯。
         val stitched = tryMultiScreenStitch(preheated)
@@ -664,7 +671,7 @@ class ScreenAdvisor @Inject constructor(
             emitScreenTurn(stitched.text)
             return@flow
         }
-        when (val perception = perceiver.quickPerceive(preheated)) {
+        when (val perception = perceiver.quickPerceive(preheated, awaitProjection)) {
             is Perception.Text -> emitScreenTurn(perception.text)
 
             is Perception.Image -> {
@@ -702,6 +709,7 @@ class ScreenAdvisor @Inject constructor(
         if (preheated != null && preheated.length >= ScreenPerceiver.MIN_TEXT_CHARS) return null
         if (!perceiver.accessibilityConnected) return null
 
+        // 前置校验已把富文本场景早退，此处只认 L1/L2 标题识别出的联系人。
         val contact = resolveContact() ?: return null
         val pkg = perceiver.foregroundPackage()
         if (pkg != null && pkg in settings.swipeBlockedPackages) return null
@@ -825,10 +833,16 @@ class ScreenAdvisor @Inject constructor(
     private suspend fun prepareTurn(content: String, titleFallback: String? = null): PreparedTurn {
         val question = content.trim().take(MAX_SCREEN_CHARS)
         if (question.isEmpty()) return PreparedTurn.Empty
-        val contact = resolveContact(titleFallback)
+        // 手动追问不重新识别（保持当前绑定，面板续聊时状态条不闪「未绑定」）；
+        // 自动屏幕回合带正文做内容级兜底（T11）。
+        val contact = if (content.startsWith(screenLabel)) {
+            resolveContact(titleFallback, stripScreenLabel(content))
+        } else {
+            _activeContact.value
+        }
         _activeContact.value = contact
         switchDirection(contact?.let { "c:${it.contactId}" } ?: DIRECTION_KEY_SHARED)
-        val conversationId = resolveConversation(contact)
+        val conversationId = resolveConversation(contact, question)
         if (isDuplicateScreen(conversationId, question)) {
             _transcript.updateStatus(Status.Idle)
             return PreparedTurn.Unchanged
@@ -845,20 +859,55 @@ class ScreenAdvisor @Inject constructor(
     }
 
     /**
-     * 联系人识别（v3 §11.1）：L1 = 前台包名 + a11y 窗口标题；L1 未命中且
-     * [titleFallback] 非空（像素路径 OCR 标题带，L2）时用标题带再试一次。
+     * 联系人识别（v3 §11.1 + T11）：L1 = 前台包名 + a11y 窗口标题；L1 未命中且
+     * [titleFallback] 非空（像素路径 OCR 标题带，L2）时用标题带再试一次。两级
+     * 标题均先过壳标题过滤（浏览器等非 IM 应用的窗口标题是应用自身名，如
+     * Chrome 的「Chrome」——既会误命中同名键档案，也会被懒建成 Stub）。
+     * [screenBody] 非空时追加内容级兜底：正文呈「X：…」聊天结构且对方唯一、
+     * 已有同名档案才绑定（allowStub=false，绝不据内容新建，防网页误建档）。
      * 规范化、决策表与懒创建由 [ContactDirectory] 实现侧完成；任何失败按
      * 未绑定处理，不阻断参谋。
      */
-    private suspend fun resolveContact(titleFallback: String? = null): ContactRef? {
+    private suspend fun resolveContact(
+        titleFallback: String? = null,
+        screenBody: String? = null,
+    ): ContactRef? {
         val pkg = perceiver.foregroundPackage()
         // 桌面/系统壳不是聊天窗口：不建档、不识别，整轮回落到共享老参谋会话（方案 §6.8④）。
         if (!isChatWindow(pkg)) return null
-        runCatching { contactDirectory.resolve(pkg, perceiver.windowTitle()) }
+        val l1 = perceiver.windowTitle()?.takeUnless { isShellTitle(pkg, it) }
+        runCatching { contactDirectory.resolve(pkg, l1) }
             .getOrNull()
             ?.let { return it }
-        if (titleFallback.isNullOrBlank()) return null
-        return runCatching { contactDirectory.resolve(pkg, titleFallback) }.getOrNull()
+        val l2 = titleFallback?.takeUnless { it.isBlank() || isShellTitle(pkg, it) }
+        if (l2 != null) {
+            runCatching { contactDirectory.resolve(pkg, l2) }.getOrNull()?.let { return it }
+        }
+        if (screenBody.isNullOrBlank()) return null
+        val speaker = IncomingCue.speakerOf(screenBody) ?: return null
+        return runCatching {
+            contactDirectory.resolve(pkg, speaker, allowStub = false)
+        }.getOrNull()
+    }
+
+    /** 应用壳标题缓存（包名 → 应用标签）；解析失败缓存空串避免重复 binder 查询。 */
+    private val appLabelCache = ConcurrentHashMap<String, String>()
+
+    /**
+     * 壳标题判定（T11）：窗口标题与应用自身标签规范化后一致（如 Chrome 的
+     * 「Chrome」）时标识的是应用而非聊天对象，不得作为联系人识别输入。
+     */
+    private fun isShellTitle(pkg: String?, title: String?): Boolean {
+        if (pkg.isNullOrBlank() || title.isNullOrBlank()) return false
+        val label = appLabelCache.getOrPut(pkg) {
+            runCatching {
+                context.packageManager.getApplicationLabel(
+                    context.packageManager.getApplicationInfo(pkg, 0),
+                ).toString()
+            }.getOrDefault("")
+        }
+        if (label.isBlank()) return false
+        return ContactNames.normalize(label) == ContactNames.normalize(title)
     }
 
     /**
@@ -867,6 +916,8 @@ class ScreenAdvisor @Inject constructor(
      */
     private fun isChatWindow(pkg: String?): Boolean {
         if (pkg.isNullOrBlank()) return true
+        // 主应用自身不是 IM 聊天窗口：自家长按属自反测试，回落共享会话（T11）。
+        if (pkg == context.packageName) return false
         if (pkg in NON_CHAT_PACKAGES) return false
         return pkg !in homePackages
     }
@@ -881,15 +932,69 @@ class ScreenAdvisor @Inject constructor(
         }.getOrDefault(emptySet())
     }
 
-    /** 绑定联系人走其专属会话；未绑定走共享老参谋会话（现行为）。 */
-    private suspend fun resolveConversation(contact: ContactRef?): Long =
-        if (contact == null) {
-            ensureSharedConversation()
-        } else {
+    /**
+     * 回合会话路由。绑定联系人 → 专属会话；未绑定分两类：输入行手动追问
+     * （无屏幕前缀）延续面板正在展示的会话；自动屏幕回合（带屏幕前缀）按
+     * 内容相似度决定复用或新建共享会话（[resolveSharedConversation]）。
+     */
+    private suspend fun resolveConversation(contact: ContactRef?, incoming: String): Long {
+        if (contact != null) {
             val conversationId = contactDirectory.ensureAdvisorConversation(contact)
             subscribeConversation(conversationId)
-            conversationId
+            return conversationId
         }
+        if (!incoming.startsWith(screenLabel)) {
+            // 手动追问：面板显示什么就续什么（含联系人会话）；服务重启等
+            // 无当前会话的场景退回持久化共享会话。
+            val current = _transcript.value.conversationId
+            if (current > 0) {
+                subscribeConversation(current)
+                return current
+            }
+            return ensureSharedConversation()
+        }
+        return resolveSharedConversation(stripScreenLabel(incoming))
+    }
+
+    /**
+     * 非联系人自动屏幕回合的共享会话路由：当前屏正文与最近共享会话的最近
+     * 一条屏幕消息相似（[SHARED_REUSE_SIMILARITY]）→ 复用（同场景连续滚动
+     * 追问）；内容已切到别的场景 → 再向最近 [SHARED_LOOKBACK_TURNS] 条屏幕
+     * 消息回看找相似（A→B→A 切回原场景时回到原会话，像素 OCR 漏认联系人的
+     * 回合也借内容相似找回原会话）；都不像 → 另起新会话并更新偏好指向，
+     * 旧会话留在库中可回看。会话内还没有屏幕消息（空/仅手动）时无从比较，
+     * 直接复用。
+     */
+    private suspend fun resolveSharedConversation(screenBody: String): Long {
+        val existing = prefs.conversationId().takeIf { it > 0 }
+            ?.let { id -> runCatching { conversationRepository.get(id) }.getOrNull() }
+        if (existing != null) {
+            val last = historyGateway.latestScreenBody(existing.id, screenLabel)
+            if (last == null ||
+                FrameQuality.textSimilarity(screenBody, stripScreenLabel(last)) >= SHARED_REUSE_SIMILARITY
+            ) {
+                subscribeConversation(existing.id)
+                return existing.id
+            }
+        }
+        for ((candidateId, body) in historyGateway.recentScreenBodies(screenLabel, SHARED_LOOKBACK_TURNS)) {
+            if (candidateId == existing?.id) continue // 偏好会话刚比对过，不相似
+            if (FrameQuality.textSimilarity(screenBody, stripScreenLabel(body)) < SHARED_REUSE_SIMILARITY) continue
+            // 会话可能已被用户删除：取不到就跳过这一条。
+            val conversation = runCatching { conversationRepository.get(candidateId) }.getOrNull()
+                ?: continue
+            subscribeConversation(conversation.id)
+            prefs.setConversationId(conversation.id)
+            return conversation.id
+        }
+        val conversationId = conversationRepository.create(
+            agentId = null,
+            mode = AppMode.CHAT,
+            title = context.getString(R.string.float_ask_conversation_title),
+        ).also { id -> prefs.setConversationId(id) }
+        subscribeConversation(conversationId)
+        return conversationId
+    }
 
     /** 阶段二：串行队列里跑一个 LLM 回合。 */
     private suspend fun executePrepared(
@@ -2105,6 +2210,19 @@ class ScreenAdvisor @Inject constructor(
 
         const val REASON_NO_TEXT = "no_text"
         const val REASON_NO_CONFIG = "no_config"
+
+        /**
+         * 非联系人自动屏幕回合的共享会话复用阈值：当前屏正文与会话内最近
+         * 一条屏幕消息的 [FrameQuality.textSimilarity] 不低于该值视为「同一
+         * 场景延续」，复用会话；低于则另起新会话（旧会话保留可回看）。
+         */
+        const val SHARED_REUSE_SIMILARITY = 0.45f
+
+        /**
+         * 共享会话回看窗口：当前偏好会话不相似时，再向最近这么多条跨会话
+         * 屏幕消息找相似（覆盖 A→B→A 的最近几个场景窗口）。
+         */
+        const val SHARED_LOOKBACK_TURNS = 12
 
         /** P3 reroute：同站连续 retreat 命中达此数即建议重规划（不自动）。 */
         const val REROUTE_RETREAT_HITS = 2

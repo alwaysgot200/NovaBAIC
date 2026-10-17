@@ -75,6 +75,14 @@ internal object IncomingCue {
 
     private val WHITESPACE = Regex("""\s+""")
 
+    /** 发言行：名字（1–12 个非冒号非空白字符）+ 冒号。 */
+    private val SPEAKER_LINE = Regex("""^([^：:\s]{1,12})[：:]""")
+
+    /** URL/主机端口行（浏览器地址栏等）：scheme://… 或 host:port/path，不是发言人。 */
+    private val URL_LINE = Regex(
+        """^\s*[a-zA-Z][a-zA-Z0-9+.-]*://\S+$|^\s*[a-zA-Z0-9][a-zA-Z0-9.-]*:\d+(?:/\S*)?$""",
+    )
+
     /**
      * 返回对方最后一条来信的文本候选；非聊天界面或无可用文本时返回 null。
      */
@@ -108,6 +116,26 @@ internal object IncomingCue {
             append(cue)
             if (goalPart != null) append(' ').append(goalPart)
         }.take(maxChars)
+    }
+
+    /**
+     * 聊天结构发言人提取（联系人识别的内容级兜底）：存在「我」的发言且其余
+     * 发言人唯一、出现 ≥2 行时返回对方名；无对话结构（文章/新闻/设置页）或
+     * 多人群聊返回 null。地址栏 URL、时间分割行等界面噪声先剔除，避免被
+     * 「localhost:8765」「14」冒充发言人。调用方只允许据此回查既有档案，
+     * 绝不据此新建。
+     */
+    fun speakerOf(screenBody: String): String? {
+        val speakers = screenBody.split('\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .filterNot { URL_LINE.matches(it) || TIME_LINE.matches(it) || DATE_LINE.matches(it) }
+            .mapNotNull { SPEAKER_LINE.find(it)?.groupValues?.get(1) }
+        if (speakers.none { it == "我" }) return null
+        val others = speakers.filter { it != "我" }.groupingBy { it }.eachCount()
+        if (others.size != 1) return null
+        val (name, count) = others.entries.first()
+        return if (count >= 2) name else null
     }
 
     /** 聊天界面强标记：时间分割/结构占位/系统提示/界面词，命中任一即算。 */

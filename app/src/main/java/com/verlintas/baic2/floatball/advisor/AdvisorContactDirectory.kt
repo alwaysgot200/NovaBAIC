@@ -41,13 +41,13 @@ class AdvisorContactDirectory @Inject constructor(
     private val conversationRepository: ConversationRepository,
 ) : ContactDirectory {
 
-    override suspend fun resolve(imPackage: String?, rawTitle: String?): ContactRef? {
+    override suspend fun resolve(imPackage: String?, rawTitle: String?, allowStub: Boolean): ContactRef? {
         if (imPackage.isNullOrBlank() || rawTitle.isNullOrBlank()) return null
         val outcome = contacts.resolve(
             imPackage = imPackage,
             rawTitle = rawTitle,
             source = "a11y",
-            createStub = true,
+            createStub = allowStub,
         )
         val profile = (outcome as? ResolveOutcome.Matched)?.profile ?: return null
         return toRef(profile)

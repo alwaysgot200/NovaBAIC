@@ -112,6 +112,13 @@ class FloatBallService : Service() {
     private var split: FloatUi.SplitPanel? = null
     private var splitParams: WindowManager.LayoutParams? = null
 
+    /**
+     * 分屏窗口临时摘除标记（像素采集防污染，铁律 §8.1）：采集前
+     * [detachSplitWindow] 摘窗（视图与状态保留），采集完 [reattachSplitWindow]
+     * 挂回——「画面重复」路径用户也不丢已打开的结果面板。
+     */
+    private var splitDetached = false
+
     /** 键盘弹起前的用户面板高度（-1=当前未避让），键盘收起后还原。 */
     private var splitHeightBeforeIme = -1
     private var transcriptView: TranscriptView? = null
@@ -417,31 +424,45 @@ class FloatBallService : Service() {
         ball?.setMode(FloatUi.BallMode.BUSY, this)
         val preheated = screenAdvisor.consumePreheat()
         val needsHide = preheated == null || preheated.length < ScreenPerceiver.MIN_TEXT_CHARS
-        if (needsHide) hideAllOverlays() // 像素路径：先撤自身浮层防污染
+        if (needsHide) {
+            hideAllOverlays() // 像素路径：先撤自身浮层防污染
+            detachSplitWindow() // 面板文字同样不能进画面（铁律 §8.1）
+        }
         runOneShot(preheated.takeIf { !needsHide }, settleMs = 0L)
     }
 
-    private fun runOneShot(preheated: String?, settleMs: Long) {
+    private fun runOneShot(preheated: String?, settleMs: Long, awaitProjection: Boolean = false) {
         // 授权重跑路径会再次进入：恢复忙碌态（授权等待期 flow 结束已把 mode
         // 归位 IDLE），防止等待窗口内被并发触发第二个参谋。
         mode = Mode.ONESHOT
         ball?.setMode(FloatUi.BallMode.BUSY, this)
+        // 授权重跑必为像素路径：采集前面板必须不在画面里（首跑已在
+        // startOneShot 摘过，此处幂等兜底）。
+        if (preheated == null) detachSplitWindow()
         askJob = scope.launch {
+            var awaitingConsent = false
             try {
-                screenAdvisor.adviseOnce(preheated).collect { event ->
+                screenAdvisor.adviseOnce(preheated, awaitProjection).collect { event ->
                     when (event) {
-                        ScreenAdvisor.Event.NeedsConsent -> requestProjectionConsent { granted ->
-                            // 拒绝授权也要给出反馈，不能静默吞掉（用户会以为单击失效）。
-                            if (granted) {
-                                runOneShot(null, settleMs = CONSENT_SETTLE_MS)
-                            } else {
-                                toast(R.string.float_ask_denied)
+                        ScreenAdvisor.Event.NeedsConsent -> {
+                            awaitingConsent = true
+                            requestProjectionConsent { granted ->
+                                // 拒绝授权也要给出反馈，不能静默吞掉（用户会以为单击失效）。
+                                if (granted) {
+                                    runOneShot(null, CONSENT_SETTLE_MS, awaitProjection = true)
+                                } else {
+                                    reattachSplitWindow() // 采集不再发生，恢复旧结果面板
+                                    toast(R.string.float_ask_denied)
+                                }
                             }
                         }
                         is ScreenAdvisor.Event.TurnStarted -> ensureSplit()
                         // 与上一屏几乎相同：不展开面板，仅轻提示；flow 结束后
                         // finishOneShot 立即结束单次模式、恢复蓝球。
-                        ScreenAdvisor.Event.Unchanged -> toast(R.string.float_screen_unchanged)
+                        ScreenAdvisor.Event.Unchanged -> {
+                            reattachSplitWindow() // 摘窗采集后原样恢复面板
+                            toast(R.string.float_screen_unchanged)
+                        }
                         is ScreenAdvisor.Event.Failed -> ensureSplit() // 错误也要可见
                     }
                 }
@@ -452,6 +473,12 @@ class FloatBallService : Service() {
                 ensureSplit()
             } finally {
                 finishOneShot()
+                // 拍完即关的兜底：a11y 文本/无障碍截图路径不经过投影释放，
+                // 授权即亮的指示灯会一直挂在状态栏；无投影时为幂等 no-op。
+                // 等待授权中转时绝不释放：投影服务处于 startForegroundService→
+                // startForeground 窗口期，此刻 stopService 会触发
+                // ForegroundServiceDidNotStartInTimeException 崩溃。
+                if (!awaitingConsent) screenAdvisor.releaseProjection()
             }
         }
     }
@@ -464,11 +491,14 @@ class FloatBallService : Service() {
     private fun finishOneShot() {
         if (mode == Mode.ONESHOT) {
             mode = Mode.IDLE
+            // 先置空再复位图标：此刻协程仍在 finally 内（isActive=true），
+            // isBusy() 会被 Job 拖住；post 到队列尾＝协程完成后才真正执行。
+            askJob = null
             ball?.setMode(FloatUi.BallMode.NORMAL, this)
             restoreBall()
             // askJob 收尾晚于 transcript 末次 Idle 发射：不补这一下，输入行
             // 发送/停止键会停在「停止」方块上（末次刷新时 Job 仍 active）。
-            inputHandle?.refresh()
+            mainHandler.post { inputHandle?.refresh() }
         }
     }
 
@@ -613,6 +643,7 @@ class FloatBallService : Service() {
         FloatCaptureBridge.clear()
         if (mode == Mode.ONESHOT) finishOneShot()
         if (mode == Mode.RECORDING) abortRecording()
+        reattachSplitWindow() // 授权流程终止：恢复可能被摘下的结果面板
         restoreBall()
     }
 
@@ -651,10 +682,14 @@ class FloatBallService : Service() {
     }
 
     private fun ensureSplit(): FloatUi.SplitPanel {
-        split?.let { return it }
-        // 录制态保留红球（用户靠再点红球合分屏，掩膜会盖住它）；其余场景
-        // 撤掉全部浮层，避免分屏与球同屏（遮挡/误触）。
-        if (mode != Mode.RECORDING) hideAllOverlays()
+        split?.let {
+            // 摘窗采集后的复用路径（TurnStarted/Failed/异常）：先挂回再返回。
+            reattachSplitWindow()
+            return it
+        }
+        // 分屏与扇形菜单不共存；悬浮球保留可见（面板开着也能再触发参谋，
+        // 球可拖动避让面板；录制态掩膜本就盖住红球）。
+        dismissMenuNow()
         val metrics = resources.displayMetrics
         val params = overlayParams(
             width = WindowManager.LayoutParams.MATCH_PARENT,
@@ -1033,11 +1068,32 @@ class FloatBallService : Service() {
         split?.let { runCatching { windowManager.removeView(it.root) } }
         split = null
         splitParams = null
+        splitDetached = false
         splitHeightBeforeIme = -1
         transcriptView = null
         inputHandle = null
         screenAdvisor.resetTransient()
         if (!keepBall) restoreBall()
+    }
+
+    /**
+     * 像素采集前临时摘下分屏窗口：投影/无障碍截图会把 overlay 一并拍进
+     * 画面，面板文字污染 OCR 且打断会话路由（铁律 §8.1）。视图对象、
+     * 布局参数、转录状态全部保留，采集完 [reattachSplitWindow] 原样挂回。
+     */
+    private fun detachSplitWindow() {
+        val panel = split ?: return
+        if (splitDetached) return
+        runCatching { windowManager.removeView(panel.root) }
+        splitDetached = true
+    }
+
+    /** 摘窗后的挂回（幂等：未摘除时无动作）。 */
+    private fun reattachSplitWindow() {
+        val panel = split ?: return
+        if (!splitDetached) return
+        splitParams?.let { runCatching { windowManager.addView(panel.root, it) } }
+        splitDetached = false
     }
 
     // -------------------------------------------------------- direction
@@ -1382,7 +1438,9 @@ class FloatBallService : Service() {
         )
 
     private fun restoreBall() {
-        if (ball == null && menuView == null && split == null) showBall()
+        // 分屏开着也恢复球（面板留着展示结果，球可拖动避让）；只有菜单
+        // 展开时球本就存在，无需重建。
+        if (ball == null && menuView == null) showBall()
     }
 
     private fun hideAllOverlays() {
@@ -1400,6 +1458,7 @@ class FloatBallService : Service() {
         split?.let { runCatching { windowManager.removeView(it.root) } }
         split = null
         splitParams = null
+        splitDetached = false
         splitHeightBeforeIme = -1
         transcriptView = null
     }
@@ -1423,7 +1482,14 @@ class FloatBallService : Service() {
         const val ACTION_START_RECORDING = "com.verlintas.baic2.floatball.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.verlintas.baic2.floatball.STOP_RECORDING"
         const val CONSENT_SETTLE_MS = 350L
-        const val CONSENT_WATCHDOG_MS = 120_000L
+
+        /**
+         * 授权孤儿兜底时长。只防「中转 Activity 结果永远不回来」（进程级异常），
+         * 不能卡正常授权节奏：系统对话框选范围+确认是慢操作（实测可超 2 分钟），
+         * 若早于用户确认触发会把录制态提前撤销、清空结果桥，授权结果回传时被
+         * 静默吞掉（表现为授权完毫无反应、球回到蓝色）——故放宽到 10 分钟。
+         */
+        const val CONSENT_WATCHDOG_MS = 600_000L
 
         /** 键盘弹起时分屏临时收窄的最小高度（dp），保证输入行与部分转录可见。 */
         const val IME_MIN_PANEL_DP = 220

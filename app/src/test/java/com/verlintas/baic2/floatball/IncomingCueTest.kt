@@ -136,4 +136,99 @@ class IncomingCueTest {
         val query = IncomingCue.recallQuery(screen, goal = null, maxChars = 30)
         assertEquals(30, query.length)
     }
+
+    @Test
+    fun speakerOfReturnsSoleCounterpartFromChatStructure() {
+        val screen = listOf(
+            "李总：我们这边基础版28万能做吗？",
+            "我：李总，基础版给您28万，不含运维",
+            "李总：行，那这两天把28万的合同发我",
+            "李总：对了运维单独算",
+        ).joinToString("\n")
+
+        assertEquals("李总", IncomingCue.speakerOf(screen))
+    }
+
+    @Test
+    fun speakerOfReturnsNullForNewsPageWithoutDialogue() {
+        val news = listOf(
+            "网页视图",
+            "未连接到互联网",
+            "打开主页",
+            "news.baidu.com",
+            "查看 15 个标签页",
+        ).joinToString("\n")
+
+        assertNull(IncomingCue.speakerOf(news))
+    }
+
+    @Test
+    fun speakerOfReturnsNullWithoutSelfLine() {
+        val screen = listOf(
+            "李总：基础版多少钱",
+            "李总：在吗",
+        ).joinToString("\n")
+
+        assertNull(IncomingCue.speakerOf(screen))
+    }
+
+    @Test
+    fun speakerOfReturnsNullForGroupChatWithMultipleSpeakers() {
+        val screen = listOf(
+            "我：大家好",
+            "李总：你好",
+            "王总：你好",
+        ).joinToString("\n")
+
+        assertNull(IncomingCue.speakerOf(screen))
+    }
+
+    @Test
+    fun speakerOfRequiresCounterpartToAppearTwice() {
+        val screen = listOf(
+            "李总：在吗",
+            "我：在的",
+        ).joinToString("\n")
+
+        assertNull(IncomingCue.speakerOf(screen))
+    }
+
+    @Test
+    fun speakerOfAcceptsHalfWidthColon() {
+        val screen = listOf(
+            "李总: 我们这边基础版28万能做吗",
+            "我: 基础版给您28万，不含运维",
+            "李总: 对了运维单独算",
+        ).joinToString("\n")
+
+        assertEquals("李总", IncomingCue.speakerOf(screen))
+    }
+
+    @Test
+    fun speakerOfSkipsUrlBarLineWithPort() {
+        val screen = listOf(
+            "李总",
+            "李总：我们这边基础版28万能做吗？",
+            "我：李总，基础版给您28万，不含运维",
+            "李总：行，那这两天把28万的合同发我",
+            "未连接到互联网",
+            "localhost:8765/li.html",
+            "打开主页",
+            "查看 16 个标签页",
+        ).joinToString("\n")
+
+        assertEquals("李总", IncomingCue.speakerOf(screen))
+    }
+
+    @Test
+    fun speakerOfSkipsTimeDividerLines() {
+        val screen = listOf(
+            "14:32",
+            "李总：在吗",
+            "我：在的，您说",
+            "李总：合同今天能发吗",
+        ).joinToString("\n")
+
+        assertEquals("李总", IncomingCue.speakerOf(screen))
+    }
 }

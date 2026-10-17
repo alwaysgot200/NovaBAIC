@@ -64,8 +64,9 @@ interface ContactDirectory {
     /**
      * 解析当前前台页面对应的已绑定联系人；未绑定、无法识别或不是 IM
      * 聊天页时返回 null（调用方据此回退共享会话，不阻断参谋）。
+     * [allowStub]=false 时只认既有键/别名（内容级兜底），绝不懒建新档案。
      */
-    suspend fun resolve(imPackage: String?, rawTitle: String?): ContactRef?
+    suspend fun resolve(imPackage: String?, rawTitle: String?, allowStub: Boolean = true): ContactRef?
 
     /** 该联系人的专属老参谋会话 id；不存在则创建并完成绑定。 */
     suspend fun ensureAdvisorConversation(contact: ContactRef): Long
