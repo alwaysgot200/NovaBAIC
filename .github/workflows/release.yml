@@ -132,21 +132,37 @@ jobs:
             exit 1
           fi
 
+      # GITHUB_TOKEN 无法跨私有仓，必须用 SECRETS_REPO_PAT（主仓唯一 GitHub Secret）。
+      - name: Checkout Secrets store
+        uses: actions/checkout@v5
+        with:
+          repository: alwaysgot200/Secrets
+          ref: main
+          token: ${{ secrets.SECRETS_REPO_PAT }}
+          path: secrets-store
+          sparse-checkout: ci
+
+      # 把签名信息注入 GITHUB_ENV：过滤掉注释行，只保留 KEY=VALUE。
+      - name: Load signing secrets
+        run: |
+          set -eu
+          SECRETS_FILE="secrets-store/ci/baic2-release.env"
+          if [ ! -f "$SECRETS_FILE" ]; then
+            echo "::error::Secrets 仓库缺少 ci/baic2-release.env，请检查 alwaysgot200/Secrets。"
+            exit 1
+          fi
+          grep -E '^[A-Z0-9_]+=' "$SECRETS_FILE" >> "$GITHUB_ENV"
+
       - name: Verify signing secrets
-        env:
-          KEYSTORE_BASE64: ${{ secrets.BAIC2_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.BAIC2_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.BAIC2_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.BAIC2_KEY_PASSWORD }}
         run: |
           set -eu
           MISSING=()
-          [ -n "$KEYSTORE_BASE64" ] || MISSING+=("BAIC2_KEYSTORE_BASE64")
-          [ -n "$KEYSTORE_PASSWORD" ] || MISSING+=("BAIC2_KEYSTORE_PASSWORD")
-          [ -n "$KEY_ALIAS" ] || MISSING+=("BAIC2_KEY_ALIAS")
-          [ -n "$KEY_PASSWORD" ] || MISSING+=("BAIC2_KEY_PASSWORD")
+          [ -n "${BAIC2_KEYSTORE_BASE64:-}" ] || MISSING+=("BAIC2_KEYSTORE_BASE64")
+          [ -n "${BAIC2_KEYSTORE_PASSWORD:-}" ] || MISSING+=("BAIC2_KEYSTORE_PASSWORD")
+          [ -n "${BAIC2_KEY_ALIAS:-}" ] || MISSING+=("BAIC2_KEY_ALIAS")
+          [ -n "${BAIC2_KEY_PASSWORD:-}" ] || MISSING+=("BAIC2_KEY_PASSWORD")
           if [ "${#MISSING[@]}" -ne 0 ]; then
-            echo "::error::缺少签名 Secrets：${MISSING[*]}。请在仓库 Settings → Secrets and variables → Actions 中配置后重跑。"
+            echo "::error::签名信息缺少：${MISSING[*]}。请补全 alwaysgot200/Secrets 的 ci/baic2-release.env 后重跑。"
             exit 1
           fi
 
@@ -157,16 +173,11 @@ jobs:
         run: ./gradlew :app:lintRelease
 
       - name: Decode release keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.BAIC2_KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/baic2-release.keystore"
+        run: echo "$BAIC2_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/baic2-release.keystore"
 
       - name: Build signed release
         env:
           BAIC2_KEYSTORE_PATH: ${{ runner.temp }}/baic2-release.keystore
-          BAIC2_KEYSTORE_PASSWORD: ${{ secrets.BAIC2_KEYSTORE_PASSWORD }}
-          BAIC2_KEY_ALIAS: ${{ secrets.BAIC2_KEY_ALIAS }}
-          BAIC2_KEY_PASSWORD: ${{ secrets.BAIC2_KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease
 
       - name: Verify APK signature
