@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的标签（必须指向 laocanmou 最新提交，如 v0.2.1）'
+        description: "要发布的标签（必须指向 laocanmou 最新提交，如 v0.2.1）"
         required: true
         type: string
 
@@ -62,7 +62,7 @@ jobs:
           esac
 
           git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG"
-          git fetch --quiet --depth=0 origin laocanmou
+          git fetch --quiet origin "refs/heads/laocanmou:refs/remotes/origin/laocanmou"
 
           TAG_COMMIT="$(git rev-list -n1 "$TAG")"
           TIP_COMMIT="$(git rev-parse origin/laocanmou)"
@@ -95,7 +95,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Install SDK platform
         run: |
