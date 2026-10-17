@@ -247,6 +247,18 @@ git mergetool / 手工解决
 - 合并后如上游改了 `docs/ARCHITECTURE.md`/ADR/版本目录，**同步更新本手册 §2/§3**。
 - 上游有 DB 迁移（CHANGELOG 会标 `DB vNN`）时，重点回归会话/记忆功能。
 
+### 7.1 版本号铁律（合并上游后必须复核）
+
+**laocanmou 的 `versionName` 恒等于最新发布 tag（去 `v` 前缀），`versionCode` 单调递增。
+此特征不随上游合并而丢失**（CI 的 release.yml 有硬校验：不一致直接拒绝发布）：
+
+1. **发版顺序**：升 `app/build.gradle.kts` 的 `versionCode`（+1）与 `versionName`
+   （= 新 tag）→ 提交推送 → 在该提交上打 tag 推送。先打 tag 必被 CI 拒绝。
+2. **合并上游后**：若上游也改了版本号产生冲突或自动合并，一律以 laocanmou 口径收尾——
+   `versionName` 回到 laocanmou 最新 tag 的值；`versionCode` 取「两边最大值 + 1」，
+   保证相对上游只增不减（安装层覆盖升级依赖它）。
+3. 每次合并上游、每次发版前，先看一眼最新 tag：`git describe --tags --abbrev=0`。
+
 ---
 
 ## 8. 历史教训（已踩过的坑，别再踩）
