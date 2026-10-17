@@ -51,8 +51,13 @@ android {
         applicationId = "com.verlintas.baic2"
         minSdk = 26
         targetSdk = 36
-        versionCode = 25
-        versionName = "0.3.1"
+        // tag 全驱动：release CI 从 tag 派生 versionName/versionCode 并以
+        // -Pbaic.versionName / -Pbaic.versionCode 注入（公式见 release.yml）。
+        // 仓库内的值只是本地开发占位，发版不需要先升版本号。
+        versionCode = providers.gradleProperty("baic.versionCode").orNull?.toInt()
+            ?: 302
+        versionName = providers.gradleProperty("baic.versionName").orNull
+            ?: "0.3.2"
     }
 
     signingConfigs {

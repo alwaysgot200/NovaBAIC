@@ -247,17 +247,29 @@ git mergetool / 手工解决
 - 合并后如上游改了 `docs/ARCHITECTURE.md`/ADR/版本目录，**同步更新本手册 §2/§3**。
 - 上游有 DB 迁移（CHANGELOG 会标 `DB vNN`）时，重点回归会话/记忆功能。
 
-### 7.1 版本号铁律（合并上游后必须复核）
+### 7.1 版本号铁律（tag 全驱动，2026-10-17 修订）
 
-**laocanmou 的 `versionName` 恒等于最新发布 tag（去 `v` 前缀），`versionCode` 单调递增。
-此特征不随上游合并而丢失**（CI 的 release.yml 有硬校验：不一致直接拒绝发布）：
+**tag 是版本号唯一事实来源：release CI 从 tag 派生 `versionName`/`versionCode`
+注入构建，仓库 `app/build.gradle.kts` 里的值只是本地开发占位，发版不再需要
+"先升版本号"提交，也就不存在"忘升版本号被 CI 拒"这回事。**
 
-1. **发版顺序**：升 `app/build.gradle.kts` 的 `versionCode`（+1）与 `versionName`
-   （= 新 tag）→ 提交推送 → 在该提交上打 tag 推送。先打 tag 必被 CI 拒绝。
-2. **合并上游后**：若上游也改了版本号产生冲突或自动合并，一律以 laocanmou 口径收尾——
-   `versionName` 回到 laocanmou 最新 tag 的值；`versionCode` 取「两边最大值 + 1」，
-   保证相对上游只增不减（安装层覆盖升级依赖它）。
-3. 每次合并上游、每次发版前，先看一眼最新 tag：`git describe --tags --abbrev=0`。
+1. **发版 = 一步**：在 laocanmou 最新提交上打 tag 并推送（tag 必须指向 laocanmou
+   tip，否则 CI 拒绝）：
+   ```bash
+   git push origin laocanmou && git tag v0.3.2 && git push origin v0.3.2
+   ```
+2. **派生公式**（CI 内执行；本地发版构建可用 `-Pbaic.versionName/-Pbaic.versionCode`
+   覆盖）：`versionName` = tag 去 `v` 前缀（预发布 tag 保留后缀，如 `0.3.2-rc1`）；
+   `versionCode` = 主版本×10000 + 次版本×100 + 补丁号（v0.3.2 → 302）。
+   次版本/补丁号 ≤ 99 由 CI 强制（超出会破坏公式单调性）。
+3. **合并上游后**：不再需要手工对齐版本号——派生值从 302 起步，恒大于上游手动
+   维护的 versionCode（上游 0.3.0 才 24），安装层覆盖升级天然只增不减。唯一要留意
+   的冲突裁决口径：`build.gradle.kts` 版本行若撞上游改动，保留我们的
+   `providers.gradleProperty` 写法即可。
+4. **打错的 tag**：删远端重打即可触发重跑：
+   `git push origin :refs/tags/vX.Y.Z`，然后在 laocanmou tip 上重新
+   `git push origin vX.Y.Z`。
+5. 发版前看一眼最新 tag 仍是好习惯：`git describe --tags --abbrev=0`。
 
 ---
 

@@ -62,7 +62,7 @@ jobs:
 
           if [ "$TAG_COMMIT" != "$TIP_COMMIT" ]; then
             echo "::error::标签 $TAG 没有指向 laocanmou 分支的最新提交，拒绝发布。"
-            echo "请确认：1) laocanmou 已推送到远端；2) 在其最新提交上打标签；3) 标签与 app/build.gradle.kts 的 versionName 一致。"
+            echo "请确认：1) laocanmou 已推送到远端；2) 在其最新提交上打标签。"
             exit 1
           fi
 
@@ -87,17 +87,33 @@ jobs:
           tools/check-strings-sync.sh
           python3 tools/check-tool-schemas.py
 
-      - name: Verify versionName matches tag
+      # tag 是版本号的唯一事实来源：versionName/versionCode 均由 tag 派生并
+      # 注入后续构建（-Pbaic.versionName/-Pbaic.versionCode）。仓库内
+      # app/build.gradle.kts 里的值只是本地开发占位，不再参与发布校验。
+      # 派生公式：versionCode = 主版本*10000 + 次版本*100 + 补丁号，
+      # 对 semver 序天然单调（v0.3.2 -> 302），且远大于历史上手动维护的值。
+      - name: Derive version from tag
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          VN="$(sed -n 's/.*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n1)"
-          echo "APK versionName=$VN，发布标签=$TAG"
-          if [ "v$VN" != "$TAG" ]; then
-            echo "::error::标签 $TAG 与 app/build.gradle.kts 的 versionName=$VN 不一致，请先升版本号再打标签。"
+          V="${TAG#v}"
+          BASE="${V%%-*}"   # 剥离预发布后缀：v0.3.2-rc1 -> 0.3.2
+          if ! [[ "$BASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::标签 $TAG 必须形如 v0.3.2（数字三段式，可带 -rcN 后缀），当前：$BASE"
             exit 1
           fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          if [ "$MINOR" -gt 99 ] || [ "$PATCH" -gt 99 ]; then
+            echo "::error::次版本/补丁号超过 99 会使 versionCode 派生不再单调，请升主/次版本。"
+            exit 1
+          fi
+          VER_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          {
+            echo "BAIC_VERSION_NAME=$V"
+            echo "BAIC_VERSION_CODE=$VER_CODE"
+          } >> "$GITHUB_ENV"
+          echo "发布 $TAG -> versionName=$V, versionCode=$VER_CODE"
 
       # GITHUB_TOKEN 无法跨私有仓，必须用 SECRETS_REPO_PAT（主仓唯一 GitHub Secret）。
       - name: Checkout Secrets store
@@ -145,7 +161,10 @@ jobs:
       - name: Build signed release
         env:
           BAIC2_KEYSTORE_PATH: ${{ runner.temp }}/baic2-release.keystore
-        run: ./gradlew :app:assembleRelease
+        run: >-
+          ./gradlew :app:assembleRelease
+          -Pbaic.versionName="$BAIC_VERSION_NAME"
+          -Pbaic.versionCode="$BAIC_VERSION_CODE"
 
       - name: Verify APK signature
         run: |
