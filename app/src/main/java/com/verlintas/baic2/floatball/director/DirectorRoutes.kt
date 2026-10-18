@@ -65,7 +65,7 @@ data class DirectorInput(
     val failStreak: Int = 0,
     val consecutiveRetreats: Int = 0,
     val stageDwellDays: Long = 0L,
-    /** 对方最后一次来信时间；从未收到来信时为 null（规则表必须容忍）。 */
+    /** 对方最后一次来信时间；从未收到来信时为 null（规则表必须容忍）。M2-c 起 PROACTIVE 路由消费（方案 §7.3 incoming 优先）。 */
     val lastIncomingAtMs: Long? = null,
     val nowMs: Long = 0L,
     /** M2-b：联系人主动策略快照；null = 未配置（PROACTIVE 按未放开处理）。 */
@@ -80,12 +80,15 @@ data class DirectorInput(
  * 路由决策结果。[reason] 是命中的规则键（原样落 director_logs.reason，
  * 如 "incoming_default"/"proactive_not_enabled_m0"，可回放验证）；[replanHint]
  * 是观察性重规划信号（failStreak≥3 或连续 retreat×2，即 P3 reroute 条件），
- * M0 只随决策落库、不改变任何路由与控制流。
+ * M0 只随决策落库、不改变任何路由与控制流；[actionHint] 是观察性行动建议
+ * 信号（F7，方案 §5.6 action_hint 旁路：阶段驻留 ≥ [DirectorRoutes.ACTION_HINT_DWELL_DAYS]），
+ * 同样只落台账不占路由，UI 仅在用户打开 GoalTab 时消费。
  */
 data class DirectorDecision(
     val route: DirectorRoute,
     val reason: String,
     val replanHint: Boolean = false,
+    val actionHint: Boolean = false,
 )
 
 /**
@@ -101,6 +104,16 @@ object DirectorRoutes {
     /** 同站连续回撤阈值：≥2 建议重规划（与 StageGraph reroute 条件一致）。 */
     const val REPLAN_RETREAT_STREAK_THRESHOLD = 2
 
+    /**
+     * 行动建议旁路阈值（F7，方案 §5.6 action_hint）：阶段驻留 ≥14 天置
+     * actionHint。方案只定义了旁路消费口径（信号由 Director 记录、UI 仅在
+     * 用户打开 GoalTab 时消费）未定数值，取 14 天推导：与 StagePolicy 停留
+     * 超时的 expectedDays 缺省兜底同量级（单阶段预期驻留以周计），驻留满
+     * 两周无跃迁即「行动窗口成熟」的保守信号——再短易对慢节奏关系误报，
+     * 再长则错过口头聊天外的推进时机（行动卡建议期）。
+     */
+    const val ACTION_HINT_DWELL_DAYS = 14L
+
     /** 一小时的毫秒数（minGapHours 换算用）。 */
     const val HOUR_MS = 3_600_000L
 
@@ -110,7 +123,7 @@ object DirectorRoutes {
      * - MANUAL → REPLY（manual_default）：与现状一致，零回归；
      * - MANUAL + requestSmalltalk → SMALL_TALK（manual_smalltalk_entry）：M1 分屏
      *   「来点闲聊」入口（方案 §13.2 矛盾#3）；字段只对 MANUAL 生效，其余触发源带上也不改路；
-     * - PROACTIVE → 五分支频控（[routeProactive]，方案 §5.5/§7.3）；
+     * - PROACTIVE → 六分支频控（[routeProactive]，方案 §5.5/§7.3）；
      * - SCHEDULED → BRIEF（scheduled_brief）：周期检点产出汇总简报。
      */
     fun decide(input: DirectorInput): DirectorDecision {
@@ -127,15 +140,27 @@ object DirectorRoutes {
         }
         val replanHint = input.failStreak >= REPLAN_FAIL_STREAK_THRESHOLD ||
             input.consecutiveRetreats >= REPLAN_RETREAT_STREAK_THRESHOLD
-        return DirectorDecision(route, reason, replanHint)
+        // F7 action_hint 旁路（方案 §5.6）：阶段驻留过长的「行动窗口成熟」信号，
+        // 与 replanHint 相互独立——重规划管话术路线，行动建议管口头之外的推进。
+        val actionHint = input.stageDwellDays >= ACTION_HINT_DWELL_DAYS
+        return DirectorDecision(route, reason, replanHint, actionHint)
     }
 
     /**
-     * PROACTIVE 五分支频控（方案 §5.5 状态机 + proactive_policies 语义，判定顺序固定：
-     * disabled → quiet → cap → gap → pass）：
+     * PROACTIVE 六分支频控（方案 §5.5 状态机 + §7.3 频率纪律 + proactive_policies
+     * 语义，判定顺序固定：disabled → quiet → incoming_recent → cap → gap → pass）：
      * - 策略未接入（null）→ NOOP（proactive_not_enabled_m0）：M0 测试与既有台账口径不变；
      * - enabled=false → NOOP（proactive_disabled）；
      * - 静默时段内（quietStart~quietEnd，允许跨午夜）→ NOOP（quiet_noop）；
+     * - 距对方最近来信 < minGapHours → NOOP（incoming_recent_noop）：方案 §7.3
+     *   「incoming 永远优先于 proactive（对方先开口绝不抢话）」——来信后对话已
+     *   开启、尚在对话节奏中，主动保温多余。窗口取 minGapHours 的推导：方案未定
+     *   数值，取「两次主动最小间隔」同量级口径——对方来信与我们的主动同属一次
+     *   对话节奏事件，共用同一间隔；窗口过后静默成立，保温才成为正当的主动时机。
+     *   位置在 quiet 之后、cap/gap 之前的推导：夜间零打扰是绝对时段纪律，不可
+     *   被其他分支掩盖（其命中率是对用户的承诺）；而「对话已开启」是语义性否决，
+     *   按 §7.3 原文列于频控之前，先于纯频控记账落 reason，保证回放可见该分支
+     *   命中——cap/gap 每检点必查、常态命中，若置于其后本分支将长期被掩盖。
      * - 当日已主动 ≥ dailyCap → NOOP（daily_cap_reached）；
      * - 距上次主动 < minGapHours → NOOP（min_gap_not_met）；
      * - 全部通过 → SMALL_TALK（proactive_smalltalk）。
@@ -145,6 +170,10 @@ object DirectorRoutes {
         if (!policy.enabled) return DirectorRoute.NOOP to "proactive_disabled"
         if (inQuietWindow(input.nowMs, policy.quietStart, policy.quietEnd)) {
             return DirectorRoute.NOOP to "quiet_noop"
+        }
+        val lastIncoming = input.lastIncomingAtMs
+        if (lastIncoming != null && input.nowMs - lastIncoming < policy.minGapHours * HOUR_MS) {
+            return DirectorRoute.NOOP to "incoming_recent_noop"
         }
         if (input.proactiveCountToday >= policy.dailyCap) {
             return DirectorRoute.NOOP to "daily_cap_reached"

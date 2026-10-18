@@ -307,7 +307,7 @@ class ActionDispatcher @Inject constructor(
             }
             val contentIntent = PendingIntent.getForegroundService(
                 context,
-                REQUEST_CODE,
+                derivedIdFor(request.contactId),
                 Intent(context, FloatBallService::class.java)
                     .setAction(AdvisorNotificationListener.ACTION_SHOW_DRAFT)
                     .putExtra(AdvisorNotificationListener.EXTRA_CONVERSATION_ID, request.conversationId)
@@ -325,17 +325,24 @@ class ActionDispatcher @Inject constructor(
                 .setContentIntent(contentIntent)
                 .setAutoCancel(true)
                 .build()
-            manager.notify(NOTIFICATION_ID, notification)
+            manager.notify(derivedIdFor(request.contactId), notification)
         }.onFailure { Log.d(TAG, "auto draft fallback failed", it) }
     }
+
+    /**
+     * 按 contactId 派生稳定唯一通知/PendingIntent id（W2）：多联系人并发降级
+     * 通知互不覆盖（同联系人后稿覆盖前稿，只保最新草稿）；requestCode 同源
+     * 派生，防 FLAG_UPDATE_CURRENT 下同码 PI 互改 contentIntent 造成错路由。
+     * 渠道不变（floatball_draft，M2 起草通知同渠道）。
+     */
+    private fun derivedIdFor(contactId: Long): Int = (NOTIFICATION_ID_BASE + contactId).toInt()
 
     private companion object {
         private const val TAG = "ActionDispatcher"
 
         /** 与 M2 起草通知同渠道（floatball_draft）分 id 发，避免互相覆盖。 */
         private const val CHANNEL_ID = "floatball_draft"
-        private const val NOTIFICATION_ID = 2002
-        private const val REQUEST_CODE = 2002
+        private const val NOTIFICATION_ID_BASE = 2_000_000
 
         private const val REASON_DISPATCH_ERROR = "dispatch_error"
         private const val REASON_DISPATCH_FAILED = "auto_dispatch_failed"

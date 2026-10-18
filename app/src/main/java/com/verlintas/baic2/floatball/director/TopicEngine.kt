@@ -23,10 +23,15 @@ import com.verlintas.baic2.floatball.advisor.data.WARM_CHAT_MISSION_PREFIX
 import kotlinx.serialization.Serializable
 
 /**
- * 素材三源（方案 §7.2）。枚举声明顺序即选题优先级：对方画像钩子（最贴合
- * 对方、最易被接住）＞ 共同经历（关系专属）＞ 种子库（中庸兜底）。
+ * 素材源（方案 §7.2）。枚举声明顺序即选题优先级：对方画像钩子（最贴合
+ * 对方、最易被接住）＞ 共同经历（关系专属）＞ 个人素材（用户投喂，鲜活但
+ * 泛于画像/经历）＞ 种子库（中庸兜底）。个人素材插位推导：方案 §7.2 把
+ * 「我的素材库」（种子+投喂）列为源②，但同图标注「权重=画像 tag 匹配度」
+ * 而非源序硬分——源序只是枚举。投喂素材由用户主动录入、比静态种子鲜活
+ * （具个人色彩、可含时效内容），但相关度弱于对方画像钩子与双方共同经历
+ * （那两源天然贴着「这个人、这段关系」），故置于共同经历之后、种子库之前。
  */
-enum class TopicSource { PROFILE_HOOK, SHARED_EXPERIENCE, SEED_BANK }
+enum class TopicSource { PROFILE_HOOK, SHARED_EXPERIENCE, PERSONAL_MATERIAL, SEED_BANK }
 
 /** 保温话题种子（assets/advisor/topic_seeds.json 单条，方案 §6 静态资产）。 */
 @Serializable
@@ -76,6 +81,9 @@ object TopicEngine {
     const val MAX_HOOKS = 6
     const val MAX_EXPERIENCES = 6
 
+    /** 个人素材参与候选的条数上限（同上；素材库无上限，选题只取最近录入的若干条）。 */
+    const val MAX_MATERIALS = 6
+
     /** 话题文本长度上限：钩子/经历源自自由文本，超长截断保持"话题"粒度。 */
     const val MAX_TOPIC_CHARS = 40
 
@@ -90,6 +98,8 @@ object TopicEngine {
         val profileHooks: List<String> = emptyList(),
         val interestTags: Set<String> = emptySet(),
         val sharedExperiences: List<String> = emptyList(),
+        /** 我的素材库（用户投喂，方案 §7.2 源②）：内容列表，指纹与台账同轨去重。 */
+        val personalMaterials: List<String> = emptyList(),
         val seeds: List<TopicSeed> = emptyList(),
         val usedTopics: List<UsedTopic> = emptyList(),
         val stageDepth: Int = DEPTH_SHALLOW,
@@ -172,6 +182,17 @@ object TopicEngine {
                 out += Candidate(
                     TopicSource.SHARED_EXPERIENCE, text.take(MAX_TOPIC_CHARS), "", 0,
                     DEPTH_MEDIUM, i, fingerprintOf(text),
+                )
+            }
+        // 个人素材：深度恒浅层——投喂素材以趣事/见闻/资源为主（方案 §7.2），
+        // 弱联系期也可投喂；更私人的素材天然走共同经历源，不在此提级。
+        m.personalMaterials.asSequence()
+            .map { it.trim() }.filter { it.isNotEmpty() }
+            .take(MAX_MATERIALS)
+            .forEachIndexed { i, text ->
+                out += Candidate(
+                    TopicSource.PERSONAL_MATERIAL, text.take(MAX_TOPIC_CHARS), "", 0,
+                    DEPTH_SHALLOW, i, fingerprintOf(text),
                 )
             }
         m.seeds.asSequence()

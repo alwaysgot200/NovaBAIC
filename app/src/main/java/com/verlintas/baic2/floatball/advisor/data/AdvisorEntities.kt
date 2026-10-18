@@ -478,6 +478,19 @@ data class DirectorLogEntity(
     /** 命中的规则键（如 incoming_default），可复盘路由依据。 */
     val reason: String? = null,
     val turnMessageId: Long? = null,
+    /**
+     * 观察性重规划信号（v8，方案 §5.6 记录面）：failStreak≥3 或连续 retreat×2，
+     * 与 P3 rerouteHint 同源——那一轨是分屏按钮（交互面），本列落台账（记录面，
+     * 供回放与周期检点消费），不改变任何路由与控制流。历史行迁移后恒 0。
+     */
+    val replanHint: Boolean = false,
+    /**
+     * 观察性行动建议信号（v9，方案 §5.6 action_hint 旁路）：阶段驻留超过
+     * DirectorRoutes.ACTION_HINT_DWELL_DAYS 时的「行动窗口成熟」标记，只落
+     * 台账不占路由；UI 仅在用户打开 GoalTab 时消费（行动建议横幅）。历史行
+     * 迁移后恒 0。
+     */
+    val actionHint: Boolean = false,
     val createdAt: Long = 0L,
 )
 
@@ -537,4 +550,26 @@ data class ProactivePolicyEntity(
     val quietEnd: String = "08:30",
     val preferSmalltalk: Boolean = true,
     val updatedAt: Long = 0L,
+)
+
+/**
+ * 我的素材库（v9，M1 方案 §7.2 素材三源之②「用户投喂」）：用户录入的趣事/
+ * 见闻/资源，作为保温选题的鲜活源（比静态种子鲜活、但相关度弱于对方画像
+ * 钩子与共同经历，选题优先级见 [com.verlintas.baic2.floatball.director.TopicSource]）。
+ * [fingerprint] 复用 TopicEngine 话题指纹算法（空白规范化），同内容素材以唯一
+ * 索引去重（重复录入按 REPLACE 以最新为准）；[lastUsedAt] 在素材被选题后标记，
+ * 供选题侧并轨进话题冷却防短期重聊。
+ */
+@Entity(tableName = "personal_materials", indices = [Index(value = ["fingerprint"], unique = true)])
+data class PersonalMaterialEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    /** 素材正文（趣事/见闻/资源等，保温回合的话题本体）。 */
+    val content: String,
+    /** 可选分类标签（用户自由输入，如「趣事/见闻/资源」；仅展示用）。 */
+    val tag: String? = null,
+    /** TopicEngine.fingerprintOf(content)：同内容去重键。 */
+    val fingerprint: String,
+    val createdAt: Long = 0L,
+    /** 最近一次被保温选题采用的时间；从未被选用为 null。 */
+    val lastUsedAt: Long? = null,
 )

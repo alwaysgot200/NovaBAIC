@@ -50,6 +50,9 @@ class Director @Inject constructor(private val db: AdvisorDatabase) {
      * 决策并记台账。决策本身是纯函数永不失败；台账是旁路，任何持久化失败
      * 只 Log.d 不上抛——绝不阻断参谋回合（调用方无需再包 runCatching）。
      * [contactId] 为 null（回合未绑定联系人）时只决策不落库。
+     * [turnMessageId] 为触发消息 id（回合的 USER 消息，prepareTurn/入口落库
+     * 即产生）——与 talk_missions.turnMessageId 同锚，闭合方案 §6 的
+     * 「决策→回合→结局」三层回放链。
      */
     suspend fun route(
         input: DirectorInput,
@@ -68,6 +71,8 @@ class Director @Inject constructor(private val db: AdvisorDatabase) {
                         route = decision.route.code(),
                         reason = decision.reason,
                         turnMessageId = turnMessageId,
+                        replanHint = decision.replanHint,
+                        actionHint = decision.actionHint,
                         createdAt = System.currentTimeMillis(),
                     ),
                 )
@@ -76,6 +81,27 @@ class Director @Inject constructor(private val db: AdvisorDatabase) {
         }
         return decision
     }
+
+    /**
+     * 回填 PROACTIVE 台账行的回合锚点（§6 三层回放链的检点时序补口）：
+     * 周期检点先落决策行（此时回合消息尚未产生，turnMessageId 只能为空），
+     * ScreenAdvisor.runProactiveSmalltalk 落库触发消息后由检点把最新一条
+     * proactive/smalltalk 行的锚点补上，链路闭合。旁路：失败只 Log.d 不上抛。
+     */
+    suspend fun attachProactiveTurnMessage(contactId: Long, turnMessageId: Long) {
+        runCatching {
+            dao.attachTurnMessageToLatest(contactId, TRIGGER_PROACTIVE, ROUTE_SMALL_TALK, turnMessageId)
+        }.onFailure { Log.d(TAG, "director turn backfill failed", it) }
+    }
+
+    /**
+     * F7 action_hint 消费面（方案 §5.6：UI 只在用户打开 GoalTab 时消费）：
+     * 新鲜度窗口（[sinceMs] 由调用方取 ACTION_HINT_DWELL_DAYS 对齐）内最近
+     * 一条 actionHint 决策行；无/过期返回 null（驻留解除后旧横幅不复活）。
+     * 旁路：失败只 Log.d 不上抛（查询失败不打扰 UI）。
+     */
+    suspend fun latestActionHint(contactId: Long, sinceMs: Long): DirectorLogEntity? =
+        runCatching { dao.latestActionHint(contactId, sinceMs) }.getOrNull()
 
     private fun DirectorTrigger.code(): String = when (this) {
         DirectorTrigger.INCOMING -> TRIGGER_INCOMING

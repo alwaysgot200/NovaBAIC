@@ -48,6 +48,7 @@ class TopicEngineTest {
         hooks: List<String> = emptyList(),
         tags: Set<String> = emptySet(),
         experiences: List<String> = emptyList(),
+        personalMaterials: List<String> = emptyList(),
         seeds: List<TopicSeed> = emptyList(),
         used: List<TopicEngine.UsedTopic> = emptyList(),
         stageDepth: Int = TopicEngine.DEPTH_DEEP,
@@ -56,25 +57,79 @@ class TopicEngineTest {
         profileHooks = hooks,
         interestTags = tags,
         sharedExperiences = experiences,
+        personalMaterials = personalMaterials,
         seeds = seeds,
         usedTopics = used,
         stageDepth = stageDepth,
         nowMs = nowMs,
     )
 
-    // ── 三源优先级（枚举声明序即优先级） ─────────────────────────────────
+    // ── 源优先级（枚举声明序即优先级） ─────────────────────────────────
 
     @Test
-    fun profileHook_beatsExperience_beatsSeed() {
+    fun profileHook_beatsExperience_beatsMaterial_beatsSeed() {
         val pick = TopicEngine.select(
             materials(
                 hooks = listOf("钓鱼"),
                 experiences = listOf("一起爬过山"),
+                personalMaterials = listOf("我上周末去逛了宠物展"),
                 seeds = listOf(seed("周末安排")),
             ),
         )
         assertEquals(TopicSource.PROFILE_HOOK, pick?.source)
         assertEquals("钓鱼", pick?.topic)
+    }
+
+    @Test
+    fun experience_beatsMaterial_beatsSeed_whenNoHooks() {
+        val pick = TopicEngine.select(
+            materials(
+                experiences = listOf("一起爬过山"),
+                personalMaterials = listOf("我上周末去逛了宠物展"),
+                seeds = listOf(seed("周末安排")),
+            ),
+        )
+        assertEquals(TopicSource.SHARED_EXPERIENCE, pick?.source)
+    }
+
+    @Test
+    fun material_beatsSeed_whenNoHooksNoExperience() {
+        val pick = TopicEngine.select(
+            materials(
+                personalMaterials = listOf("我上周末去逛了宠物展"),
+                seeds = listOf(seed("周末安排")),
+            ),
+        )
+        assertEquals(TopicSource.PERSONAL_MATERIAL, pick?.source)
+        assertEquals("我上周末去逛了宠物展", pick?.topic)
+    }
+
+    // ── 个人素材（我的素材库，方案 §7.2 源②投喂部分） ─────────────────────
+
+    /** 素材与台账同轨去重（F6 复用既有指纹机制）：最近用过的素材被滤，同批下一条顶上。 */
+    @Test
+    fun material_usedWithinWindow_skippedLikeOtherSources() {
+        val pick = TopicEngine.select(
+            materials(
+                personalMaterials = listOf("宠物展", "公司楼下的樱花开了"),
+                used = listOf(TopicEngine.UsedTopic(TopicEngine.fingerprintOf("宠物展"), NOW - DAY_MS)),
+            ),
+        )
+        assertEquals(TopicSource.PERSONAL_MATERIAL, pick?.source)
+        assertEquals("公司楼下的樱花开了", pick?.topic)
+    }
+
+    /** 素材为空白串时不产生候选（与画像钩子/共同经历的 trim+filter 契约一致），兜底到种子库。 */
+    @Test
+    fun blankMaterials_filtered_fallsThroughToSeed() {
+        val pick = TopicEngine.select(
+            materials(
+                personalMaterials = listOf(" ", ""),
+                seeds = listOf(seed("周末安排")),
+            ),
+        )
+        assertEquals(TopicSource.SEED_BANK, pick?.source)
+        assertEquals("周末安排", pick?.topic)
     }
 
     @Test

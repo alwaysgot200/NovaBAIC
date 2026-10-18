@@ -32,6 +32,10 @@ import com.verlintas.baic2.floatball.AdvisorPrefs
 import com.verlintas.baic2.floatball.FloatSettingsActivity
 import com.verlintas.baic2.floatball.ScreenAdvisor
 import com.verlintas.baic2.floatball.advisor.ContactRepository
+import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
+import com.verlintas.baic2.floatball.advisor.data.DirectorLogEntity
+import com.verlintas.baic2.floatball.advisor.data.ROUTE_NOOP
+import com.verlintas.baic2.floatball.advisor.data.TRIGGER_AUTO
 import com.verlintas.baic2.floatball.advisor.data.ProactivePolicyEntity
 import com.verlintas.baic2.floatball.contact.ContactHistoryGateway
 import com.verlintas.baic2.floatball.contact.ContactRef
@@ -157,6 +161,40 @@ data class WindowTally(
     val degraded: Int = 0,
 )
 
+/**
+ * 档位生命周期台账事件（方案 §12「三档并存的状态混乱」对策：director_logs
+ * 记录档位）：陪伴窗口的开启/结束/被互斥拒绝落 trigger=auto 台账行，事件类型
+ * 由 reason 承载（回放口径同 director_logs.reason 的规则键）。route 恒为
+ * noop——生命周期事件不是回合路由决策，四路由+两旁路建议已收敛不再扩
+ * （方案 D6），不为此新增 route 值。
+ *
+ * 手动连续档（MANUAL_CONTINUOUS）不落生命周期行：其每个差分回合已经由
+ * executePrepared 汇聚点写入 trigger=incoming/route=reply 行（M0 设计），
+ * 档位在途状态逐回合可见，再加 start/stop 属同信息重复。陪伴窗口落的是
+ * 边界行，覆盖「窗口开启但尚无回合产出」与「被互斥拒绝」（后者无任何回合
+ * 可查）两类无逐回合兜底的时段。
+ */
+internal object CompanionLedgerEvents {
+
+    const val START = "companion_start"
+    const val END_PREFIX = "companion_end:"
+    const val VETOED_PREFIX = "companion_vetoed:"
+
+    /** 结束原因键（window_expired/service_stop/service_destroyed…）。 */
+    fun endReason(why: String) = END_PREFIX + why
+
+    /** 被拒原因键（拼 ModeGate 的 REASON_* 码，回放可见谁占着档位）。 */
+    fun vetoedReason(gearVeto: String) = VETOED_PREFIX + gearVeto
+
+    fun row(contactId: Long, reason: String, nowMs: Long): DirectorLogEntity = DirectorLogEntity(
+        contactId = contactId,
+        trigger = TRIGGER_AUTO,
+        route = ROUTE_NOOP,
+        reason = reason,
+        createdAt = nowMs,
+    )
+}
+
 /** 窗口期计数器（线程安全增量，[snapshot] 出只读快照；JVM 可单测）。 */
 class WindowTallyAccumulator {
 
@@ -199,6 +237,7 @@ class CompanionWindowController @Inject constructor(
     private val dispatcher: ActionDispatcher,
     private val gatekeeper: Gatekeeper,
     private val prefs: AdvisorPrefs,
+    private val db: AdvisorDatabase,
     @ApplicationContext private val context: Context,
 ) {
 
@@ -292,7 +331,9 @@ class CompanionWindowController @Inject constructor(
                 contactId = activeWindowContactId(),
             )
             val requested = GearClaim(AdvisorGear.COMPANION_WINDOW, contact.contactId)
-            if (ModeGate.vetoReason(current, requested) != null) {
+            val veto = ModeGate.vetoReason(current, requested)
+            if (veto != null) {
+                logGearEvent(contact.contactId, CompanionLedgerEvents.vetoedReason(veto))
                 return@withContext StartResult.REASON_GEAR_CONFLICT
             }
             if (contactRepository.profile(contact.contactId) == null) {
@@ -312,6 +353,7 @@ class CompanionWindowController @Inject constructor(
                 startedAt = System.currentTimeMillis(),
                 durationMs = durationMs,
             )
+            logGearEvent(contact.contactId, CompanionLedgerEvents.START)
             ensureCollector()
             deadlineJob = windowScope.launch {
                 delay(durationMs)
@@ -330,6 +372,7 @@ class CompanionWindowController @Inject constructor(
         val window = _activeWindow.value ?: return
         if (!_activeWindow.compareAndSet(window, null)) return
         cancelPendingJobs()
+        logGearEvent(window.contactId, CompanionLedgerEvents.endReason(reason))
         val summary = tally.snapshot()
         postSummaryNotification(window, summary)
         Log.i(TAG, "companion window finished($reason): $summary")
@@ -340,6 +383,7 @@ class CompanionWindowController @Inject constructor(
         val window = _activeWindow.value ?: return
         if (!_activeWindow.compareAndSet(window, null)) return
         cancelPendingJobs()
+        logGearEvent(window.contactId, CompanionLedgerEvents.endReason("service_destroyed"))
         collectorJob?.cancel()
         collectorJob = null
     }
@@ -349,6 +393,23 @@ class CompanionWindowController @Inject constructor(
         pendingDispatchJob = null
         deadlineJob?.cancel()
         deadlineJob = null
+    }
+
+    /**
+     * 档位生命周期台账（方案 §12，F5）：fire-and-forget 落 director_logs
+     * （trigger=auto/route=noop，事件见 [CompanionLedgerEvents]），滚动裁剪
+     * 与既有台账同口径。旁路纪律：任何失败只 Log.d，绝不影响窗口控制流——
+     * finish/cancel 在主线程调用，落库走自有 [windowScope]，绝不阻塞 UI。
+     */
+    private fun logGearEvent(contactId: Long, reason: String) {
+        windowScope.launch {
+            runCatching {
+                db.directorLogDao().insert(
+                    CompanionLedgerEvents.row(contactId, reason, System.currentTimeMillis()),
+                )
+                db.directorLogDao().trimFor(contactId)
+            }.onFailure { Log.d(TAG, "companion gear log failed", it) }
+        }
     }
 
     /** 回合完成流只挂一次；窗口不在途时为 no-op（手动连续模式零开销旁路）。 */

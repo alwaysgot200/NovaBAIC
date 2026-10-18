@@ -19,6 +19,8 @@
 
 package com.verlintas.baic2.floatball.auto
 
+import com.verlintas.baic2.floatball.advisor.data.ROUTE_NOOP
+import com.verlintas.baic2.floatball.advisor.data.TRIGGER_AUTO
 import com.verlintas.baic2.floatball.director.DirectorRoutes
 import java.util.Calendar
 import kotlin.random.Random
@@ -226,7 +228,55 @@ class CompanionWindowRulesTest {
         assertEquals(1, tally.snapshot().drafts)
     }
 
-    // ── 夜间静默：复用 M2-b quiet 口径（跨午夜） ──
+    // ── 档位生命周期台账（方案 §12 director_logs 记录档位，F5）──
+
+    @Test
+    fun ledger_rowComposesAutoTriggerAndNoopRoute() {
+        val row = CompanionLedgerEvents.row(contactId = 7L, reason = CompanionLedgerEvents.START, nowMs = 123L)
+        assertEquals(7L, row.contactId)
+        assertEquals(TRIGGER_AUTO, row.trigger)
+        assertEquals(ROUTE_NOOP, row.route)
+        assertEquals("companion_start", row.reason)
+        assertEquals(123L, row.createdAt)
+        // 生命周期事件非回合决策：无回合锚点、无重规划信号。
+        assertEquals(null, row.turnMessageId)
+        assertFalse(row.replanHint)
+    }
+
+    @Test
+    fun ledger_endReasonCarriesWhy() {
+        assertEquals(
+            "companion_end:window_expired",
+            CompanionLedgerEvents.endReason("window_expired"),
+        )
+        assertEquals(
+            "companion_end:service_stop",
+            CompanionLedgerEvents.endReason("service_stop"),
+        )
+    }
+
+    @Test
+    fun ledger_vetoedReasonCarriesModeGateCode() {
+        assertEquals(
+            "companion_vetoed:gear_manual_continuous_active",
+            CompanionLedgerEvents.vetoedReason(ModeGate.REASON_MANUAL_ACTIVE),
+        )
+        assertEquals(
+            "companion_vetoed:gear_draft_in_transit",
+            CompanionLedgerEvents.vetoedReason(ModeGate.REASON_DRAFT_TRANSIT),
+        )
+    }
+
+    @Test
+    fun ledger_rowForVetoUsesComposedReason() {
+        val reason = CompanionLedgerEvents.vetoedReason(ModeGate.REASON_COMPANION_ACTIVE)
+        val row = CompanionLedgerEvents.row(9L, reason, 456L)
+        assertEquals("companion_vetoed:gear_companion_active", row.reason)
+        assertEquals(9L, row.contactId)
+        assertEquals(TRIGGER_AUTO, row.trigger)
+    }
+
+    // ── 夜间静默：复用 M2-b quiet 口径（跨午夜）──
 
     private fun at(hour: Int, minute: Int): Long = Calendar.getInstance().apply {
         set(Calendar.HOUR_OF_DAY, hour)

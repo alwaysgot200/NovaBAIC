@@ -26,9 +26,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * PROACTIVE 五分支频控全分支（M2-b，方案 §5.5/§7.3）：判定顺序固定
- * disabled → quiet → cap → gap → pass；静默时段覆盖跨午夜与两端边界；
- * 策略未接入（null）保持 M0 台账口径（proactive_not_enabled_m0）。
+ * PROACTIVE 六分支频控全分支（M2-b/M2-c，方案 §5.5/§7.3）：判定顺序固定
+ * disabled → quiet → incoming_recent → cap → gap → pass；静默时段覆盖跨午夜
+ * 与两端边界；incoming 优先窗口（§7.3「对方先开口绝不抢话」）取 minGapHours
+ * 同量级；策略未接入（null）保持 M0 台账口径（proactive_not_enabled_m0）。
  */
 class ProactiveRoutesTest {
 
@@ -53,6 +54,7 @@ class ProactiveRoutesTest {
         policySnapshot: ProactivePolicySnapshot? = policy(),
         countToday: Int = 0,
         lastProactiveAtMs: Long? = null,
+        lastIncomingAtMs: Long? = null,
         requestSmalltalk: Boolean = false,
         failStreak: Int = 0,
     ) = DirectorInput(
@@ -63,6 +65,7 @@ class ProactiveRoutesTest {
         proactivePolicy = policySnapshot,
         proactiveCountToday = countToday,
         lastProactiveAtMs = lastProactiveAtMs,
+        lastIncomingAtMs = lastIncomingAtMs,
     )
 
     // ── M0 兼容 ──────────────────────────────────────────────────────────
@@ -131,6 +134,113 @@ class ProactiveRoutesTest {
     fun quiet_takesPrecedenceOverCap() {
         val d = DirectorRoutes.decide(input(nowMs = at(23, 0), countToday = 5))
         assertEquals("quiet_noop", d.reason)
+    }
+
+    // ── 分支二·五：incoming_recent（§7.3 incoming 永远优先于 proactive）──
+
+    @Test
+    fun incomingRecent_noop() {
+        val now = at(12, 0)
+        val d = DirectorRoutes.decide(input(nowMs = now, lastIncomingAtMs = now - DirectorRoutes.HOUR_MS))
+        assertEquals(DirectorRoute.NOOP, d.route)
+        assertEquals("incoming_recent_noop", d.reason)
+    }
+
+    @Test
+    fun incomingOlderThanGap_passes() {
+        val now = at(12, 0)
+        val d = DirectorRoutes.decide(
+            input(nowMs = now, lastIncomingAtMs = now - 49 * DirectorRoutes.HOUR_MS),
+        )
+        assertEquals(DirectorRoute.SMALL_TALK, d.route)
+        assertEquals("proactive_smalltalk", d.reason)
+    }
+
+    @Test
+    fun incomingAtGapBoundary_passes() {
+        // 窗口边界与 min_gap 同口径：严格小于拦截，恰好到达即放行。
+        val now = at(12, 0)
+        val d = DirectorRoutes.decide(
+            input(nowMs = now, lastIncomingAtMs = now - 48 * DirectorRoutes.HOUR_MS),
+        )
+        assertEquals("proactive_smalltalk", d.reason)
+    }
+
+    @Test
+    fun incomingNull_lastIncomingUnknownTolerated() {
+        val d = DirectorRoutes.decide(input(lastIncomingAtMs = null))
+        assertEquals("proactive_smalltalk", d.reason)
+    }
+
+    @Test
+    fun incomingFutureClockSkew_treatedAsRecent() {
+        val now = at(12, 0)
+        val d = DirectorRoutes.decide(input(nowMs = now, lastIncomingAtMs = now + DirectorRoutes.HOUR_MS))
+        assertEquals("incoming_recent_noop", d.reason)
+    }
+
+    @Test
+    fun incomingRecent_usesPolicyGapWindow() {
+        // 窗口随策略 minGapHours 收缩：24h 策略下来信 25h 前即可主动。
+        val now = at(12, 0)
+        val p = policy(minGapHours = 24)
+        assertEquals(
+            "proactive_smalltalk",
+            DirectorRoutes.decide(
+                input(nowMs = now, policySnapshot = p, lastIncomingAtMs = now - 25 * DirectorRoutes.HOUR_MS),
+            ).reason,
+        )
+        assertEquals(
+            "incoming_recent_noop",
+            DirectorRoutes.decide(
+                input(nowMs = now, policySnapshot = p, lastIncomingAtMs = now - 23 * DirectorRoutes.HOUR_MS),
+            ).reason,
+        )
+    }
+
+    @Test
+    fun incomingRecent_takesPrecedenceOverCap() {
+        val now = at(12, 0)
+        val d = DirectorRoutes.decide(
+            input(nowMs = now, lastIncomingAtMs = now - DirectorRoutes.HOUR_MS, countToday = 3),
+        )
+        assertEquals("incoming_recent_noop", d.reason)
+    }
+
+    @Test
+    fun incomingRecent_takesPrecedenceOverGap() {
+        val now = at(12, 0)
+        val d = DirectorRoutes.decide(
+            input(
+                nowMs = now,
+                lastIncomingAtMs = now - DirectorRoutes.HOUR_MS,
+                lastProactiveAtMs = now - DirectorRoutes.HOUR_MS,
+            ),
+        )
+        assertEquals("incoming_recent_noop", d.reason)
+    }
+
+    @Test
+    fun quiet_takesPrecedenceOverIncomingRecent() {
+        val now = at(23, 0)
+        val d = DirectorRoutes.decide(
+            input(nowMs = now, lastIncomingAtMs = now - DirectorRoutes.HOUR_MS),
+        )
+        assertEquals("quiet_noop", d.reason)
+    }
+
+    @Test
+    fun incomingOld_proactiveStillRespectsOwnGap() {
+        // 来信已出窗口、但我们上次主动更近：仍按自身频控拦。
+        val now = at(12, 0)
+        val d = DirectorRoutes.decide(
+            input(
+                nowMs = now,
+                lastIncomingAtMs = now - 72 * DirectorRoutes.HOUR_MS,
+                lastProactiveAtMs = now - 24 * DirectorRoutes.HOUR_MS,
+            ),
+        )
+        assertEquals("min_gap_not_met", d.reason)
     }
 
     // ── 分支三：dailyCap ────────────────────────────────────────────────

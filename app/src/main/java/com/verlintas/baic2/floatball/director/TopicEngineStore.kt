@@ -27,6 +27,8 @@ import com.verlintas.baic2.floatball.advisor.PersonaFieldType
 import com.verlintas.baic2.floatball.advisor.PersonaSchemas
 import com.verlintas.baic2.floatball.advisor.PersonaValues
 import com.verlintas.baic2.floatball.advisor.StrategyBrief
+import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
+import com.verlintas.baic2.floatball.advisor.data.PersonalMaterialEntity
 import com.verlintas.baic2.floatball.contact.ContactRef
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -34,15 +36,17 @@ import javax.inject.Singleton
 import kotlinx.serialization.json.Json
 
 /**
- * [TopicEngine] 的素材三源采集器（M1 方案 §7.2，Android/IO 侧）：种子库资产 +
+ * [TopicEngine] 的素材源采集器（M1 方案 §7.2，Android/IO 侧）：种子库资产 +
  * 对方画像钩子（enum topicHook 选项与 tags 自由标签，口径同 CardCompiler）+
- * 共同经历（recallByEntity 交往脉络事实）+ 已用话题指纹（talk_missions 台账
- * 解码）。选题本身委托纯函数引擎；任一取数失败静默降级（缺哪源少哪源），
+ * 共同经历（recallByEntity 交往脉络事实）+ 我的素材库（personal_materials
+ * 用户投喂，F6）+ 已用话题指纹（talk_missions 台账解码 + 素材 lastUsedAt 并轨）。
+ * 选题本身委托纯函数引擎；任一取数失败静默降级（缺哪源少哪源），
  * 绝不让保温回合开天窗。
  */
 @Singleton
 class TopicEngineStore @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val db: AdvisorDatabase,
     private val contacts: ContactRepository,
     private val schemas: PersonaSchemas,
     private val goals: GoalRepository,
@@ -54,8 +58,9 @@ class TopicEngineStore @Inject constructor(
     private var cachedBank: TopicSeedBank? = null
 
     /**
-     * 采集 + 选题一步完成。[contact] 为 null（共享会话）时只剩种子库兜底，
-     * 已用指纹改由调用方从共享会话消息提取（[sharedUsedTopics]）。
+     * 采集 + 选题一步完成。[contact] 为 null（共享会话）时只剩种子库与我的
+     * 素材库兜底（两者都不依赖联系人），已用指纹改由调用方从共享会话消息
+     * 提取（[sharedUsedTopics]）。
      */
     suspend fun selectFor(
         contact: ContactRef?,
@@ -63,15 +68,19 @@ class TopicEngineStore @Inject constructor(
         nowMs: Long = System.currentTimeMillis(),
     ): TopicEngine.TopicPick? {
         val seeds = seedBank().seeds
+        val materials = runCatching { db.personalMaterialDao().all() }.getOrDefault(emptyList())
         if (contact == null) {
-            return TopicEngine.select(
+            val pick = TopicEngine.select(
                 TopicEngine.Materials(
+                    personalMaterials = materials.map { it.content },
                     seeds = seeds,
-                    usedTopics = sharedUsedTopics,
+                    usedTopics = sharedUsedTopics + materials.usedFingerprints(),
                     stageDepth = TopicEngine.DEPTH_SHALLOW,
                     nowMs = nowMs,
                 ),
             )
+            markMaterialUsed(pick, nowMs)
+            return pick
         }
 
         val pack = runCatching { strategyBrief.pack(contact.contactId) }.getOrNull()
@@ -120,7 +129,9 @@ class TopicEngineStore @Inject constructor(
                 .filter { it.isNotEmpty() }
         }
 
-        // 已用话题指纹：近 USED_MISSIONS 条任务令中 warm_chat 标记解码（新→旧）。
+        // 已用话题指纹：近 USED_MISSIONS 条任务令中 warm_chat 标记解码（新→旧）；
+        // 素材 lastUsedAt 并轨（F6）：复用引擎既有的去重/冷却机制防止短期重聊
+        // 同一素材——台账指纹在前（更新），素材指纹在后，同指纹时引擎取更近时间。
         val usedTopics = runCatching { goals.recentMissions(contact.contactId, USED_MISSIONS) }
             .getOrDefault(emptyList())
             .mapNotNull { mission ->
@@ -128,17 +139,37 @@ class TopicEngineStore @Inject constructor(
                     ?.let { TopicEngine.UsedTopic(TopicEngine.fingerprintOf(it), mission.createdAt) }
             }
 
-        return TopicEngine.select(
+        val pick = TopicEngine.select(
             TopicEngine.Materials(
                 profileHooks = hooks,
                 interestTags = interestTags,
                 sharedExperiences = sharedExperiences,
+                personalMaterials = materials.map { it.content },
                 seeds = seeds,
-                usedTopics = usedTopics,
+                usedTopics = usedTopics + materials.usedFingerprints(),
                 stageDepth = TopicEngine.stageDepthOf(pack?.stages?.map { it.code }.orEmpty(), stageCode),
                 nowMs = nowMs,
             ),
         )
+        markMaterialUsed(pick, nowMs)
+        return pick
+    }
+
+    /** 素材已用指纹（新→旧，按 lastUsedAt 降序）：并轨进 [TopicEngine.Materials.usedTopics]。 */
+    private fun List<PersonalMaterialEntity>.usedFingerprints(): List<TopicEngine.UsedTopic> =
+        mapNotNull { m -> m.lastUsedAt?.let { TopicEngine.UsedTopic(m.fingerprint, it) } }
+            .sortedByDescending { it.usedAtMs }
+
+    /**
+     * 选中素材即标记 lastUsedAt（F6 防短期重选）：选中的话题经既有 mission 令
+     * 编码（warm_chat|话题|…）携带素材内容进 WarmChatPrompt 与台账，此处只
+     * 落 lastUsedAt；旁路失败只 Log 级降级，不影响已产出的选题。
+     */
+    private suspend fun markMaterialUsed(pick: TopicEngine.TopicPick?, nowMs: Long) {
+        if (pick?.source != TopicSource.PERSONAL_MATERIAL) return
+        runCatching {
+            db.personalMaterialDao().markUsedByFingerprint(TopicEngine.fingerprintOf(pick.topic), nowMs)
+        }
     }
 
     /** 种子库资产（照 StyleAssets 范式：assets JSON + 进程内缓存，不入库）。 */
@@ -159,6 +190,8 @@ class TopicEngineStore @Inject constructor(
         /** 共同经历召回上限（交往脉络只取少量近事，防提示词膨胀）。 */
         const val EXPERIENCE_NOTES = 6
 
+        // 本地 new Json 属包内既定惯例（AdvisorAssetSeeder 等同款多处先例）：
+        // 无状态解析器不进 Hilt 图，不为它单引注入链。
         val json = Json { ignoreUnknownKeys = true }
     }
 }

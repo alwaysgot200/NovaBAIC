@@ -160,6 +160,12 @@ class AdvisorProfileActivity : ComponentActivity() {
     @Inject
     lateinit var proactivePolicies: com.verlintas.baic2.floatball.director.ProactivePolicyRepository
 
+    @Inject
+    lateinit var materialLibrary: com.verlintas.baic2.floatball.director.PersonalMaterialRepository
+
+    @Inject
+    lateinit var director: com.verlintas.baic2.floatball.director.Director
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -469,7 +475,7 @@ private fun ContactDetailScreen(
                 )
             }
         },
-    ) {
+    ) { tabScroll ->
         if (tab == TAB_INDEX_GOALS) {
             // P2 目标 Tab：L3/L2/L1 目标、阶段、任务令台账与策略卡入口。
             GoalsTab(
@@ -484,6 +490,9 @@ private fun ContactDetailScreen(
                 briefs = activity.briefCompiler,
                 plays = activity.actionPlanner,
                 policies = activity.proactivePolicies,
+                materials = activity.materialLibrary,
+                director = activity.director,
+                scroll = tabScroll,
                 onOpenStrategyCard = {
                     context.startActivity(
                         android.content.Intent(context, StrategyCardActivity::class.java)
@@ -1380,7 +1389,9 @@ private fun PageScaffold(
     onClose: (() -> Unit)?,
     onBack: (() -> Unit)? = null,
     tabBar: (@Composable () -> Unit)? = null,
-    content: @Composable () -> Unit,
+    // scroll：Tab 内容滚动状态（无 tabBar 分支传 null）——F7 action_hint 横幅
+    // 点击滚动定位需要；现调用点 lambda 均不引用参数，签名追加零破坏。
+    content: @Composable (androidx.compose.foundation.ScrollState?) -> Unit,
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -1410,15 +1421,16 @@ private fun PageScaffold(
                 // 带 TabRow 时标签栏固定在顶部，仅各 Tab 内容独立滚动。
                 if (tabBar != null) {
                     tabBar()
+                    val tabScroll = rememberScrollState()
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .verticalScroll(rememberScrollState()),
+                            .verticalScroll(tabScroll),
                     ) {
-                        content()
+                        content(tabScroll)
                     }
                 } else {
-                    content()
+                    content(null)
                 }
             }
         }

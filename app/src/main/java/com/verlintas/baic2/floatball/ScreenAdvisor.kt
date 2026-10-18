@@ -828,7 +828,12 @@ class ScreenAdvisor @Inject constructor(
         when (val prepared = prepareTurn(autoScreenContent(raw), titleFallback)) {
             is PreparedTurn.Ready -> {
                 emit(Event.TurnStarted(raw))
-                executePrepared(prepared.conversationId, prepared.contact, backgroundTurn = false)
+                executePrepared(
+                    prepared.conversationId,
+                    prepared.contact,
+                    backgroundTurn = false,
+                    turnMessageId = prepared.turnMessageId,
+                )
             }
             PreparedTurn.Unchanged -> emit(Event.Unchanged)
             PreparedTurn.Empty -> {
@@ -844,9 +849,14 @@ class ScreenAdvisor @Inject constructor(
     fun autoScreenContent(text: String): String =
         context.getString(R.string.float_ask_question_label) + "\n" + text
 
-    /** prepareTurn 的结果：可以开跑 / 与上一屏重复 / 内容为空。 */
+    /** prepareTurn 的结果：可以开跑 / 与上一屏重复 / 内容为空。[Ready.turnMessageId] 为触发消息 id。 */
     private sealed interface PreparedTurn {
-        data class Ready(val conversationId: Long, val contact: ContactRef?) : PreparedTurn
+        data class Ready(
+            val conversationId: Long,
+            val contact: ContactRef?,
+            val turnMessageId: Long,
+        ) : PreparedTurn
+
         data object Unchanged : PreparedTurn
         data object Empty : PreparedTurn
     }
@@ -860,7 +870,12 @@ class ScreenAdvisor @Inject constructor(
     suspend fun submitTurn(content: String, backgroundTurn: Boolean = false): SubmitOutcome =
         when (val prepared = prepareTurn(content)) {
             is PreparedTurn.Ready -> {
-                executePrepared(prepared.conversationId, prepared.contact, backgroundTurn)
+                executePrepared(
+                    prepared.conversationId,
+                    prepared.contact,
+                    backgroundTurn,
+                    turnMessageId = prepared.turnMessageId,
+                )
                 SubmitOutcome.RAN
             }
             PreparedTurn.Unchanged -> SubmitOutcome.SKIPPED_UNCHANGED
@@ -891,7 +906,7 @@ class ScreenAdvisor @Inject constructor(
         if (isDuplicateScreen(conversationId, question)) {
             return NotificationTurnResult(SubmitOutcome.SKIPPED_UNCHANGED, conversationId)
         }
-        conversationRepository.append(
+        val turnMessageId = conversationRepository.append(
             ChatMessage(
                 conversationId = conversationId,
                 role = ChatRole.USER,
@@ -899,7 +914,7 @@ class ScreenAdvisor @Inject constructor(
                 createdAt = System.currentTimeMillis(),
             ),
         )
-        executePrepared(conversationId, contact, backgroundTurn = true)
+        executePrepared(conversationId, contact, backgroundTurn = true, turnMessageId = turnMessageId)
         val draft = historyGateway.recentMessages(conversationId, DRAFT_LOOKBACK_MESSAGES)
             .lastOrNull { it.role == ChatRole.ASSISTANT }?.content
         return NotificationTurnResult(SubmitOutcome.RAN, conversationId, draft)
@@ -931,7 +946,7 @@ class ScreenAdvisor @Inject constructor(
                     ?.takeIf { it.isNotBlank() }
                     ?.let { context.getString(R.string.float_smalltalk_question_fmt, it) }
                     ?: context.getString(R.string.float_smalltalk_question_free)
-                conversationRepository.append(
+                val turnMessageId = conversationRepository.append(
                     ChatMessage(
                         conversationId = conversationId,
                         role = ChatRole.USER,
@@ -939,21 +954,35 @@ class ScreenAdvisor @Inject constructor(
                         createdAt = System.currentTimeMillis(),
                     ),
                 )
-                executePrepared(conversationId, contact, backgroundTurn = false, smalltalk = pick)
+                executePrepared(
+                    conversationId,
+                    contact,
+                    backgroundTurn = false,
+                    smalltalk = pick,
+                    turnMessageId = turnMessageId,
+                )
             }.onFailure { android.util.Log.d(TAG, "requestSmalltalk failed", it) }
         }
     }
 
-    /** 主动保温回合的产出：会话 id 与最新 ASSISTANT 草稿（空 = 回合失败无草稿）。 */
-    data class ProactiveTurnResult(val conversationId: Long?, val draft: String?)
+    /**
+     * 主动保温回合的产出：会话 id、最新 ASSISTANT 草稿（空 = 回合失败无草稿）
+     * 与触发消息 id（供检点回填台账回合锚点，闭合 §6 三层回放链）。
+     */
+    data class ProactiveTurnResult(
+        val conversationId: Long?,
+        val draft: String?,
+        val turnMessageId: Long? = null,
+    )
 
     /**
      * PROACTIVE 保温回合入口（M2-b，方案 §5.5 SmallTalk 路）：周期检点命中
      * 频控后来调，复用 M1 保温管线（TopicEngine 选题 → Tactician→Responder），
      * 差异仅在后台执行（token 预算/串行队列同后台回合）。路由决策与台账由
      * 检点方（ProactiveCheckpoint）唯一落库，[executePrepared] 传
-     * [skipDirectorRoute]=true 防同回合双记。产出走 M2-a 起草通知（人肉一键档，
-     * 绝不自动发送）。
+     * [skipDirectorRoute]=true 防同回合双记；触发消息 id 随结果返回，由检点
+     * 回填台账行（决策先于回合产生，§6 回放链由此闭合）。产出走 M2-a 起草
+     * 通知（人肉一键档，绝不自动发送）。
      */
     suspend fun runProactiveSmalltalk(contact: ContactRef): ProactiveTurnResult {
         val pick = topicEngineStore.selectFor(contact)
@@ -964,7 +993,7 @@ class ScreenAdvisor @Inject constructor(
         _activeContact.value = contact
         switchDirection("c:${contact.contactId}")
         val conversationId = resolveConversation(contact, question)
-        conversationRepository.append(
+        val turnMessageId = conversationRepository.append(
             ChatMessage(
                 conversationId = conversationId,
                 role = ChatRole.USER,
@@ -981,7 +1010,7 @@ class ScreenAdvisor @Inject constructor(
         )
         val draft = historyGateway.recentMessages(conversationId, DRAFT_LOOKBACK_MESSAGES)
             .lastOrNull { it.role == ChatRole.ASSISTANT }?.content
-        return ProactiveTurnResult(conversationId, draft)
+        return ProactiveTurnResult(conversationId, draft, turnMessageId)
     }
 
     /** 共享会话已用话题：近若干条用户消息文本里的「话题」提取为指纹（新→旧）。 */
@@ -1020,7 +1049,7 @@ class ScreenAdvisor @Inject constructor(
             _transcript.updateStatus(Status.Idle)
             return PreparedTurn.Unchanged
         }
-        conversationRepository.append(
+        val turnMessageId = conversationRepository.append(
             ChatMessage(
                 conversationId = conversationId,
                 role = ChatRole.USER,
@@ -1028,7 +1057,7 @@ class ScreenAdvisor @Inject constructor(
                 createdAt = System.currentTimeMillis(),
             ),
         )
-        return PreparedTurn.Ready(conversationId, contact)
+        return PreparedTurn.Ready(conversationId, contact, turnMessageId)
     }
 
     /**
@@ -1173,6 +1202,8 @@ class ScreenAdvisor @Inject constructor(
      * 阶段二：串行队列里跑一个 LLM 回合；[smalltalk] 非空 = 保温闲聊回合（M1）。
      * [skipDirectorRoute]=true（M2-b PROACTIVE 保温回合专用）：路由决策已由
      * 检点方落台账，此处不再重复记行（一回合一条台账，频控计数不失真）。
+     * [turnMessageId] 为触发消息 id（回合 USER 消息，prepare/入口落库即产生；
+     * 方案 §6「决策→回合→结局」三层回放链的决策→回合锚点）。
      */
     private suspend fun executePrepared(
         conversationId: Long,
@@ -1180,6 +1211,7 @@ class ScreenAdvisor @Inject constructor(
         backgroundTurn: Boolean,
         smalltalk: TopicEngine.TopicPick? = null,
         skipDirectorRoute: Boolean = false,
+        turnMessageId: Long? = null,
     ) {
         // M0 调度中枢旁路（方案 §5）：连续/后台回合=INCOMING，手动回合=MANUAL；
         // 「来点闲聊」入口记 SMALL_TALK（manual_smalltalk_entry，方案 §10）。
@@ -1189,16 +1221,31 @@ class ScreenAdvisor @Inject constructor(
                 DirectorInput(
                     trigger = if (backgroundTurn) DirectorTrigger.INCOMING else DirectorTrigger.MANUAL,
                     requestSmalltalk = smalltalk != null,
+                    stageDwellDays = contact?.let { stageDwellDays(it.contactId) } ?: 0L,
                     nowMs = System.currentTimeMillis(),
                 ),
                 contactId = contact?.contactId,
                 conversationId = conversationId,
+                turnMessageId = turnMessageId,
             )
         }
         _transcript.update { it.copy(status = Status.Thinking, lastUsage = null) }
         turnMutex.withLock {
             runAdvisorTurn(conversationId, contact, backgroundTurn, smalltalk)
         }
+    }
+
+    /**
+     * 当前阶段驻留天数（F7 action_hint 旁路原料，方案 §5.6）：无联系人/无
+     * 场景包/无阶段态时 0（不触发）。取数失败静默降级同 TopicEngineStore——
+     * 旁路信号绝不阻断回合。stageCode 取数路径与 TopicEngineStore.selectFor
+     * 同径（strategyBrief.pack → goals.stage）。
+     */
+    private suspend fun stageDwellDays(contactId: Long): Long {
+        if (contactId <= 0L) return 0L
+        val pack = runCatching { strategyBrief.pack(contactId) }.getOrNull() ?: return 0L
+        val state = runCatching { goalRepository.stage(contactId, pack.code) }.getOrNull() ?: return 0L
+        return (System.currentTimeMillis() - state.enteredAt) / DAY_MS
     }
 
     /** 自动屏幕消息与上一条屏幕消息的正文相似度判定（前缀行不参与）。 */
@@ -2590,6 +2637,9 @@ class ScreenAdvisor @Inject constructor(
 
         /** P3 reroute：同站连续 retreat 命中达此数即建议重规划（不自动）。 */
         const val REROUTE_RETREAT_HITS = 2
+
+        /** 一天的毫秒数（stageDwellDays 换算用）。 */
+        const val DAY_MS = 86_400_000L
 
         /** 即时方向的会话键：共享会话用；绑定联系人拼 `c:<contactId>`。 */
         const val DIRECTION_KEY_SHARED = "shared"

@@ -629,6 +629,21 @@
     <string name="float_companion_end_notif_text">本次参谋草稿 %1$d 条，自动发送 %2$d 条，硬审拦截 %3$d 条。是否续 30 分钟？</string>
     <string name="float_companion_end_renew">续 30 分钟</string>
 
+    <!-- R2-F7 action_hint 旁路消费（方案 §5.6）：GoalTab 行动建议横幅 -->
+    <string name="float_action_hint_banner">该联系人阶段驻留较久，可考虑主动推进——点开下方行动建议卡</string>
+
+    <!-- R2-F6 我的素材库（方案 §7.2 素材三源之②「用户投喂」）：GoalTab 素材投喂页 -->
+    <string name="float_material_title">我的素材</string>
+    <string name="float_material_add">添加</string>
+    <string name="float_material_empty">还没有素材：把趣事/见闻/资源投喂进来，老参谋保温闲聊时会优先挑它们当话题</string>
+    <string name="float_material_delete">删除</string>
+    <string name="float_material_add_title">添加素材</string>
+    <string name="float_material_content_hint">素材内容（趣事/见闻/资源…）</string>
+    <string name="float_material_tag_hint">分类（可选，如：趣事/见闻/资源）</string>
+    <string name="float_material_add_confirm">保存</string>
+    <string name="float_material_created">录入于 %1$s</string>
+    <string name="float_material_used">上次用于闲聊 %1$s</string>
+
     <!-- 品牌统一为「老参谋」：以下键覆盖上游库（device:impl / feature:settings）
          的同名资源。Android 资源合并中 app 优先级高于依赖库，无需改动上游文件；
          合并上游时若库侧文案演进，只需在此追加/调整覆盖值。 -->

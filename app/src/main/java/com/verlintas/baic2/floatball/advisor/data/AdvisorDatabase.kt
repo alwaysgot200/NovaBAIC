@@ -51,8 +51,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ActionPlayEntity::class,
         BriefOutputEntity::class,
         ProactivePolicyEntity::class,
+        PersonalMaterialEntity::class,
     ],
-    version = 7,
+    version = 9,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -94,6 +95,8 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun briefOutputDao(): BriefOutputDao
 
     abstract fun proactivePolicyDao(): ProactivePolicyDao
+
+    abstract fun personalMaterialDao(): PersonalMaterialDao
 }
 
 /**
@@ -414,4 +417,45 @@ internal fun ensureColumn(
             .any { it == column }
     }
     if (!exists) db.execSQL("ALTER TABLE `$table` ADD COLUMN $columnDdl")
+}
+
+/**
+ * v7 → v8（UltraAdvisor 修复 F2，方案 §5.6 双轨「记录面」补全）：director_logs
+ * 加 replanHint（0/1）。Director 已计算的重规划观察信号（failStreak≥3/连续
+ * retreat×2）此前只随决策内存存在、未落台账，回放缺一轨。ensureColumn 幂等
+ * 补列，历史行默认 0，不破坏任何既有数据；表结构其余不动。
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        ensureColumn(db, "director_logs", "replanHint", "replanHint INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * v8 → v9（UltraAdvisor 修复 F6/F7，M1 方案 §7.2 素材三源之② + §5.6 action_hint
+ * 旁路）：① 新表 personal_materials（我的素材库，fingerprint 唯一索引去重）；
+ * ② director_logs 加 actionHint 列（观察性行动建议信号，与 v8 replanHint 同为
+ * 旁路记录面）。ensureColumn 幂等补列、建表 IF NOT EXISTS，历史行 actionHint
+ * 恒 0、素材表为空，不搬不删任何既有数据。
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `personal_materials` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `content` TEXT NOT NULL,
+                `tag` TEXT,
+                `fingerprint` TEXT NOT NULL,
+                `createdAt` INTEGER NOT NULL,
+                `lastUsedAt` INTEGER
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_personal_materials_fingerprint` " +
+                "ON `personal_materials` (`fingerprint`)",
+        )
+        ensureColumn(db, "director_logs", "actionHint", "actionHint INTEGER NOT NULL DEFAULT 0")
+    }
 }

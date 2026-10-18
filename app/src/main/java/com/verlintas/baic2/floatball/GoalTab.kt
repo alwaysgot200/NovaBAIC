@@ -51,6 +51,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -100,6 +102,7 @@ import com.verlintas.baic2.floatball.advisor.data.MISSION_HELD
 import com.verlintas.baic2.floatball.advisor.data.MISSION_IGNORED
 import com.verlintas.baic2.floatball.advisor.data.MISSION_PENDING
 import com.verlintas.baic2.floatball.advisor.data.MISSION_REGRESSED
+import com.verlintas.baic2.floatball.advisor.data.PersonalMaterialEntity
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_ADVANCE
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_BRANCH
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_INIT
@@ -146,6 +149,9 @@ internal fun GoalsTab(
     briefs: BriefCompiler,
     plays: ActionPlanner,
     policies: com.verlintas.baic2.floatball.director.ProactivePolicyRepository,
+    materials: com.verlintas.baic2.floatball.director.PersonalMaterialRepository,
+    director: com.verlintas.baic2.floatball.director.Director,
+    scroll: androidx.compose.foundation.ScrollState?,
     onOpenStrategyCard: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -179,6 +185,18 @@ internal fun GoalsTab(
     val l2Goals = allGoals.filter { it.horizon == HORIZON_L2 && it.status in visibleStatuses }
     val l1Goals = allGoals.filter { it.horizon == HORIZON_L1 && it.status in visibleStatuses }
 
+    // F7 action_hint 消费（方案 §5.6：UI 只在用户打开 GoalTab 时消费）：查新鲜度
+    // 窗口内最近一条 actionHint 决策行，命中则出行动建议横幅并滚动定位到下方
+    // 行动建议卡；窗口对齐触发阈值（驻留解除后旧横幅不复活）。
+    var actionHinted by remember(contactId) { mutableStateOf(false) }
+    LaunchedEffect(contactId) {
+        val since = System.currentTimeMillis() -
+            com.verlintas.baic2.floatball.director.DirectorRoutes.ACTION_HINT_DWELL_DAYS * DAY_MS
+        actionHinted = director.latestActionHint(contactId, since) != null
+    }
+    // 行动建议卡分区在滚动容器内的纵坐标（横幅点击滚动定位用）。
+    var playsTopY by remember { mutableStateOf(0f) }
+
     var createHorizon by remember { mutableStateOf<Int?>(null) }
     var editingGoal by remember { mutableStateOf<GoalEntity?>(null) }
     var initialEditConsumed by remember(contactId) { mutableStateOf(false) }
@@ -210,6 +228,34 @@ internal fun GoalsTab(
                 text = stringResource(R.string.float_goal_global_quick_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    // ①.5 行动建议横幅（F7 action_hint 消费面）：Director 台账旁路信号命中时
+    // 提示阶段驻留较久、引导到下方行动建议卡；点击按「同帧根坐标差」滚动定位
+    // （目标 = 行动卡滚到横幅当前视口位；无滚动态时仅展示）。
+    if (actionHinted) {
+        var bannerTopY by remember { mutableStateOf(0f) }
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp)
+                .onGloballyPositioned { coords -> bannerTopY = coords.boundsInRoot().top }
+                .clickable {
+                    val target = scroll
+                    if (target != null) {
+                        val delta = (playsTopY - bannerTopY).toInt()
+                        scope.launch { target.animateScrollTo(target.value + delta) }
+                    }
+                },
+        ) {
+            Text(
+                text = stringResource(R.string.float_action_hint_banner),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             )
         }
     }
@@ -292,11 +338,21 @@ internal fun GoalsTab(
     // ⑤.5 参谋简报（M0 BriefCompiler 慢车道汇总：阶段位置 + 事件/进展/风险/下一步）
     AdvisorBriefCard(contactId = contactId, briefs = briefs)
 
-    // ⑤.6 行动建议（M1 ActionPlanner：谋略库按阶段选条定制，draft 落库，用户采纳驱动）
-    AdvisorPlaysCard(contactId = contactId, planner = plays)
+    // ⑤.6 行动建议（M1 ActionPlanner：谋略库按阶段选条定制，draft 落库，用户采纳驱动）。
+    // onGloballyPositioned 记录分区根坐标：①.5 行动建议横幅点击滚动定位用。
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coords -> playsTopY = coords.boundsInRoot().top },
+    ) {
+        AdvisorPlaysCard(contactId = contactId, planner = plays)
+    }
 
     // ⑤.7 主动保温（M2-b：联系人级 ProactivePolicy 开关与频控三参数，周期检点消费）
     AdvisorProactiveCard(contactId = contactId, policies = policies)
+
+    // ⑤.8 我的素材（F6，M1 方案 §7.2 素材三源之②「用户投喂」：保温选题的鲜活源）
+    AdvisorMaterialsCard(materials = materials)
 
     // ⑥ 策略卡入口
     Surface(
@@ -879,15 +935,16 @@ private fun edgeLabel(edge: String): String = stringResource(
     },
 )
 
-/** 极简相对时间（历程用）：今天内显示 x 小时前，更早显示 x 天前。 */
+/** 极简相对时间（历程用）：今天内显示 x 小时前，更早显示 x 天前（W3：文案走资源，复用 mission 时间键）。 */
+@Composable
 private fun relativeTime(at: Long): String {
     val diffMs = System.currentTimeMillis() - at
     val hours = diffMs / 3_600_000L
     val days = diffMs / 86_400_000L
     return when {
-        days >= 1 -> "${days}天前"
-        hours >= 1 -> "${hours}小时前"
-        else -> "刚刚"
+        days >= 1 -> stringResource(R.string.float_mission_time_day, days.toInt())
+        hours >= 1 -> stringResource(R.string.float_mission_time_hour, hours.toInt())
+        else -> stringResource(R.string.float_mission_time_justnow)
     }
 }
 
@@ -1498,6 +1555,135 @@ private fun ProactiveOptionRow(label: String, valueText: String, onClick: () -> 
             color = MaterialTheme.colorScheme.primary,
         )
     }
+}
+
+// ------------------------------------------------------------ materials card（F6 我的素材库）
+
+/** 素材列表每条展示字符上限（超长省略；全量内容在保温选题时使用）。 */
+private const val MATERIAL_MAX_CHARS = 60
+
+/**
+ * 我的素材卡（F6，M1 方案 §7.2 素材三源之②「用户投喂」）：列表展示（内容+
+ * tag+时间）+ 添加（对话框录入内容与可选 tag）+ 删除。素材经指纹去重入库；
+ * 被保温选题采用后自动进话题冷却防短期重聊（见 TopicEngineStore）。
+ */
+@Composable
+private fun AdvisorMaterialsCard(
+    materials: com.verlintas.baic2.floatball.director.PersonalMaterialRepository,
+) {
+    val scope = rememberCoroutineScope()
+    val items by materials.observeAll().collectAsStateWithLifecycle(initialValue = emptyList())
+    var addOpen by remember { mutableStateOf(false) }
+
+    GoalCardSurface {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.float_material_title),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(onClick = { addOpen = true }) {
+                Text(stringResource(R.string.float_material_add))
+            }
+        }
+        if (items.isEmpty()) {
+            GoalSmallText(stringResource(R.string.float_material_empty))
+        }
+        items.forEach { material ->
+            PersonalMaterialRow(
+                material = material,
+                onDelete = { scope.launch { materials.remove(material.id) } },
+            )
+        }
+    }
+
+    if (addOpen) {
+        MaterialAddDialog(
+            onConfirm = { content, tag ->
+                scope.launch { materials.add(content, tag) }
+                addOpen = false
+            },
+            onDismiss = { addOpen = false },
+        )
+    }
+}
+
+/** 单条素材行：内容（超长省略）+ tag/录入时间/最近使用小字 + 删除。 */
+@Composable
+private fun PersonalMaterialRow(
+    material: PersonalMaterialEntity,
+    onDelete: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(top = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val clipped = if (material.content.length > MATERIAL_MAX_CHARS) {
+                material.content.take(MATERIAL_MAX_CHARS) + "…"
+            } else {
+                material.content
+            }
+            Text(
+                text = clipped,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onDelete) {
+                Text(stringResource(R.string.float_material_delete))
+            }
+        }
+        GoalSmallText(
+            listOfNotNull(
+                material.tag?.takeIf { it.isNotBlank() },
+                stringResource(R.string.float_material_created, relativeMissionTime(material.createdAt)),
+                material.lastUsedAt?.let {
+                    stringResource(R.string.float_material_used, relativeMissionTime(it))
+                },
+            ).joinToString(" · "),
+        )
+    }
+}
+
+/** 添加素材对话框：内容必填、tag 可选（趣事/见闻/资源等自由分类）。 */
+@Composable
+private fun MaterialAddDialog(
+    onConfirm: (content: String, tag: String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var content by remember { mutableStateOf("") }
+    var tag by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.float_material_add_title)) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = content,
+                    onValueChange = { content = it },
+                    label = { Text(stringResource(R.string.float_material_content_hint)) },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = tag,
+                    onValueChange = { tag = it },
+                    label = { Text(stringResource(R.string.float_material_tag_hint)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(content, tag) },
+                enabled = content.isNotBlank(),
+            ) { Text(stringResource(R.string.float_material_add_confirm)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.float_profile_cancel)) }
+        },
+    )
 }
 
 // ------------------------------------------------------------ shared goal UI

@@ -251,6 +251,10 @@ interface SessionBindingDao {
     @Query("UPDATE session_bindings SET lastIncomingAt = :at WHERE conversationId = :conversationId")
     suspend fun setLastIncomingAt(conversationId: Long, at: Long)
 
+    /** 联系人全部绑定会话的最近来信时间（v6 lastIncomingAt 聚合读，§7.3 incoming 优先消费；null=从未记录）。 */
+    @Query("SELECT MAX(lastIncomingAt) FROM session_bindings WHERE contactId = :contactId")
+    suspend fun lastIncomingAtFor(contactId: Long): Long?
+
     @Query(
         """
         UPDATE session_bindings SET digest = :digest, digestCoveredTurns = :coveredTurns,
@@ -626,9 +630,29 @@ interface DirectorLogDao {
     )
     suspend fun latestAt(contactId: Long, trigger: String, route: String): Long?
 
+    /** F7 消费（方案 §5.6：UI 只在用户打开 GoalTab 时消费）：[sinceMs] 新鲜度窗口内
+     *  最近一条 actionHint 决策行；过期信号不再提示（驻留解除后旧横幅不复活）。 */
+    @Query(
+        "SELECT * FROM director_logs WHERE contactId = :contactId AND actionHint = 1 " +
+            "AND createdAt >= :sinceMs ORDER BY id DESC LIMIT 1",
+    )
+    suspend fun latestActionHint(contactId: Long, sinceMs: Long): DirectorLogEntity?
+
     /** 对账消化（方案 §13.1）：近窗口全量台账，按触发源×路由分布统计。 */
     @Query("SELECT * FROM director_logs WHERE createdAt >= :sinceMs ORDER BY id DESC LIMIT :limit")
     suspend fun recentSince(sinceMs: Long, limit: Int = 500): List<DirectorLogEntity>
+
+    /**
+     * 回填回合锚点（§6 三层回放链）：把最新一条 trigger+route 组合行的
+     * turnMessageId 补上——检点路径先落决策行、回合消息后产生，由此闭合
+     * 「决策→回合→结局」链。无匹配行时 UPDATE 静默无操作（旁路安全）。
+     */
+    @Query(
+        "UPDATE director_logs SET turnMessageId = :turnMessageId WHERE id = " +
+            "(SELECT id FROM director_logs WHERE contactId = :contactId " +
+            "AND trigger = :trigger AND route = :route ORDER BY id DESC LIMIT 1)",
+    )
+    suspend fun attachTurnMessageToLatest(contactId: Long, trigger: String, route: String, turnMessageId: Long)
 }
 
 /** 行动建议 DAO（v7，M1 ActionPlanner 读写）：插入 / 状态流转 / 草稿与最近列表。 */
@@ -683,4 +707,30 @@ interface ProactivePolicyDao {
 
     @Query("SELECT * FROM proactive_policies WHERE contactId = :contactId")
     fun observeFor(contactId: Long): Flow<ProactivePolicyEntity?>
+}
+
+// ─────────────────────── F6：我的素材库（personal_materials，v9） ───────────────────────
+
+/**
+ * 我的素材库 DAO（v9，M1 方案 §7.2「用户投喂」源）：upsert 按指纹唯一键去重
+ * （重复录入以最新为准）+ 全量观察/查询 + 选题后标记 lastUsedAt。
+ */
+@Dao
+interface PersonalMaterialDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(material: PersonalMaterialEntity): Long
+
+    @Query("DELETE FROM personal_materials WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("SELECT * FROM personal_materials ORDER BY id DESC")
+    suspend fun all(): List<PersonalMaterialEntity>
+
+    @Query("SELECT * FROM personal_materials ORDER BY id DESC")
+    fun observeAll(): Flow<List<PersonalMaterialEntity>>
+
+    /** 素材被保温选题采用后标记（防短期重选）。 */
+    @Query("UPDATE personal_materials SET lastUsedAt = :atMs WHERE fingerprint = :fingerprint")
+    suspend fun markUsedByFingerprint(fingerprint: String, atMs: Long)
 }

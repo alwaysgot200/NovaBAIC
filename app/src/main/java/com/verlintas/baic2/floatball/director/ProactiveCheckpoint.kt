@@ -105,11 +105,16 @@ object DirectorLedgerStats {
  * 每班做三件事：
  * 1. 对账消化（§13.1）：统计 director_logs 近 7 天触发源×路由分布，落 log 并
  *    随周报轻通知透出（四触发源齐全可回放的验收依据）；
- * 2. SCHEDULED 检点：对全部在档联系人调 [BriefCompiler.refreshWeeklyIfStale]
- *    （自带 7 天节流与无数据静默），有新周报则发轻通知；
+ * 2. SCHEDULED 检点：对全部在档联系人先落 scheduled/brief 决策行（§10 M2
+ *    「四触发源齐全可回放」——周报按联系粒度执行，决策行同粒度落库，无联系人
+ *    归属的场景按 M0 口径只决策不落库、不造 dummy id），再调
+ *    [BriefCompiler.refreshWeeklyIfStale]（自带 7 天节流与无数据静默），有新
+ *    周报则发轻通知；
  * 3. PROACTIVE 检点：对 enabled 联系人逐个取频控数据（当日 proactive+smalltalk
- *    计数 / 上次主动时间），过 [DirectorRoutes] 五分支；SMALL_TALK 命中走
- *    [ScreenAdvisor.runProactiveSmalltalk] 保温管线并代发起草通知（人肉一键档）。
+ *    计数 / 上次主动时间 / 对方最近来信时间，§7.3 incoming 优先），过
+ *    [DirectorRoutes] 六分支；SMALL_TALK 命中走
+ *    [ScreenAdvisor.runProactiveSmalltalk] 保温管线并代发起草通知（人肉一键档），
+ *    触发消息 id 回填台账回合锚点（§6 三层回放链）。
  */
 @Singleton
 class ProactiveCheckpoint @Inject constructor(
@@ -162,10 +167,16 @@ class ProactiveCheckpoint @Inject constructor(
                 "triggers=${summary.triggersSeen.size}/4 total=${summary.total}",
         )
 
-        // 2) SCHEDULED：周报惰性刷新（自带 7 天节流 + 无数据不调 LLM）。
+        // 2) SCHEDULED：先落 scheduled/brief 决策行（四触发源可回放），再周报惰性
+        //    刷新（自带 7 天节流 + 无数据不调 LLM；节流在执行面，决策面每检点
+        //    必记——与 PROACTIVE 分支同口径，频控/对账消费的是决策行）。
         val weeklyContacts = mutableListOf<String>()
         runCatching { db.contactProfileDao().listAllAlive() }.getOrDefault(emptyList())
             .forEach { contact ->
+                director.route(
+                    DirectorInput(trigger = DirectorTrigger.SCHEDULED, nowMs = now),
+                    contactId = contact.id,
+                )
                 val brief = runCatching { briefs.refreshWeeklyIfStale(contact.id) }.getOrNull()
                 if (brief != null) weeklyContacts.add(contact.displayName)
             }
@@ -188,6 +199,10 @@ class ProactiveCheckpoint @Inject constructor(
             val lastAt = runCatching {
                 db.directorLogDao().latestAt(policy.contactId, TRIGGER_PROACTIVE, ROUTE_SMALL_TALK)
             }.getOrNull()
+            // §7.3 incoming 优先：对方最近来信时间（v6 lastIncomingAt 聚合读）。
+            val lastIncomingAt = runCatching {
+                db.sessionBindingDao().lastIncomingAtFor(policy.contactId)
+            }.getOrNull()
             val input = DirectorInput(
                 trigger = DirectorTrigger.PROACTIVE,
                 proactivePolicy = ProactivePolicySnapshot(
@@ -199,6 +214,7 @@ class ProactiveCheckpoint @Inject constructor(
                 ),
                 proactiveCountToday = countToday,
                 lastProactiveAtMs = lastAt,
+                lastIncomingAtMs = lastIncomingAt,
                 nowMs = now,
             )
             val decision = director.route(input, policy.contactId)
@@ -210,6 +226,8 @@ class ProactiveCheckpoint @Inject constructor(
             val result = runCatching { screenAdvisor.runProactiveSmalltalk(ref) }
                 .onFailure { Log.d(TAG, "proactive turn failed: contact=${policy.contactId}", it) }
                 .getOrNull() ?: return@forEach
+            // §6 三层回放链：检点先落决策行（无消息 id），回合落库触发消息后回填锚点。
+            result.turnMessageId?.let { director.attachProactiveTurnMessage(policy.contactId, it) }
             val draft = result.draft?.takeIf { it.isNotBlank() } ?: return@forEach
             postDraftNotification(
                 contactName = contact.displayName,
@@ -342,11 +360,18 @@ class ProactiveCheckpointReceiver : BroadcastReceiver() {
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                // 失败不静默：检点链路断在哪家（DB/闹钟/通知）必须可从 logcat 追因，
+                // 只记异常不带正文（本地优先：通知文本等内容不入日志）。
                 runCatching { checkpoint.runOnce("alarm") }
+                    .onFailure { Log.w(TAG, "proactive checkpoint failed", it) }
                 checkpoint.ensureScheduled()
             } finally {
                 pending.finish()
             }
         }
+    }
+
+    private companion object {
+        const val TAG = "ProactiveCheckpoint"
     }
 }
