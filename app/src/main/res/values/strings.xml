@@ -472,6 +472,21 @@
     <string name="float_mission_time_hour">%1$d 小时前</string>
     <string name="float_mission_time_day">%1$d 天前</string>
 
+    <!-- 参谋简报（BriefCompiler + 目标页简报卡） -->
+    <string name="float_brief_title">参谋简报</string>
+    <string name="float_brief_generate">生成简报</string>
+    <string name="float_brief_generating">正在汇总近两周的阶段、任务与目标进展…</string>
+    <string name="float_brief_empty">还没有简报。点「生成简报」，老参谋会汇总近两周的关系进展。</string>
+    <string name="float_brief_empty_no_data">近两周还没有阶段变动或策略台账记录，暂无可汇总的内容</string>
+    <string name="float_brief_failed">简报生成失败，请稍后再试</string>
+    <string name="float_brief_stage_position">阶段位置：%1$s</string>
+    <string name="float_brief_recent_events">近期事件</string>
+    <string name="float_brief_goal_progress">目标进展</string>
+    <string name="float_brief_risks">风险</string>
+    <string name="float_brief_next_moves">下一步建议</string>
+    <string name="float_brief_kind_weekly">每周</string>
+    <string name="float_brief_kind_on_demand">按需</string>
+
     <!-- 设置：我的聊天策略 -->
     <string name="float_settings_strategy_section">我的聊天策略</string>
     <string name="float_strategy_mode_hint">智能模式：每回合先按目标、关系阶段与红线定本轮策略，再写回复；关闭后只用说话风格</string>

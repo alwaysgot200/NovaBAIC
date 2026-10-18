@@ -407,3 +407,116 @@ data class TalkMissionEntity(
     val adoptedIndex: Int? = null,
     val createdAt: Long = 0L,
 )
+
+// ─────────────────────────────── M0：Director 调度中枢 + 简报 + 行动建议 ───────────────────────────────
+
+/** director_logs.trigger：incoming=对方来信（连续模式/通知）；proactive=主动时机；scheduled=周期检点；manual=用户手动。 */
+const val TRIGGER_INCOMING = "incoming"
+const val TRIGGER_PROACTIVE = "proactive"
+const val TRIGGER_SCHEDULED = "scheduled"
+const val TRIGGER_MANUAL = "manual"
+
+/** director_logs.route：reply=现有主链路；guide=推进引导；smalltalk=保温闲聊；replan_hint/action_hint=建议条；brief=简报；noop=不动。 */
+const val ROUTE_REPLY = "reply"
+const val ROUTE_GUIDE = "guide"
+const val ROUTE_SMALL_TALK = "smalltalk"
+const val ROUTE_REPLAN_HINT = "replan_hint"
+const val ROUTE_ACTION_HINT = "action_hint"
+const val ROUTE_BRIEF = "brief"
+const val ROUTE_NOOP = "noop"
+
+/** action_plays.kind：行动建议类型（方案 §6）：约会 / 礼品 / 拜访 / 关怀 / 自定义。 */
+const val ACTION_KIND_MEETUP = "meetup"
+const val ACTION_KIND_GIFT = "gift"
+const val ACTION_KIND_VISIT = "visit"
+const val ACTION_KIND_CARE = "care"
+const val ACTION_KIND_CUSTOM = "custom"
+
+/** action_plays.status：草稿（待采纳）/ 已采纳 / 已完成 / 已放弃。 */
+const val ACTION_STATUS_DRAFT = "draft"
+const val ACTION_STATUS_ADOPTED = "adopted"
+const val ACTION_STATUS_DONE = "done"
+const val ACTION_STATUS_DROPPED = "dropped"
+
+/** brief_outputs.kind：简报粒度：weekly / monthly / onDemand。 */
+const val BRIEF_KIND_WEEKLY = "weekly"
+const val BRIEF_KIND_MONTHLY = "monthly"
+const val BRIEF_KIND_ON_DEMAND = "onDemand"
+
+/**
+ * 调度日志（v7，方案 §6）：Director 每次决策一行，每联系人滚动保留最近
+ * 200 条（[DirectorLogDao.trimFor]）。M0 仅 incoming/manual 两路触发；
+ * proactive/scheduled 由 M2 起接入。可从本表回放验证路由规则（方案 §12）。
+ */
+@Entity(tableName = "director_logs", indices = [Index(value = ["contactId", "id"])])
+data class DirectorLogEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val contactId: Long,
+    val conversationId: Long? = null,
+    /** TRIGGER_* 常量。 */
+    val trigger: String,
+    /** ROUTE_* 常量。 */
+    val route: String,
+    /** 命中的规则键（如 incoming_default），可复盘路由依据。 */
+    val reason: String? = null,
+    val turnMessageId: Long? = null,
+    val createdAt: Long = 0L,
+)
+
+/**
+ * 行动建议（v7，方案 §6，M1 ActionPlanner 产物）：口头聊天外的行动策划
+ * （约会/礼品/拜访），用户采纳驱动状态流转；payload 为自包含 JSON。
+ */
+@Entity(tableName = "action_plays", indices = [Index(value = ["contactId", "status"])])
+data class ActionPlayEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val contactId: Long,
+    val goalId: Long? = null,
+    val stageCode: String? = null,
+    /** ACTION_KIND_* 常量。 */
+    val kind: String,
+    /** 谋略库编号（action_stratagems.json，M1 分发）；null = 库外定制。 */
+    val stratagemCode: String? = null,
+    /** {title,rationale,steps[],cost,risk,prereq} JSON。 */
+    val payloadJson: String,
+    val status: String = ACTION_STATUS_DRAFT,
+    val resultNote: String? = null,
+    val createdAt: Long = 0L,
+)
+
+/**
+ * 简报产物（v7，方案 §6，BriefCompiler 慢车道）：周报/月报/按需，每联系人
+ * 每 kind 滚动保留最近 10 份（[BriefOutputDao.trimFor]）。
+ */
+@Entity(tableName = "brief_outputs", indices = [Index(value = ["contactId", "createdAt"])])
+data class BriefOutputEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val contactId: Long,
+    /** BRIEF_KIND_* 常量。 */
+    val kind: String,
+    /** 统计区间（毫秒，含头不含尾）。 */
+    val rangeStart: Long,
+    val rangeEnd: Long,
+    /** {stagePosition,recentEvents[],goalProgress,risks,nextMoves[]} JSON。 */
+    val contentJson: String,
+    val createdAt: Long = 0L,
+)
+
+/**
+ * 主动策略（v7，方案 §6，M2 ProactivePolicy 读写）：每联系人一行的频控配置。
+ * 「发不发」由此表确定性裁决，LLM 无权决定（方案 §7.3 频率纪律）；M0 仅建表。
+ */
+@Entity(tableName = "proactive_policies")
+data class ProactivePolicyEntity(
+    @PrimaryKey val contactId: Long,
+    val enabled: Boolean = false,
+    /** 每日主动回合上限。 */
+    val dailyCap: Int = 1,
+    /** 两次主动的最小间隔（小时）。 */
+    val minGapHours: Int = 48,
+    /** 静默时段 HH:mm（24h 制）；跨零点区间由读取方判断。 */
+    val quietStart: String = "22:30",
+    val quietEnd: String = "08:30",
+    val preferSmalltalk: Boolean = true,
+    val updatedAt: Long = 0L,
+)

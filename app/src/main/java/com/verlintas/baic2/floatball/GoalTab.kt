@@ -72,6 +72,9 @@ import com.verlintas.baic2.floatball.advisor.PersonaValues
 import com.verlintas.baic2.floatball.advisor.ScenarioPack
 import com.verlintas.baic2.floatball.advisor.StyleAssets
 import com.verlintas.baic2.floatball.advisor.StrategyCardRepository
+import com.verlintas.baic2.floatball.advisor.data.BRIEF_KIND_ON_DEMAND
+import com.verlintas.baic2.floatball.advisor.data.BRIEF_KIND_WEEKLY
+import com.verlintas.baic2.floatball.advisor.data.BriefOutputEntity
 import com.verlintas.baic2.floatball.advisor.data.CARD_CONFIRMED
 import com.verlintas.baic2.floatball.advisor.data.CARD_DRAFT
 import com.verlintas.baic2.floatball.advisor.data.DECOMP_OUTCOMES
@@ -106,6 +109,8 @@ import com.verlintas.baic2.floatball.advisor.strategy.StageGraph
 import com.verlintas.baic2.floatball.advisor.strategy.StagePolicy
 import com.verlintas.baic2.floatball.advisor.strategy.TemplateFill
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
+import com.verlintas.baic2.floatball.brief.BriefCompiler
+import com.verlintas.baic2.floatball.brief.BriefContent
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -129,6 +134,7 @@ internal fun GoalsTab(
     contacts: ContactRepository,
     schemas: PersonaSchemas,
     runtime: com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime,
+    briefs: BriefCompiler,
     onOpenStrategyCard: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -271,6 +277,9 @@ internal fun GoalsTab(
     missions.forEach { mission ->
         MissionLedgerRow(mission)
     }
+
+    // ⑤.5 参谋简报（M0 BriefCompiler 慢车道汇总：阶段位置 + 事件/进展/风险/下一步）
+    AdvisorBriefCard(contactId = contactId, briefs = briefs)
 
     // ⑥ 策略卡入口
     Surface(
@@ -828,6 +837,12 @@ private fun StageProgressBar(
 /** 阶段历程在 GoalTab 默认折叠展示的条数。 */
 private const val HISTORY_SHOW = 5
 
+/** 简报卡每分组展示条数上限。 */
+private const val BRIEF_ITEM_SHOW = 3
+
+/** 简报卡每条展示字符上限（超长省略）。 */
+private const val BRIEF_ITEM_MAX = 80
+
 /** P3 reroute 超时因子：停留 > expectedDays × 3/2 提示重规划。 */
 private const val REROUTE_TIMEOUT_FACTOR_NUM = 3L
 private const val REROUTE_TIMEOUT_FACTOR_DEN = 2L
@@ -1009,6 +1024,123 @@ private fun missionResultColor(result: String) = when (result) {
     MISSION_REGRESSED -> MaterialTheme.colorScheme.error
     MISSION_PENDING -> MaterialTheme.colorScheme.tertiary
     else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+// ------------------------------------------------------------ brief card（M0 参谋简报）
+
+/**
+ * 参谋简报卡（方案 §10 M0）：展示最新一份 weekly/onDemand 简报；
+ * 首次进入惰性检查 weekly 新鲜度（超 7 天静默刷新一次，失败不打扰）；
+ * 「生成简报」按需编译，窗口内无阶段/任务数据时给空态不调 LLM。
+ */
+@Composable
+private fun AdvisorBriefCard(contactId: Long, briefs: BriefCompiler) {
+    val scope = rememberCoroutineScope()
+    var weekly by remember(contactId) { mutableStateOf<BriefOutputEntity?>(null) }
+    var onDemand by remember(contactId) { mutableStateOf<BriefOutputEntity?>(null) }
+    var busy by remember(contactId) { mutableStateOf(false) }
+    var failed by remember(contactId) { mutableStateOf(false) }
+    var noData by remember(contactId) { mutableStateOf(false) }
+
+    LaunchedEffect(contactId) {
+        weekly = briefs.latest(contactId, BRIEF_KIND_WEEKLY)
+        onDemand = briefs.latest(contactId, BRIEF_KIND_ON_DEMAND)
+        // 惰性周报刷新：静默进行，成功才刷新显示。
+        briefs.refreshWeeklyIfStale(contactId)?.let { weekly = it }
+    }
+
+    val shown = listOfNotNull(weekly, onDemand).maxByOrNull { it.createdAt }
+    GoalCardSurface {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.float_brief_title),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            shown?.let {
+                Text(
+                    text = stringResource(
+                        if (it.kind == BRIEF_KIND_WEEKLY) {
+                            R.string.float_brief_kind_weekly
+                        } else {
+                            R.string.float_brief_kind_on_demand
+                        },
+                    ) + " · " + relativeMissionTime(it.createdAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        val content = shown?.let { entity ->
+            remember(entity.contentJson) {
+                runCatching {
+                    strategyJson.decodeFromString(BriefContent.serializer(), entity.contentJson)
+                }.getOrNull()
+            }
+        }
+        if (content != null) {
+            content.stagePosition.takeIf { it.isNotBlank() }?.let {
+                GoalSmallText(stringResource(R.string.float_brief_stage_position, it))
+            }
+            BriefSection(stringResource(R.string.float_brief_recent_events), content.recentEvents)
+            BriefSection(stringResource(R.string.float_brief_goal_progress), content.goalProgress)
+            BriefSection(stringResource(R.string.float_brief_risks), content.risks)
+            BriefSection(stringResource(R.string.float_brief_next_moves), content.nextMoves)
+        } else if (busy) {
+            GoalSmallText(stringResource(R.string.float_brief_generating))
+        } else if (noData) {
+            GoalSmallText(stringResource(R.string.float_brief_empty_no_data))
+        } else if (failed) {
+            GoalSmallText(stringResource(R.string.float_brief_failed))
+        } else {
+            GoalSmallText(stringResource(R.string.float_brief_empty))
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(top = 8.dp),
+        ) {
+            OutlinedButton(onClick = {
+                scope.launch {
+                    busy = true
+                    failed = false
+                    noData = false
+                    if (!briefs.hasRecentActivity(contactId)) {
+                        noData = true
+                    } else {
+                        val result = briefs.compile(contactId, BRIEF_KIND_ON_DEMAND)
+                        if (result != null) {
+                            onDemand = result
+                        } else {
+                            failed = true
+                        }
+                    }
+                    busy = false
+                }
+            }, enabled = !busy) {
+                Text(stringResource(R.string.float_brief_generate))
+            }
+        }
+    }
+}
+
+/** 简报分组小节：空组不渲染；每条截前 [BRIEF_ITEM_MAX] 字、最多 [BRIEF_ITEM_SHOW] 条。 */
+@Composable
+private fun BriefSection(title: String, items: List<String>) {
+    if (items.isEmpty()) return
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    items.take(BRIEF_ITEM_SHOW).forEach { raw ->
+        val clipped = raw.trim().takeIf { it.isNotEmpty() } ?: return@forEach
+        val text = if (clipped.length > BRIEF_ITEM_MAX) clipped.take(BRIEF_ITEM_MAX) + "…" else clipped
+        Text("· $text", style = MaterialTheme.typography.bodySmall)
+    }
 }
 
 // ------------------------------------------------------------ shared goal UI

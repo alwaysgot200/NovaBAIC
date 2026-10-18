@@ -47,8 +47,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         StageHistoryEntity::class,
         StrategyCardEntity::class,
         TalkMissionEntity::class,
+        DirectorLogEntity::class,
+        ActionPlayEntity::class,
+        BriefOutputEntity::class,
+        ProactivePolicyEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -82,6 +86,14 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun strategyCardDao(): StrategyCardDao
 
     abstract fun talkMissionDao(): TalkMissionDao
+
+    abstract fun directorLogDao(): DirectorLogDao
+
+    abstract fun actionPlayDao(): ActionPlayDao
+
+    abstract fun briefOutputDao(): BriefOutputDao
+
+    abstract fun proactivePolicyDao(): ProactivePolicyDao
 }
 
 /**
@@ -301,6 +313,91 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         )
 
         ensureColumn(db, "session_bindings", "lastIncomingAt", "lastIncomingAt INTEGER")
+    }
+}
+
+/**
+ * v6 → v7（多代理协作自动参谋方案 §6，M0 期）：新增四表，只建结构不搬数据——
+ * 1. director_logs：Director 决策台账（M0 接线，每联系人滚动 200 条）；
+ * 2. action_plays：行动建议（M1 ActionPlanner 写入）；
+ * 3. brief_outputs：简报产物（BriefCompiler 慢车道，每联系人滚动 10 份）；
+ * 4. proactive_policies：主动频控配置（M2 读写）。
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `director_logs` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `conversationId` INTEGER,
+                `trigger` TEXT NOT NULL,
+                `route` TEXT NOT NULL,
+                `reason` TEXT,
+                `turnMessageId` INTEGER,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_director_logs_contactId_id` " +
+                "ON `director_logs` (`contactId`, `id`)",
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `action_plays` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `goalId` INTEGER,
+                `stageCode` TEXT,
+                `kind` TEXT NOT NULL,
+                `stratagemCode` TEXT,
+                `payloadJson` TEXT NOT NULL,
+                `status` TEXT NOT NULL DEFAULT 'draft',
+                `resultNote` TEXT,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_action_plays_contactId_status` " +
+                "ON `action_plays` (`contactId`, `status`)",
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `brief_outputs` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `kind` TEXT NOT NULL,
+                `rangeStart` INTEGER NOT NULL,
+                `rangeEnd` INTEGER NOT NULL,
+                `contentJson` TEXT NOT NULL,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_brief_outputs_contactId_createdAt` " +
+                "ON `brief_outputs` (`contactId`, `createdAt`)",
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `proactive_policies` (
+                `contactId` INTEGER NOT NULL,
+                `enabled` INTEGER NOT NULL DEFAULT 0,
+                `dailyCap` INTEGER NOT NULL DEFAULT 1,
+                `minGapHours` INTEGER NOT NULL DEFAULT 48,
+                `quietStart` TEXT NOT NULL DEFAULT '22:30',
+                `quietEnd` TEXT NOT NULL DEFAULT '08:30',
+                `preferSmalltalk` INTEGER NOT NULL DEFAULT 1,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`contactId`)
+            )
+            """.trimIndent(),
+        )
     }
 }
 

@@ -70,6 +70,9 @@ import com.verlintas.baic2.floatball.contact.ContactHistoryGateway
 import com.verlintas.baic2.floatball.contact.ContactMemoryReader
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.floatball.contact.DealFact
+import com.verlintas.baic2.floatball.director.Director
+import com.verlintas.baic2.floatball.director.DirectorInput
+import com.verlintas.baic2.floatball.director.DirectorTrigger
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -136,6 +139,7 @@ class ScreenAdvisor @Inject constructor(
     private val responder: AdvisorResponder,
     private val strategyRuntime: com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime,
     private val tacticalAdvisor: com.verlintas.baic2.floatball.advisor.TacticalAdvisor,
+    private val director: Director,
 ) {
 
     /** 面板渲染所需的一切：会话消息 + 正在流式的回答 + 阶段状态。 */
@@ -1002,6 +1006,16 @@ class ScreenAdvisor @Inject constructor(
         contact: ContactRef?,
         backgroundTurn: Boolean,
     ) {
+        // M0 调度中枢旁路（方案 §5）：连续/后台回合=INCOMING，手动回合=MANUAL。
+        // 只落 director_logs 不改控制流；未绑定联系人时 Director 内部只决策不落库。
+        director.route(
+            DirectorInput(
+                trigger = if (backgroundTurn) DirectorTrigger.INCOMING else DirectorTrigger.MANUAL,
+                nowMs = System.currentTimeMillis(),
+            ),
+            contactId = contact?.contactId,
+            conversationId = conversationId,
+        )
         _transcript.update { it.copy(status = Status.Thinking, lastUsage = null) }
         turnMutex.withLock {
             runAdvisorTurn(conversationId, contact, backgroundTurn)

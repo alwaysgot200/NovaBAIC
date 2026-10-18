@@ -591,3 +591,67 @@ interface TalkMissionDao {
     @Query("DELETE FROM talk_missions WHERE contactId IS NULL AND conversationId = :conversationId AND id NOT IN (SELECT id FROM talk_missions WHERE conversationId = :conversationId ORDER BY id DESC LIMIT :keep)")
     suspend fun trimConversation(conversationId: Long, keep: Int)
 }
+
+// ─────────────────────────────── M0：Director 调度中枢 + 简报 + 行动建议 ───────────────────────────────
+
+/** 调度日志 DAO（v7）：追加写 + 最近列表 + 每联系人滚动 200 条。 */
+@Dao
+interface DirectorLogDao {
+
+    @Insert
+    suspend fun insert(entry: DirectorLogEntity): Long
+
+    @Query("SELECT * FROM director_logs WHERE contactId = :contactId ORDER BY id DESC LIMIT :limit")
+    suspend fun latestFor(contactId: Long, limit: Int = 50): List<DirectorLogEntity>
+
+    @Query(
+        "DELETE FROM director_logs WHERE contactId = :contactId AND id NOT IN " +
+            "(SELECT id FROM director_logs WHERE contactId = :contactId ORDER BY id DESC LIMIT :keep)",
+    )
+    suspend fun trimFor(contactId: Long, keep: Int = 200)
+}
+
+/** 行动建议 DAO（v7，M1 ActionPlanner 读写）：插入 / 状态流转 / 草稿与最近列表。 */
+@Dao
+interface ActionPlayDao {
+
+    @Insert
+    suspend fun insert(play: ActionPlayEntity): Long
+
+    @Query("UPDATE action_plays SET status = :status, resultNote = :resultNote WHERE id = :id")
+    suspend fun updateStatus(id: Long, status: String, resultNote: String? = null)
+
+    @Query("SELECT * FROM action_plays WHERE contactId = :contactId AND status = '$ACTION_STATUS_DRAFT' ORDER BY id DESC")
+    suspend fun openDrafts(contactId: Long): List<ActionPlayEntity>
+
+    @Query("SELECT * FROM action_plays WHERE contactId = :contactId ORDER BY id DESC LIMIT :limit")
+    suspend fun recentFor(contactId: Long, limit: Int = 20): List<ActionPlayEntity>
+}
+
+/** 简报产物 DAO（v7，BriefCompiler 读写）：最新一份 + 每联系人滚动 10 份。 */
+@Dao
+interface BriefOutputDao {
+
+    @Insert
+    suspend fun insert(output: BriefOutputEntity): Long
+
+    @Query("SELECT * FROM brief_outputs WHERE contactId = :contactId AND kind = :kind ORDER BY createdAt DESC, id DESC LIMIT 1")
+    suspend fun latest(contactId: Long, kind: String): BriefOutputEntity?
+
+    @Query(
+        "DELETE FROM brief_outputs WHERE contactId = :contactId AND id NOT IN " +
+            "(SELECT id FROM brief_outputs WHERE contactId = :contactId ORDER BY createdAt DESC, id DESC LIMIT :keep)",
+    )
+    suspend fun trimFor(contactId: Long, keep: Int = 10)
+}
+
+/** 主动策略 DAO（v7，M2 ProactivePolicy 读写）：每联系人一行，整行覆盖。 */
+@Dao
+interface ProactivePolicyDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(policy: ProactivePolicyEntity)
+
+    @Query("SELECT * FROM proactive_policies WHERE contactId = :contactId")
+    suspend fun forContact(contactId: Long): ProactivePolicyEntity?
+}
