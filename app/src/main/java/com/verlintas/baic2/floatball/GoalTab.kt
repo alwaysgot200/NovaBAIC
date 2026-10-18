@@ -72,6 +72,11 @@ import com.verlintas.baic2.floatball.advisor.PersonaValues
 import com.verlintas.baic2.floatball.advisor.ScenarioPack
 import com.verlintas.baic2.floatball.advisor.StyleAssets
 import com.verlintas.baic2.floatball.advisor.StrategyCardRepository
+import com.verlintas.baic2.floatball.advisor.data.ACTION_STATUS_ADOPTED
+import com.verlintas.baic2.floatball.advisor.data.ACTION_STATUS_DONE
+import com.verlintas.baic2.floatball.advisor.data.ACTION_STATUS_DRAFT
+import com.verlintas.baic2.floatball.advisor.data.ACTION_STATUS_DROPPED
+import com.verlintas.baic2.floatball.advisor.data.ActionPlayEntity
 import com.verlintas.baic2.floatball.advisor.data.BRIEF_KIND_ON_DEMAND
 import com.verlintas.baic2.floatball.advisor.data.BRIEF_KIND_WEEKLY
 import com.verlintas.baic2.floatball.advisor.data.BriefOutputEntity
@@ -111,6 +116,9 @@ import com.verlintas.baic2.floatball.advisor.strategy.TemplateFill
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
 import com.verlintas.baic2.floatball.brief.BriefCompiler
 import com.verlintas.baic2.floatball.brief.BriefContent
+import com.verlintas.baic2.floatball.director.ActionPlanResult
+import com.verlintas.baic2.floatball.director.ActionPlanner
+import com.verlintas.baic2.floatball.director.ActionPlayPayload
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -135,6 +143,7 @@ internal fun GoalsTab(
     schemas: PersonaSchemas,
     runtime: com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime,
     briefs: BriefCompiler,
+    plays: ActionPlanner,
     onOpenStrategyCard: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -280,6 +289,9 @@ internal fun GoalsTab(
 
     // ⑤.5 参谋简报（M0 BriefCompiler 慢车道汇总：阶段位置 + 事件/进展/风险/下一步）
     AdvisorBriefCard(contactId = contactId, briefs = briefs)
+
+    // ⑤.6 行动建议（M1 ActionPlanner：谋略库按阶段选条定制，draft 落库，用户采纳驱动）
+    AdvisorPlaysCard(contactId = contactId, planner = plays)
 
     // ⑥ 策略卡入口
     Surface(
@@ -1142,6 +1154,156 @@ private fun BriefSection(title: String, items: List<String>) {
         Text("· $text", style = MaterialTheme.typography.bodySmall)
     }
 }
+
+/**
+ * 行动建议卡（M1 方案 §10 M1-B）：ActionPlanner 慢车道产物展示 + 四态操作。
+ * 手动触发（「给点子」），draft→采纳/放弃、adopted→完成/放弃，done/dropped 终态
+ * 不再出操作；状态变更经 [ActionPlanner] 走 ActionPlayDao.updateStatus 后整表刷新。
+ */
+@Composable
+private fun AdvisorPlaysCard(contactId: Long, planner: ActionPlanner) {
+    val scope = rememberCoroutineScope()
+    var items by remember(contactId) { mutableStateOf<List<ActionPlayEntity>>(emptyList()) }
+    var busy by remember(contactId) { mutableStateOf(false) }
+    var failed by remember(contactId) { mutableStateOf(false) }
+    var noCandidates by remember(contactId) { mutableStateOf(false) }
+
+    fun refresh() {
+        scope.launch { items = planner.recent(contactId) }
+    }
+
+    LaunchedEffect(contactId) {
+        items = planner.recent(contactId)
+    }
+
+    GoalCardSurface {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.float_action_title),
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        failed = false
+                        noCandidates = false
+                        when (planner.plan(contactId)) {
+                            is ActionPlanResult.Done -> items = planner.recent(contactId)
+                            ActionPlanResult.NoCandidates -> noCandidates = true
+                            ActionPlanResult.Failed -> failed = true
+                        }
+                        busy = false
+                    }
+                },
+                enabled = !busy,
+            ) {
+                Text(stringResource(R.string.float_action_generate))
+            }
+        }
+        if (busy) GoalSmallText(stringResource(R.string.float_action_generating))
+        if (noCandidates) GoalSmallText(stringResource(R.string.float_action_no_candidates))
+        if (failed) GoalSmallText(stringResource(R.string.float_action_failed))
+        if (items.isEmpty() && !busy && !failed && !noCandidates) {
+            GoalSmallText(stringResource(R.string.float_action_empty))
+        }
+        items.forEach { play ->
+            ActionPlayRow(play = play, planner = planner, onChanged = { refresh() })
+        }
+    }
+}
+
+/** 单条行动建议行：谋略名/路径摘要/代价/风险/步骤 + 状态徽标 + 按状态出操作。 */
+@Composable
+private fun ActionPlayRow(play: ActionPlayEntity, planner: ActionPlanner, onChanged: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val payload = remember(play.payloadJson) {
+        runCatching {
+            strategyJson.decodeFromString(ActionPlayPayload.serializer(), play.payloadJson)
+        }.getOrNull()
+    }
+    Column(modifier = Modifier.padding(top = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = payload?.title?.takeIf { it.isNotBlank() } ?: play.stratagemCode.orEmpty(),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            GoalBadge(actionStatusBadge(play.status))
+        }
+        payload?.rationale?.takeIf { it.isNotBlank() }?.let { GoalSmallText(it) }
+        payload?.cost?.takeIf { it.isNotBlank() }?.let {
+            GoalSmallText(stringResource(R.string.float_action_cost, it))
+        }
+        payload?.risk?.takeIf { it.isNotBlank() }?.let {
+            GoalSmallText(stringResource(R.string.float_action_risk, it))
+        }
+        payload?.prereq?.takeIf { it.isNotBlank() }?.let {
+            GoalSmallText(stringResource(R.string.float_action_prereq, it))
+        }
+        val steps = payload?.steps.orEmpty()
+        steps.take(ACTION_STEPS_SHOW).forEach { step ->
+            Text(
+                text = "· $step",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+        when (play.status) {
+            ACTION_STATUS_DRAFT -> Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                Button(onClick = {
+                    scope.launch {
+                        planner.setStatus(play.id, ACTION_STATUS_ADOPTED)
+                        onChanged()
+                    }
+                }) { Text(stringResource(R.string.float_action_adopt)) }
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        planner.setStatus(play.id, ACTION_STATUS_DROPPED)
+                        onChanged()
+                    }
+                }) { Text(stringResource(R.string.float_action_drop)) }
+            }
+            ACTION_STATUS_ADOPTED -> Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                Button(onClick = {
+                    scope.launch {
+                        planner.setStatus(play.id, ACTION_STATUS_DONE)
+                        onChanged()
+                    }
+                }) { Text(stringResource(R.string.float_action_done)) }
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        planner.setStatus(play.id, ACTION_STATUS_DROPPED)
+                        onChanged()
+                    }
+                }) { Text(stringResource(R.string.float_action_drop)) }
+            }
+        }
+    }
+}
+
+/** 状态徽标文案映射（未知状态按 draft 处理，不崩）。 */
+@Composable
+private fun actionStatusBadge(status: String): String = stringResource(
+    when (status) {
+        ACTION_STATUS_ADOPTED -> R.string.float_action_status_adopted
+        ACTION_STATUS_DONE -> R.string.float_action_status_done
+        ACTION_STATUS_DROPPED -> R.string.float_action_status_dropped
+        else -> R.string.float_action_status_draft
+    },
+)
+
+/** 单条建议最多展示的步骤行数（落库上限 4 条，展示同额）。 */
+private const val ACTION_STEPS_SHOW = 4
 
 // ------------------------------------------------------------ shared goal UI
 
