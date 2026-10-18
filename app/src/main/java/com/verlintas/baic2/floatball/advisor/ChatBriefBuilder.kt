@@ -93,6 +93,9 @@ class ChatBriefBuilder @Inject constructor(
         val goal = (goalOverride ?: profile.goal)?.trim().orEmpty()
         val myValues = contacts.myPersona().filter { it.confirmed }
         val theirValues = contacts.fields(contactId).filter { it.confirmed }
+        // F3：我方段按当前关系叠加 selfFacet（「领导面前的我」），全局 my_* 字段
+        // 为底、关系侧面标签并列成行；facet 为空时保持纯全局段（与既有行为一致）。
+        val facet = SelfFacets.decode(profile.selfFacetJson)
         val myRender = renderPersona(
             schema.fieldsFor("my", profile.contactType),
             myValues,
@@ -103,7 +106,7 @@ class ChatBriefBuilder @Inject constructor(
             theirValues,
             relevanceSignals,
         )
-        val myLines = myRender.first
+        val myLines = mySectionLines(myRender.first, facet)
         val theirLines = theirRender.first
 
         // 说话方式：联系人卡 → 全局卡 → v3 style 自由文本兜底；P2 传真实站码做意图过滤。
@@ -154,6 +157,8 @@ class ChatBriefBuilder @Inject constructor(
             append("\n\n").append(OUTPUT_REQUIREMENTS)
         }
         val curated = collectCurated(goal, myRender.second, theirRender.second)
+            // F3：facet 行已进提示词，同样作为去重指纹原料（短于指纹下限的除外）。
+            .let { list -> (list + facet.filter { it.trim().length >= MIN_CURATED_CHARS }).distinct() }
         return Brief(
             section = section,
             styleSection = styleSection,
@@ -254,3 +259,16 @@ class ChatBriefBuilder @Inject constructor(
                 "并给出一句话策略提示。不要复述屏幕内容。"
     }
 }
+
+/**
+ * 我方人设段的关系侧面拼装（F3 纯函数，JVM 可单测）：全局 my_* 字段行为底，
+ * 档案 selfFacet 标签并列追加一行（facet 非空时；空 facet 原样返回全局行）。
+ */
+internal fun mySectionLines(baseLines: List<String>, facet: List<String>): List<String> {
+    val clean = facet.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    if (clean.isEmpty()) return baseLines
+    return baseLines + "$MY_FACET_ROW_LABEL: ${clean.joinToString("、")}"
+}
+
+/** 我方人设段内关系侧面行的标签（与 SECTION_MY 的「label: value」行式一致）。 */
+internal const val MY_FACET_ROW_LABEL = "关系侧面（在这段关系里的我）"

@@ -22,10 +22,10 @@ package com.verlintas.baic2.floatball.advisor
 /**
  * 对方风格三标签的中文词表（v10 方案 §4.1，V-C 废话分层的同源事实来源）。
  *
- * 单一来源原则：UI（AdvisorPersonaCard 的下拉芯片）从 strings.xml 的
- * float_persona_* 键读词——两者的中文值必须一一对应（改词表时两处同步）；
- * 判定侧（PersonaExtractor 归一、TopicStyleRules/ProactiveStyleTiers 分档、
- * topic_seeds.json 种子 minCloseness）只认本对象常量，禁止散落硬编码字符串。
+ * 单一来源原则（F8 起强化）：UI（AdvisorPersonaCard 的下拉芯片）与判定侧
+ * （PersonaExtractor 归一、TopicStyleRules/ProactiveStyleTiers 分档、
+ * topic_seeds.json 种子 minCloseness）全部直接引用本对象常量——写库值必在
+ * 词表内，不存在第二份手抄中文值；禁止散落硬编码字符串。
  * 纯对象、零 Android 依赖，JVM 可直接单测。
  */
 object StyleVocab {

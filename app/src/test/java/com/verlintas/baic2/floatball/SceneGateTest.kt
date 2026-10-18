@@ -20,6 +20,7 @@
 package com.verlintas.baic2.floatball
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SceneGateTest {
@@ -82,5 +83,33 @@ class SceneGateTest {
         assertEquals(SceneGate.Scene.NonChat, SceneGate.classify(null, nonChatBody))
         assertEquals(SceneGate.Scene.NonChat, SceneGate.classify(null, null))
         assertEquals(SceneGate.Scene.NonChat, SceneGate.classify(null, ""))
+    }
+
+    // ── F10：UNCERTAIN 轻 LLM 一问的提示词与解析（UncertainPrompts 纯函数） ──
+
+    @Test
+    fun uncertainPrompts_bodyIncludedAndCapped() {
+        val prompt = UncertainPrompts.userPrompt("张三：在吗\n我：在的")
+        assertTrue(prompt.contains("张三：在吗"))
+        assertTrue(prompt.contains("yes"))
+        // 超长正文截断到 BODY_MAX_CHARS，判定界面形态足够。
+        val long = "x".repeat(UncertainPrompts.BODY_MAX_CHARS + 50)
+        assertTrue(UncertainPrompts.userPrompt(long).length < long.length)
+    }
+
+    @Test
+    fun uncertainPrompts_isChatOnlyOnExplicitYes() {
+        // 明确 yes（含大小写/前后缀空白）才判聊天。
+        assertTrue(UncertainPrompts.isChat("yes"))
+        assertTrue(UncertainPrompts.isChat("  Yes  "))
+        assertTrue(UncertainPrompts.isChat("Yes, it looks like a chat"))
+        assertTrue(UncertainPrompts.isChat("是"))
+        // no/超时截断/畸形一律保守 false（NON_CHAT）。
+        assertEquals(false, UncertainPrompts.isChat("no"))
+        assertEquals(false, UncertainPrompts.isChat("NO"))
+        assertEquals(false, UncertainPrompts.isChat("not sure"))
+        assertEquals(false, UncertainPrompts.isChat("maybe"))
+        assertEquals(false, UncertainPrompts.isChat(""))
+        assertEquals(false, UncertainPrompts.isChat(null))
     }
 }

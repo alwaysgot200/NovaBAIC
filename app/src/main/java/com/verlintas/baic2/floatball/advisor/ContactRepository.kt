@@ -321,37 +321,34 @@ class ContactRepository @Inject constructor(
     /** 群档案标记（EntityResolver GROUP 自动建群壳后调用）：isGroup 与 contactType 一并落定。 */
     suspend fun markGroup(contactId: Long) = setGroup(contactId, true)
 
-    /** 我方关系侧面标签集（v10 §2.4）；无档案/空标签返回空表。 */
-    suspend fun selfFacet(contactId: Long): List<String> =
-        SelfFacets.decode(db.contactProfileDao().findById(contactId)?.selfFacetJson)
-
-    /** 我方侧面待确认差异标签（合并协议暂存区，画像页核阅入口的数据面）。 */
-    suspend fun selfFacetPending(contactId: Long): List<String> =
-        SelfFacets.decode(db.contactProfileDao().findById(contactId)?.selfFacetPendingJson)
-
-    /** 我方侧面整集改写（画像页手动增删改，v10 §2.4 每关系独立）。 */
+    /** 我方侧面整集改写（画像页手动增删改，v10 §2.4 每关系独立）。
+     * 读改写包单事务（F4）：与并发 facet/pending 通道互覆竞态由此消除。 */
     suspend fun setSelfFacet(contactId: Long, tags: List<String>) {
-        val p = db.contactProfileDao().findById(contactId) ?: return
-        db.contactProfileDao().update(
-            p.copy(selfFacetJson = SelfFacets.encode(tags), updatedAt = System.currentTimeMillis()),
-        )
+        db.withTransaction {
+            val p = db.contactProfileDao().findById(contactId) ?: return@withTransaction
+            db.contactProfileDao().update(
+                p.copy(selfFacetJson = SelfFacets.encode(tags), updatedAt = System.currentTimeMillis()),
+            )
+        }
     }
 
     /** 待确认差异标签转正（画像页核阅后并入 facet，v10 §2.5 不静默丢弃的兑现口）。 */
     suspend fun confirmFacetPending(contactId: Long) {
-        val p = db.contactProfileDao().findById(contactId) ?: return
-        val promoted = SelfFacets.promoteAll(p.selfFacetJson, p.selfFacetPendingJson)
-        db.contactProfileDao().update(
-            p.copy(
-                selfFacetJson = promoted.facetJson,
-                selfFacetPendingJson = null,
-                // style 三值只在列为空时转正（promoteAll 契约）：手动设置绝不覆盖。
-                identity = p.identity ?: promoted.identity,
-                chatStyle = p.chatStyle ?: promoted.chatStyle,
-                closeness = p.closeness ?: promoted.closeness,
-                updatedAt = System.currentTimeMillis(),
-            ),
-        )
+        db.withTransaction {
+            val p = db.contactProfileDao().findById(contactId) ?: return@withTransaction
+            val promoted = SelfFacets.promoteAll(p.selfFacetJson, p.selfFacetPendingJson)
+            db.contactProfileDao().update(
+                p.copy(
+                    selfFacetJson = promoted.facetJson,
+                    selfFacetPendingJson = null,
+                    // style 三值只在列为空时转正（promoteAll 契约）：手动设置绝不覆盖。
+                    identity = p.identity ?: promoted.identity,
+                    chatStyle = p.chatStyle ?: promoted.chatStyle,
+                    closeness = p.closeness ?: promoted.closeness,
+                    updatedAt = System.currentTimeMillis(),
+                ),
+            )
+        }
     }
 
     /**
@@ -363,27 +360,32 @@ class ContactRepository @Inject constructor(
      */
     suspend fun proposeStylePending(contactId: Long, incoming: SelfFacets.StylePending) {
         if (incoming.isEmpty) return
-        val p = db.contactProfileDao().findById(contactId) ?: return
-        val old = SelfFacets.decodePending(p.selfFacetPendingJson) ?: SelfFacets.StylePending()
-        val pending = SelfFacets.StylePending(
-            facet = (old.facet + incoming.facet).distinct(),
-            identity = p.identity?.takeIf { it.isNotBlank() } ?: incoming.identity,
-            chatStyle = p.chatStyle?.takeIf { it.isNotBlank() } ?: incoming.chatStyle,
-            closeness = p.closeness ?: incoming.closeness,
-        )
-        db.contactProfileDao().update(
-            p.copy(selfFacetPendingJson = SelfFacets.encodePending(pending), updatedAt = System.currentTimeMillis()),
-        )
+        db.withTransaction {
+            val p = db.contactProfileDao().findById(contactId) ?: return@withTransaction
+            val old = SelfFacets.decodePending(p.selfFacetPendingJson) ?: SelfFacets.StylePending()
+            val pending = SelfFacets.StylePending(
+                facet = (old.facet + incoming.facet).distinct(),
+                identity = p.identity?.takeIf { it.isNotBlank() } ?: incoming.identity,
+                chatStyle = p.chatStyle?.takeIf { it.isNotBlank() } ?: incoming.chatStyle,
+                closeness = p.closeness ?: incoming.closeness,
+            )
+            db.contactProfileDao().update(
+                p.copy(selfFacetPendingJson = SelfFacets.encodePending(pending), updatedAt = System.currentTimeMillis()),
+            )
+        }
     }
 
     /**
      * 反馈热度增量落分（V-C，方案 §4.3）：两路信号（连续模式来信指纹变化 /
      * 通知链来信正文）算出的增量经 [HeatRules.clamp] 夹逼到 0~100 后整列回写。
      * 档案缺失静默忽略；不碰 updatedAt（热度属观测值，不让列表因它重排）。
+     * 读改写包单事务（F4）：并发多路信号（连续差分/通知链/检点）同刻落分不互覆。
      */
     suspend fun recordHeatDelta(contactId: Long, delta: Int) {
-        val p = db.contactProfileDao().findById(contactId) ?: return
-        db.contactProfileDao().update(p.copy(heatScore = HeatRules.clamp(p.heatScore, delta)))
+        db.withTransaction {
+            val p = db.contactProfileDao().findById(contactId) ?: return@withTransaction
+            db.contactProfileDao().update(p.copy(heatScore = HeatRules.clamp(p.heatScore, delta)))
+        }
     }
 
     /** 改主显示名：新名同时落一条 user 别名（旧名别名保留，旧笔记仍可召回）。 */
@@ -599,16 +601,18 @@ class ContactRepository @Inject constructor(
     }
 
     /**
-     * 合并联系人：保留 [targetId]，并入 [fromId]。类型不同拒绝；
-     * 返回 Unit，失败抛 IllegalStateException（UI 层映射文案）。
+     * 合并联系人：保留 [targetId]，并入 [fromId]。类型不同拒绝；任一方已软删
+     * （deletedAt 非空，findById 不过滤软删行）或已合并拒绝（F5 守卫——软删档
+     * 不许并入活档、也不许作为容器）；返回 Unit，失败抛 IllegalStateException
+     * （UI 层映射文案）。
      */
     suspend fun mergeContacts(fromId: Long, targetId: Long) {
         require(fromId != targetId) { "cannot_merge_self" }
         db.withTransaction {
             val from = db.contactProfileDao().findById(fromId)
-                ?.takeIf { it.mergedInto == null } ?: error("contact_gone")
+                ?.takeIf { it.mergedInto == null && it.deletedAt == null } ?: error("contact_gone")
             val target = db.contactProfileDao().findById(targetId)
-                ?.takeIf { it.mergedInto == null } ?: error("contact_gone")
+                ?.takeIf { it.mergedInto == null && it.deletedAt == null } ?: error("contact_gone")
             require(from.contactType == target.contactType) { "type_mismatch" }
 
             val fromAliases = db.contactAliasDao().listFor(fromId)
@@ -714,8 +718,13 @@ class ContactRepository @Inject constructor(
 
             val aliases = json.decodeFromString(aliasListSerializer, record.movedAliasesJson)
             db.contactAliasDao().deleteByAliases(record.intoContactId, aliases.map { it.alias })
+            // F5：被并期间同名别名可能已被第三档重新取得——仅收回仍属本档（或
+            // 无主）的别名，第三档在册的跳过，insertAll REPLACE 不得偷档。
+            val restorable = aliases.filter { snapshot ->
+                isAliasRestorable(db.contactAliasDao().listByAlias(snapshot.alias), fromId)
+            }
             db.contactAliasDao().insertAll(
-                aliases.map {
+                restorable.map {
                     ContactAliasEntity(
                         contactId = fromId,
                         alias = it.alias,
@@ -849,3 +858,11 @@ class ContactRepository @Inject constructor(
         const val UNDO_WINDOW_MS = 30L * 24 * 60 * 60 * 1000
     }
 }
+
+/**
+ * undoMerge 别名收回判定（F5 纯函数，JVM 可单测）：该别名的现存行全部属
+ * [fromId]（或已无任何行）才可收回；存在第三档在册行时返回 false 跳过，
+ * 防 insertAll REPLACE 偷走别档别名。
+ */
+internal fun isAliasRestorable(existingRows: List<ContactAliasEntity>, fromId: Long): Boolean =
+    existingRows.all { it.contactId == fromId }

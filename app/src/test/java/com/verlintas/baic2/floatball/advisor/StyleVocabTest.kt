@@ -70,4 +70,44 @@ class StyleVocabTest {
         assertEquals("亲密", StyleVocab.closenessLabel(9))
         assertEquals("陌生", StyleVocab.closenessLabel(-2))
     }
+
+    // ── F8：词表锁（UI 引用本对象常量后，成员清单即写库值全集，锁死防漂移） ──
+
+    @Test
+    fun vocabLists_exactMembershipAndOrder() {
+        assertEquals(
+            listOf("领导", "客户", "同事", "朋友", "家人", "暧昧对象", "其他"),
+            StyleVocab.IDENTITIES,
+        )
+        assertEquals(
+            listOf("严肃", "随和", "幽默", "热情", "冷淡"),
+            StyleVocab.CHAT_STYLES,
+        )
+        assertEquals(
+            listOf("陌生", "熟识", "亲近", "亲密"),
+            StyleVocab.CLOSENESS_LEVELS,
+        )
+    }
+
+    @Test
+    fun vocabWords_roundTripThroughNormalizers() {
+        // 每个词表词都能经归一通道回查到自己：UI 写下的值必可被萃取侧认回。
+        StyleVocab.IDENTITIES.forEach { word ->
+            assertEquals(word, StyleVocab.normalizeIdentity(word))
+        }
+        StyleVocab.CHAT_STYLES.forEach { word ->
+            assertEquals(word, StyleVocab.normalizeChatStyle(word))
+        }
+        StyleVocab.CLOSENESS_LEVELS.forEachIndexed { level, word ->
+            assertEquals(level, StyleVocab.closenessOf(word))
+            assertEquals(word, StyleVocab.closenessLabel(level))
+        }
+    }
+
+    @Test
+    fun vocabLists_noDuplicateEntries() {
+        assertEquals(StyleVocab.IDENTITIES.size, StyleVocab.IDENTITIES.distinct().size)
+        assertEquals(StyleVocab.CHAT_STYLES.size, StyleVocab.CHAT_STYLES.distinct().size)
+        assertEquals(StyleVocab.CLOSENESS_LEVELS.size, StyleVocab.CLOSENESS_LEVELS.distinct().size)
+    }
 }

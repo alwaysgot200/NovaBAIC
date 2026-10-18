@@ -19,6 +19,8 @@
 
 package com.verlintas.baic2.floatball
 
+import com.verlintas.baic2.floatball.advisor.ContactNames
+
 /**
  * 实体判别（v10，UltraAdvisor v2.2 方案 §2.1）：SceneGate 判 CHAT 后回答
  * 「对方是谁」，输出三态——唯一对方名 → [Entity.Person]（命中查档案、未命中
@@ -44,13 +46,23 @@ internal object EntityResolver {
         data object None : Entity
     }
 
-    fun judge(screenBody: String?): Entity {
+    /**
+     * @param titleDisplayName 标题带显示名（L1/L2 窗口标题或 OCR 标题带，已过壳
+     *   标题过滤）：非空且与正文唯一发言人规范化不一致时降 [Entity.None]——
+     *   群内只有一人发言+我插话的形态标题实为群名，宁可孤立不错建档（F7）。
+     */
+    fun judge(screenBody: String?, titleDisplayName: String? = null): Entity {
         if (screenBody.isNullOrBlank()) return Entity.None
         val (others, mine) = IncomingCue.speakerStatsOf(screenBody)
         // 多发言人 = 群聊形态：即使「我」没插上话也按群处理（群名由标题带补）。
         if (others.size >= 2) return Entity.Group
         val (name, count) = others.entries.firstOrNull() ?: return Entity.None
         // 单人 + 双方都有话（对方 ≥2 行且「我」现身）才判成「人」，单行冒名不足以建档。
-        return if (mine && count >= 2) Entity.Person(name) else Entity.None
+        if (!mine || count < 2) return Entity.None
+        val title = titleDisplayName?.trim().takeUnless { it.isNullOrBlank() }
+        if (title != null && ContactNames.normalize(title) != ContactNames.normalize(name)) {
+            return Entity.None
+        }
+        return Entity.Person(name)
     }
 }

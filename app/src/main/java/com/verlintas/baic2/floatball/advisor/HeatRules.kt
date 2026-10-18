@@ -44,8 +44,9 @@ object HeatRules {
     data class Signal(val text: String?, val gapMs: Long? = null)
 
     /**
-     * 计算本次感知增量；文本空白且 gap 不可得时返回 null（调用方跳过不记分）。
-     * 时延分档：&lt;5min +2（秒回）；&lt;2h +1；&lt;24h 0（日常节奏）；≥24h -2（久疏）。
+     * 计算本次感知增量；文本空白且 gap 不可得（含负 gap 时钟回拨，F6）时返回
+     * null（调用方跳过不记分）。时延分档：&lt;5min +2（秒回）；&lt;2h +1；
+     * &lt;24h 0（日常节奏）；≥24h -2（久疏）；负 gap 一律按不可得跳过。
      */
     fun delta(signal: Signal): Int? {
         var total = 0
@@ -60,7 +61,8 @@ object HeatRules {
             }
             if (text.contains('？') || text.contains('?')) total += 2
         }
-        signal.gapMs?.let { gap ->
+        // F6：负 gap 只可能来自时钟回拨——按信号不可得跳过，绝不落进「秒回」档。
+        signal.gapMs?.takeIf { it >= 0 }?.let { gap ->
             any = true
             total += when {
                 gap < 5L * 60 * 1000 -> 2

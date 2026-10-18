@@ -199,22 +199,9 @@
     <string name="float_persona_identity">身份类型</string>
     <string name="float_persona_chat_style">聊天风格</string>
     <string name="float_persona_closeness">亲疏等级</string>
-    <string name="float_persona_identity_leader">领导</string>
-    <string name="float_persona_identity_client">客户</string>
-    <string name="float_persona_identity_colleague">同事</string>
-    <string name="float_persona_identity_friend">朋友</string>
-    <string name="float_persona_identity_family">家人</string>
-    <string name="float_persona_identity_romance">暧昧对象</string>
-    <string name="float_persona_identity_other">其他</string>
-    <string name="float_persona_style_serious">严肃</string>
-    <string name="float_persona_style_easy">随和</string>
-    <string name="float_persona_style_humor">幽默</string>
-    <string name="float_persona_style_warm">热情</string>
-    <string name="float_persona_style_cold">冷淡</string>
-    <string name="float_persona_closeness_0">陌生</string>
-    <string name="float_persona_closeness_1">熟识</string>
-    <string name="float_persona_closeness_2">亲近</string>
-    <string name="float_persona_closeness_3">亲密</string>
+    <!-- F8：身份/风格/亲疏选项词已单一来源化到 StyleVocab 常量（AdvisorPersonaCard
+         直接引用词表，值=展示词），原 float_persona_identity_*/style_*/closeness_*
+         词值键随之移除，防双份手抄漂移。 -->
     <string name="float_persona_mine">我方侧面（我在这个关系里是谁）</string>
     <string name="float_persona_facet_add">添加标签</string>
     <string name="float_persona_facet_dialog_title">编辑我方侧面标签</string>

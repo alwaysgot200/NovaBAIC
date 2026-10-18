@@ -160,19 +160,24 @@ internal object FrameQuality {
      * OCR 文本相似度（字符二元组 Jaccard），用于连续模式丢弃重复内容。
      * 中文按字、英文按词均可被 2-gram 覆盖。
      */
-    fun textSimilarity(a: String, b: String): Double {
-        val left = shingles(a)
-        val right = shingles(b)
-        if (left.isEmpty() || right.isEmpty()) return 0.0
-        val intersection = left.count { right.contains(it) }
-        return intersection.toDouble() / (left.size + right.size - intersection).coerceAtLeast(1)
-    }
+    fun textSimilarity(a: String, b: String): Double = similarityOf(shingles(a), shingles(b))
 
-    private fun shingles(text: String): Set<String> {
+    /**
+     * 文本 2-gram 指纹（F2 预计算签名入口）：与多个候选比对时，调用方在循环外对
+     * 固定一侧只算一次签名，再经 [similarityOf] 复用，避免逐候选重复 shingle。
+     */
+    fun shingles(text: String): Set<String> {
         val compact = text.filterNot { it.isWhitespace() }.take(4_000)
         if (compact.length < 2) return emptySet()
         return buildSet {
             for (i in 0 until compact.length - 1) add(compact.substring(i, i + 2))
         }
+    }
+
+    /** 预计算签名的 Jaccard 相似度；任一侧空签名返回 0.0（与 [textSimilarity] 同口径）。 */
+    fun similarityOf(left: Set<String>, right: Set<String>): Double {
+        if (left.isEmpty() || right.isEmpty()) return 0.0
+        val intersection = left.count { right.contains(it) }
+        return intersection.toDouble() / (left.size + right.size - intersection).coerceAtLeast(1)
     }
 }

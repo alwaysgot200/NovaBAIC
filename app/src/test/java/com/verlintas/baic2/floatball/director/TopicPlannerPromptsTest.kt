@@ -153,4 +153,26 @@ class TopicPlannerPromptsTest {
         assertEquals(emptyList<String>(), TopicPlanner.decodeDirections("not-json"))
         assertEquals(emptyList<String>(), TopicPlanner.decodeDirections("{}"))
     }
+
+    // ── F1：周方向节流判定（companion 纯函数） ──────────────────────────
+
+    private val week = 7L * 24 * 60 * 60 * 1000
+
+    @Test
+    fun weeklyCycle_withinWindowSkipsLlm() {
+        // 周内（第 0/3/6.9 天）→ 同周期，复用既有方向跳过 LLM。
+        assertTrue(TopicPlanner.isWithinWeeklyCycle(0L, 0L))
+        assertTrue(TopicPlanner.isWithinWeeklyCycle(0L, 3 * week / 7))
+        assertTrue(TopicPlanner.isWithinWeeklyCycle(0L, week - 1))
+        // 恰满一周（默认 4h 一班检点最多 42 班）→ 视为新周期，重新规划。
+        assertEquals(false, TopicPlanner.isWithinWeeklyCycle(0L, week))
+        assertEquals(false, TopicPlanner.isWithinWeeklyCycle(0L, week * 3))
+    }
+
+    @Test
+    fun weeklyCycle_clockRollbackStaysWithinCycle() {
+        // 时钟回拨产生负差也视为同周期（宁可少规划一次，不做负窗口放行）。
+        assertTrue(TopicPlanner.isWithinWeeklyCycle(week, 0L))
+        assertTrue(TopicPlanner.isWithinWeeklyCycle(0L, -week))
+    }
 }

@@ -80,6 +80,26 @@ class HeatRulesTest {
         assertNull(HeatRules.delta(HeatRules.Signal(null, null)))
     }
 
+    // ── F6：时钟回拨负 gap 按信号不可得跳过 ─────────────────────────────
+
+    @Test
+    fun negativeGap_isTreatedAsMissingSignal() {
+        // 负 gap（时钟回拨）绝不落进「秒回」档：文本不可得时整体无信号 → null。
+        assertNull(HeatRules.delta(HeatRules.Signal(null, -MIN)))
+        assertNull(HeatRules.delta(HeatRules.Signal(null, -DAY)))
+        // 文本可得时只按文本档计分，时延档不参与（与 gap=null 同口径）。
+        assertEquals(
+            HeatRules.delta(HeatRules.Signal("在吗？")),
+            HeatRules.delta(HeatRules.Signal("在吗？", -MIN)),
+        )
+        assertEquals(
+            HeatRules.delta(HeatRules.Signal("好")),
+            HeatRules.delta(HeatRules.Signal("好", -DAY)),
+        )
+        // 对照：正值 gap 正常计分。
+        assertEquals(2, HeatRules.delta(HeatRules.Signal(null, 4 * MIN)))
+    }
+
     // ── 合计与夹逼 ─────────────────────────────────────────────────────
 
     @Test

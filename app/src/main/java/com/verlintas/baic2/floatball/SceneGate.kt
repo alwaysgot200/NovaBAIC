@@ -68,3 +68,35 @@ internal object SceneGate {
     private fun hasChatStructure(screenBody: String?): Boolean =
         !screenBody.isNullOrBlank() && IncomingCue.latestIncoming(screenBody) != null
 }
+
+/**
+ * UNCERTAIN 的轻 LLM 一问兜底（v10 方案 §1.3，F10 接线在 ScreenAdvisor 主链路）：
+ * IM 白名单命中但结构识别失败（截图时机不佳/a11y 噪声）时，以 ≤[MAX_TOKENS] tok
+ * 的一次判定问答补全场景分类——明确 yes 才按 CHAT 进联系人管线，no/超时/畸形
+ * 一律保守判 NON_CHAT（新版微信改版不致漏关联）。提示词与解析纯函数、JVM 可单测。
+ */
+internal object UncertainPrompts {
+
+    internal const val MAX_TOKENS = 100
+
+    /** 屏幕正文进 prompt 的长度上限（超长截断，判定界面形态足够）。 */
+    internal const val BODY_MAX_CHARS = 800
+
+    fun systemPrompt(): String =
+        "你是手机屏幕场景判定器。判断给定文本是否像一对一聊天界面（有对话双方的消息）。" +
+            "只回答 yes 或 no，不要输出任何其他字符。"
+
+    fun userPrompt(screenBody: String): String =
+        "以下是手机屏幕的全部文本：\n" +
+            screenBody.trim().take(BODY_MAX_CHARS) +
+            "\n该屏文本是否像一对一聊天界面？只回答 yes 或 no。"
+
+    /**
+     * 宽松但保守的解析：trim/小写后以 yes 开头（或恰为「是」）才判聊天；
+     * no/空白/超时截断/畸形一律 false（保守降级 NON_CHAT，绝不误进人设管线）。
+     */
+    fun isChat(raw: String?): Boolean {
+        val text = raw?.trim()?.lowercase() ?: return false
+        return text.startsWith("yes") || text == "是"
+    }
+}

@@ -91,28 +91,12 @@ internal fun AdvisorPersonaCard(
     var mergePicking by remember { mutableStateOf(false) }
     var mergeCandidate by remember { mutableStateOf<ContactProfileEntity?>(null) }
 
-    val identityOptions = listOf(
-        stringResource(R.string.float_persona_identity_leader),
-        stringResource(R.string.float_persona_identity_client),
-        stringResource(R.string.float_persona_identity_colleague),
-        stringResource(R.string.float_persona_identity_friend),
-        stringResource(R.string.float_persona_identity_family),
-        stringResource(R.string.float_persona_identity_romance),
-        stringResource(R.string.float_persona_identity_other),
-    )
-    val styleOptions = listOf(
-        stringResource(R.string.float_persona_style_serious),
-        stringResource(R.string.float_persona_style_easy),
-        stringResource(R.string.float_persona_style_humor),
-        stringResource(R.string.float_persona_style_warm),
-        stringResource(R.string.float_persona_style_cold),
-    )
-    val closenessOptions = listOf(
-        0 to stringResource(R.string.float_persona_closeness_0),
-        1 to stringResource(R.string.float_persona_closeness_1),
-        2 to stringResource(R.string.float_persona_closeness_2),
-        3 to stringResource(R.string.float_persona_closeness_3),
-    )
+    // F8 单一事实来源：芯片选项数组直接引用 StyleVocab 词表常量（值=展示词=
+    // 判定词，写库值必在词表内），杜绝「UI 存 strings.xml 中文值、判定侧比对
+    // StyleVocab 常量」的双份手抄漂移。
+    val identityOptions = StyleVocab.IDENTITIES
+    val styleOptions = StyleVocab.CHAT_STYLES
+    val closenessOptions = StyleVocab.CLOSENESS_LEVELS.mapIndexed { level, word -> level to word }
     // 我方侧面 facet 与合并差异 pending（§2.4/§2.5）：组合顶层解码，Surface 内
     // 区块与弹窗共用同一来源（profile Flow 写库后自动刷新）。V-C 起待确认列扩为
     // 通用通道（含 AI 萃取带入的 style 三标签待定值），decodePending 向后兼容旧数组。

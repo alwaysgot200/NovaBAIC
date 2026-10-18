@@ -921,8 +921,10 @@ class ScreenAdvisor @Inject constructor(
         // 顺带补 markIncomingAt（通知本身就是对方来信到达的最直接观测）。与连续
         // 模式差分路互斥不重复记：此后若屏幕再见到同文来信，会被上方去重拦住。
         runCatching {
+            // F6：时钟回拨产生的负 gap 按信号不可得跳过（null）。
             val gap = contactDirectory.lastIncomingAt(conversationId)
                 ?.let { System.currentTimeMillis() - it }
+                ?.takeIf { it >= 0 }
             HeatRules.delta(HeatRules.Signal(body, gap))?.let { d ->
                 contactDirectory.recordHeatDelta(contact.contactId, d)
             }
@@ -1068,12 +1070,20 @@ class ScreenAdvisor @Inject constructor(
         val contact = if (isScreenTurn) {
             when (SceneGate.classify(perceiver.foregroundPackage(), screenBody)) {
                 SceneGate.Scene.Chat -> resolveContact(titleFallback, screenBody)
-                SceneGate.Scene.NonChat, SceneGate.Scene.Uncertain -> {
-                    // TODO(V-A-2): UNCERTAIN 的轻 LLM 兜底 hook（AuxiliaryTasks
-                    // ≤80tok「这是聊天界面吗」，命中 CHAT 再回 resolveContact）；
-                    // 本版保守判 NON_CHAT，宁可不关联也不错关联。
+                SceneGate.Scene.NonChat -> {
                     nonChat = true
                     null
+                }
+                SceneGate.Scene.Uncertain -> {
+                    // F10（V-A-2 兜底）：IM 白名单命中但结构识别失败时补一次轻 LLM
+                    // 判定（≤100tok、8s 严格限时、失败立即保守降级不停等），明确
+                    // yes 才进联系人管线；no/超时/畸形一律 NON_CHAT 保守。
+                    if (confirmUncertainChat(screenBody)) {
+                        resolveContact(titleFallback, screenBody)
+                    } else {
+                        nonChat = true
+                        null
+                    }
                 }
             }
         } else {
@@ -1111,15 +1121,38 @@ class ScreenAdvisor @Inject constructor(
     }
 
     /**
+     * UNCERTAIN 场景的轻 LLM 一问（F10）：主链路上用户在等待，[UNCERTAIN_LLM_TIMEOUT_MS]
+     * 严格限时 + runCatching 兜底，配置缺失/超时/网络失败/畸形回答一律立即保守
+     * 降级 NON_CHAT，绝不阻塞回合；触发面仅限 IM 白名单包 + 结构识别失败。
+     */
+    private suspend fun confirmUncertainChat(screenBody: String?): Boolean {
+        if (screenBody.isNullOrBlank()) return false
+        val config = runCatching { agentRepository.resolveConfig(null) }.getOrNull() ?: return false
+        val raw = runCatching {
+            withTimeout(UNCERTAIN_LLM_TIMEOUT_MS) {
+                auxiliaryTasks.complete(
+                    config = config,
+                    systemPrompt = UncertainPrompts.systemPrompt(),
+                    userPrompt = UncertainPrompts.userPrompt(screenBody),
+                    maxTokens = UncertainPrompts.MAX_TOKENS,
+                    temperature = 0.0,
+                )
+            }
+        }.getOrNull() ?: return false
+        return UncertainPrompts.isChat(raw)
+    }
+
+    /**
      * 联系人识别（v3 §11.1 + T11 + v10 §2.1）：仅 [SceneGate.Scene.Chat] 后调用。
      * L1 = 前台包名 + a11y 窗口标题；L1 未命中且 [titleFallback] 非空（像素路径
      * OCR 标题带，L2）时用标题带再试一次。两级标题均先过壳标题过滤（浏览器等
      * 非 IM 应用的窗口标题是应用自身名，如 Chrome 的「Chrome」——既会误命中
      * 同名键档案，也会被懒建成 Stub）。正文级先走 [EntityResolver] 三态：
      * 多发言人 → 群（群名取标题带，无标题孤立返回，绝不据正文建个人 stub）；
-     * 否则标题两级未命中时以正文唯一发言人兜底——此处 allowStub=true 为方案
-     * §2.1 自动建档唯一入口（调用前已由 IM 白名单 + 聊天结构双重确认，且建档
-     * 即双建 self_personas）。规范化、决策表与懒创建由 [ContactDirectory]
+     * 否则标题两级未命中时以正文唯一发言人兜底——allowStub 仅在 judge 判
+     * [EntityResolver.Entity.Person]（结构确认且标题与发言人不冲突，F7）时开，
+     * 为方案 §2.1 自动建档唯一入口（调用前已由 IM 白名单 + 聊天结构双重确认，
+     * 且建档即双建 self_personas）。规范化、决策表与懒创建由 [ContactDirectory]
      * 实现侧完成；任何失败按未绑定处理，不阻断参谋。
      */
     private suspend fun resolveContact(
@@ -1132,8 +1165,11 @@ class ScreenAdvisor @Inject constructor(
         val l1 = perceiver.windowTitle()?.takeUnless { isShellTitle(pkg, it) }
         val l2 = titleFallback?.takeUnless { it.isBlank() || isShellTitle(pkg, it) }
         // 实体判别（v10 §2.1）：正文多发言人先判群——群标题若先走个人
-        // resolve 会误建个人 stub，故 Group 分支优先。
-        if (EntityResolver.judge(screenBody) is EntityResolver.Entity.Group) {
+        // resolve 会误建个人 stub，故 Group 分支优先。F7：judge 携标题带判别，
+        // 标题显示名与正文唯一发言人不一致（群内一人发言+我插话形态）降 NONE，
+        // 下游 allowStub 随之门禁——宁可孤立不错建档。
+        val entity = EntityResolver.judge(screenBody, l1 ?: l2)
+        if (entity is EntityResolver.Entity.Group) {
             val groupTitle = l1 ?: l2 ?: return null
             return runCatching { contactDirectory.resolveGroup(pkg, groupTitle) }.getOrNull()
         }
@@ -1146,7 +1182,7 @@ class ScreenAdvisor @Inject constructor(
         if (screenBody.isNullOrBlank()) return null
         val speaker = IncomingCue.speakerOf(screenBody) ?: return null
         return runCatching {
-            contactDirectory.resolve(pkg, speaker, allowStub = true)
+            contactDirectory.resolve(pkg, speaker, allowStub = entity is EntityResolver.Entity.Person)
         }.getOrNull()
     }
 
@@ -1243,15 +1279,19 @@ class ScreenAdvisor @Inject constructor(
         if (bound.isEmpty()) return contactDirectory.createConversationFor(contact)
         val body = screenBody?.takeIf { it.isNotBlank() } ?: return reuseNewestAlive(bound)
             ?: contactDirectory.createConversationFor(contact)
+        // F2 性能护栏：回看比对截最近 [MAX_BOUND_CANDIDATES] 个会话（bound 新→旧），
+        // 当前屏 2-gram 指纹循环外只算一次、经 similarityOf 复用——此前逐候选重复
+        // shingle 当前屏且全绑定会话各打一次 Room 查询。
+        val bodyShingles = FrameQuality.shingles(body)
         val scored = buildList {
-            for (candidate in bound) {
+            for (candidate in bound.take(MAX_BOUND_CANDIDATES)) {
                 // 会话可能已被用户删除：取不到最近屏幕消息就跳过（消息随会话删）。
                 val last = historyGateway.latestScreenBody(candidate.conversationId, screenLabel)
                     ?: continue
                 add(
                     SessionReuse.Scored(
                         candidate.conversationId,
-                        FrameQuality.textSimilarity(body, stripScreenLabel(last)),
+                        FrameQuality.similarityOf(bodyShingles, FrameQuality.shingles(stripScreenLabel(last))),
                     ),
                 )
             }
@@ -1467,8 +1507,10 @@ class ScreenAdvisor @Inject constructor(
                     // gap=距上次感知到对方来信的间隔；增量经 HeatRules 算出后落分，
                     // 共享会话（contact=null）只补时间戳不记分。先读后写防自污染。
                     if (contact != null) {
+                        // F6：时钟回拨产生的负 gap 按信号不可得跳过（null）。
                         val gap = contactDirectory.lastIncomingAt(conversationId)
                             ?.let { System.currentTimeMillis() - it }
+                            ?.takeIf { it >= 0 }
                         HeatRules.delta(HeatRules.Signal(incoming, gap))?.let { d ->
                             contactDirectory.recordHeatDelta(contact.contactId, d)
                         }
@@ -2762,6 +2804,15 @@ class ScreenAdvisor @Inject constructor(
          * 场景延续」，复用会话；低于则另起新会话（旧会话保留可回看）。
          */
         const val SHARED_REUSE_SIMILARITY = 0.45f
+
+        /**
+         * F2：绑定联系人会话回看比对的候选上限（bound 新→旧截最近 N 个），
+         * 兼顾「同联系人连续使用不新建」验收与逐候选 Room 查询成本。
+         */
+        const val MAX_BOUND_CANDIDATES = 10
+
+        /** F10：UNCERTAIN 轻 LLM 一问的严格限时（主链路用户在等，超时立即保守降级）。 */
+        const val UNCERTAIN_LLM_TIMEOUT_MS = 8_000L
 
         /**
          * 共享会话回看窗口：当前偏好会话不相似时，再向最近这么多条跨会话

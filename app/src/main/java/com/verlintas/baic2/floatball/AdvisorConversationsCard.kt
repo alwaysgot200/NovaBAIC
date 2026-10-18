@@ -197,6 +197,11 @@ internal fun AdvisorConversationsCard(
     }
 }
 
+/** 时间格式器静态化（F11）：原实现每条目 new 三个 DateTimeFormatter，提为文件级单例。 */
+private val TIME_FORMAT_TODAY: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+private val TIME_FORMAT_THIS_YEAR: DateTimeFormatter = DateTimeFormatter.ofPattern("M月d日")
+private val TIME_FORMAT_WITH_YEAR: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy年M月d日")
+
 /** 最后活跃时间：今天给时分，今年给月日，更早带年份。 */
 private fun formatConversationTime(at: Long): String {
     if (at <= 0L) return ""
@@ -204,8 +209,8 @@ private fun formatConversationTime(at: Long): String {
     val date = zoned.toLocalDate()
     val today = LocalDate.now(ZoneId.systemDefault())
     return when {
-        date == today -> DateTimeFormatter.ofPattern("HH:mm").format(zoned)
-        date.year == today.year -> DateTimeFormatter.ofPattern("M月d日").format(date)
-        else -> DateTimeFormatter.ofPattern("yyyy年M月d日").format(date)
+        date == today -> TIME_FORMAT_TODAY.format(zoned)
+        date.year == today.year -> TIME_FORMAT_THIS_YEAR.format(date)
+        else -> TIME_FORMAT_WITH_YEAR.format(date)
     }
 }

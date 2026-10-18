@@ -169,10 +169,12 @@ class ProactiveCheckpoint @Inject constructor(
                 "triggers=${summary.triggersSeen.size}/4 total=${summary.total}",
         )
 
-        // 2) SCHEDULED：先落 scheduled/brief 决策行（四触发源可回放），再周报惰性
-        //    刷新（自带 7 天节流 + 无数据不调 LLM；节流在执行面，决策面每检点
-        //    必记——与 PROACTIVE 分支同口径，频控/对账消费的是决策行），
-        //    最后 Planner 慢车道产出下周期废话方向（V-C §4.4，自守 engagement 门）。
+        // 2) SCHEDULED：先落 scheduled/brief 决策行（四触发源可回放），再 Planner
+        //    慢车道产出下周期废话方向（V-C §4.4，自守 engagement 门），最后周报
+        //    惰性刷新（自带 7 天节流 + 无数据不调 LLM；节流在执行面，决策面每检点
+        //    必记——与 PROACTIVE 分支同口径，频控/对账消费的是决策行）。
+        //    顺序（F9）：Planner 先于周报——简报落库前会从 topic_plans 取最新
+        //    方向做 topicDirections 附加面，原「先周报后 Planner」新方向首周恒空。
         val weeklyContacts = mutableListOf<String>()
         runCatching { db.contactProfileDao().listAllAlive() }.getOrDefault(emptyList())
             .forEach { contact ->
@@ -180,11 +182,10 @@ class ProactiveCheckpoint @Inject constructor(
                     DirectorInput(trigger = DirectorTrigger.SCHEDULED, nowMs = now),
                     contactId = contact.id,
                 )
-                val brief = runCatching { briefs.refreshWeeklyIfStale(contact.id) }.getOrNull()
-                if (brief != null) weeklyContacts.add(contact.displayName)
-                // 方向规划挂周报之后（方案 §4.4）：失败静默（无方向退回四源选题）。
                 runCatching { topicPlanner.planWeekly(contact.id, now) }
                     .onFailure { Log.d(TAG, "topic plan failed: contact=${contact.id}", it) }
+                val brief = runCatching { briefs.refreshWeeklyIfStale(contact.id) }.getOrNull()
+                if (brief != null) weeklyContacts.add(contact.displayName)
             }
         if (weeklyContacts.isNotEmpty()) {
             postWeeklyNotification(weeklyContacts, summary.cellLine())

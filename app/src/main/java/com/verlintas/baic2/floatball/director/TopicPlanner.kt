@@ -62,6 +62,13 @@ class TopicPlanner @Inject constructor(
      * [nowMs] 为周检点时间；cycleStart 取当日零点（与周报口径对齐）。
      */
     suspend fun planWeekly(contactId: Long, nowMs: Long = System.currentTimeMillis()): List<String> {
+        // 周期节流（F1）：周内已有方向直接复用，跳过 LLM——周检点默认 4h 一班，
+        // 无节流则每个 proactive 联系人每天最多 6 次规划调用；口径与周报侧
+        // refreshWeeklyIfStale 的 7 天节流对齐。
+        val existing = runCatching { db.topicPlanDao().latest(contactId) }.getOrNull()
+        if (existing != null && isWithinWeeklyCycle(existing.cycleStart, nowMs)) {
+            return decodeDirections(existing.directionsJson)
+        }
         val profile = runCatching { db.contactProfileDao().findById(contactId) }.getOrNull()
             ?: return emptyList()
         // 维持度门：只有 proactive 档参与方向规划（reactive/mute 不耗 token）。
@@ -126,6 +133,16 @@ class TopicPlanner @Inject constructor(
 
         /** 已聊话题回看条数（与去重窗口外冷却判定的输入一致，读近 60 条台账）。 */
         private const val USED_MISSIONS = 60
+
+        /** 周方向节流窗口：与周报同周期（7 天）。 */
+        const val WEEKLY_CYCLE_MS = 7L * 24 * 60 * 60 * 1000
+
+        /**
+         * 周期节流判定（F1 纯函数）：[cycleStartMs] 距 [nowMs] 不足一周（含时钟
+         * 回拨产生的负差）即视为同周期，调用方跳过 LLM 复用既有方向。
+         */
+        fun isWithinWeeklyCycle(cycleStartMs: Long, nowMs: Long): Boolean =
+            nowMs - cycleStartMs < WEEKLY_CYCLE_MS
 
         /** 方向 JSON 数组解码（容忍畸形：非数组/解析失败一律空表，不抛）。 */
         fun decodeDirections(json: String?): List<String> {

@@ -90,10 +90,6 @@ interface ContactProfileDao {
     /** 维持度三档设置（v10，方案 §2.6）：画像页三态开关的第一手自动参与开关。 */
     @Query("UPDATE contact_profiles SET engagement = :engagement, updatedAt = :now WHERE id = :id")
     suspend fun setEngagement(id: Long, engagement: String, now: Long)
-
-    /** isGroup 手动切换（v10，方案 §1.4）：误判修正（把群标成人/把人标成群）。 */
-    @Query("UPDATE contact_profiles SET isGroup = :isGroup, updatedAt = :now WHERE id = :id")
-    suspend fun setGroupFlag(id: Long, isGroup: Boolean, now: Long)
 }
 
 /** 说话风格卡（v4）：全局卡 (my_default,0) 与按人卡 (contact,contactId) 各至多一行。 */
