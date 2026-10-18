@@ -563,6 +563,41 @@
     <string name="float_mission_signals">留意信号</string>
     <string name="float_mission_success">达成标志</string>
 
+    <!-- M2-a 起草档：通知监听后台代拟 + 起草通知 + 代拟条 + 设置组 -->
+    <string name="float_draft_listener_label">老参谋代拟回复</string>
+    <string name="float_draft_channel">老参谋代拟</string>
+    <string name="float_draft_notif_title">老参谋为【%1$s】代拟了一条回复</string>
+    <string name="float_draft_preview">代拟：%1$s</string>
+    <string name="float_draft_send">一键发送</string>
+    <string name="float_draft_edit">改后发送</string>
+    <string name="float_draft_editing_hint">改好了就点发送：%1$s</string>
+    <string name="float_draft_send_edited">发送编辑稿</string>
+    <string name="float_draft_edit_cancel">放弃编辑</string>
+    <string name="float_draft_copied">已复制到剪贴板，去聊天窗口粘贴发送</string>
+    <string name="float_draft_empty">草稿为空，先写点内容</string>
+    <string name="float_settings_draft_section">代拟回复（起草档）</string>
+    <string name="float_settings_draft">通知到达时后台代拟回复</string>
+    <string name="float_settings_draft_hint">匹配到已建档联系人后，老参谋在后台拟一条回复并发通知提醒；绝不自动发送，发送与否始终由你决定</string>
+    <string name="float_settings_perm_notification">通知读取权限（代拟回复的前提）</string>
+    <string name="float_settings_draft_packages_hint">仅处理微信、QQ、TIM、企业微信、钉钉、飞书、Telegram 的通知；未建档的联系人静默忽略，通知文本即取即用不落盘。</string>
+
+    <!-- M2-b 主动保温：周期检点 + 频控（ProactivePolicy / DirectorRoutes PROACTIVE 路） -->
+    <string name="float_settings_proactive_section">主动保温（检点档）</string>
+    <string name="float_settings_proactive">周期检点主动保温策略</string>
+    <string name="float_settings_proactive_hint">开启后每隔一段时间自动检点：对打开了「主动保温」的联系人按频控参数（每日上限/最小间隔/静默时段）后台拟一条保温开场并发起草通知；绝不自动发送，静默时段零打扰</string>
+    <string name="float_settings_proactive_interval">检点间隔</string>
+    <string name="float_proactive_card_title">主动保温</string>
+    <string name="float_proactive_card_hint">按下方频控参数，由老参谋定时主动发起保温闲聊草稿</string>
+    <string name="float_proactive_daily_cap">每日上限</string>
+    <string name="float_proactive_cap_value">%1$d 条</string>
+    <string name="float_proactive_min_gap">最小间隔</string>
+    <string name="float_proactive_gap_value">%1$d 小时</string>
+    <string name="float_proactive_quiet">静默时段</string>
+    <string name="float_proactive_quiet_value">%1$s ~ %2$s</string>
+    <string name="float_proactive_draft_notif_title">老参谋想主动聊聊【%1$s】</string>
+    <string name="float_proactive_weekly_notif_title">参谋周报已生成</string>
+    <string name="float_proactive_weekly_notif_text">%1$s 的周报已更新；近 7 天决策分布：%2$s</string>
+
     <!-- 品牌统一为「老参谋」：以下键覆盖上游库（device:impl / feature:settings）
          的同名资源。Android 资源合并中 app 优先级高于依赖库，无需改动上游文件；
          合并上游时若库侧文案演进，只需在此追加/调整覆盖值。 -->

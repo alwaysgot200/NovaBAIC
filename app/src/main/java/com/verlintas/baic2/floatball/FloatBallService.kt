@@ -27,6 +27,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -60,6 +62,7 @@ import com.verlintas.baic2.EXTRA_EXIT
 import com.verlintas.baic2.EXTRA_FROM_FLOAT
 import com.verlintas.baic2.MainActivity
 import com.verlintas.baic2.R
+import com.verlintas.baic2.floatball.director.AdvisorNotificationListener
 import com.verlintas.baic2.keepalive.KeepAliveManager
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -95,6 +98,10 @@ class FloatBallService : Service() {
 
     @Inject
     lateinit var keepAliveManager: KeepAliveManager
+
+    /** M2-b 主动保温检点：服务创建（含开机自启路径）时重挂周期闹钟。 */
+    @Inject
+    lateinit var proactiveCheckpoint: com.verlintas.baic2.floatball.director.ProactiveCheckpoint
 
     private enum class Mode { IDLE, ONESHOT, RECORDING }
 
@@ -162,6 +169,8 @@ class FloatBallService : Service() {
         startInForeground()
         keepAliveManager.onServiceCreated()
         showBall()
+        // M2-b：开机/服务重启后检点闹钟重挂（总闸关时内部自会撤销）。
+        proactiveCheckpoint.ensureScheduled()
         registerReceiver(
             screenOffReceiver,
             IntentFilter().apply {
@@ -306,6 +315,8 @@ class FloatBallService : Service() {
             // 免双击入口（通知栏自动化/测试）：与双击同一状态机路径。
             ACTION_START_RECORDING -> if (mode == Mode.IDLE && ball != null) startRecording()
             ACTION_STOP_RECORDING -> if (mode == Mode.RECORDING) stopRecording()
+            // M2-a 起草通知点开：分屏预览代拟稿，一键发送/改后发送（§8.1 N4）。
+            AdvisorNotificationListener.ACTION_SHOW_DRAFT -> handleShowDraft(intent)
         }
         // OneShot 的像素截屏期间严禁把球加回（会污染 OCR 帧），跳过兜底显示。
         val overlayIdle = ball == null && menuView == null && split == null
@@ -706,6 +717,7 @@ class FloatBallService : Service() {
             onAuto = { toast(R.string.float_split_auto_soon) },
             onSmalltalk = { screenAdvisor.requestSmalltalk() },
             inputCallbacks = inputCallbacks,
+            draftCallbacks = draftCallbacks,
         )
         panel.handle.setOnTouchListener(makeResizeListener())
 
@@ -771,6 +783,10 @@ class FloatBallService : Service() {
             strategyCallbacks,
         )
         inputHandle?.refresh()
+        // 面板重建后按当前草稿态恢复代拟条（通知点开/会话切换都会走重建）。
+        draftState?.let { st ->
+            FloatUi.renderDraftStrip(panel.draftStrip, st.editing, st.draft)
+        }
         // 打开分屏=用户开始阅读：未读冒泡立即消失；阅读期间的新回合实时可见，
         // 不再计未读（turnCompletions 收集侧以 split != null 抑制）。
         completionCount = 0
@@ -1073,8 +1089,118 @@ class FloatBallService : Service() {
         splitHeightBeforeIme = -1
         transcriptView = null
         inputHandle = null
+        draftState = null
         screenAdvisor.resetTransient()
         if (!keepBall) restoreBall()
+    }
+
+    // ------------------------------------------------- draft (M2-a 起草档)
+
+    /** 当前展示中的代拟草稿；null=面板处于普通态（代拟条隐藏）。 */
+    private data class DraftUi(
+        val draft: String,
+        val imPackage: String,
+        val conversationId: Long,
+        var editing: Boolean = false,
+        var priorInput: String = "",
+    )
+
+    private var draftState: DraftUi? = null
+
+    /** 代拟条两键：主键=一键发送/发送编辑稿；次键=改后发送/放弃编辑。 */
+    private val draftCallbacks = object : FloatUi.DraftStripCallbacks {
+        override fun onDraftPrimary() {
+            val state = draftState ?: return
+            val field = inputHandle?.field
+            val text = if (state.editing) {
+                field?.text?.toString()?.trim().orEmpty()
+            } else {
+                state.draft
+            }
+            if (text.isEmpty()) {
+                toast(R.string.float_draft_empty)
+                return
+            }
+            copyAndJump(text, state.imPackage)
+            exitDraftState()
+        }
+
+        override fun onDraftSecondary() {
+            val state = draftState ?: return
+            val field = inputHandle?.field
+            if (state.editing) {
+                // 放弃编辑：还原预填前输入框内容，回到草稿态。
+                field?.setText(state.priorInput)
+                state.editing = false
+                split?.let { FloatUi.renderDraftStrip(it.draftStrip, false, state.draft) }
+            } else {
+                // 改后发送：草稿预填进输入框可编辑，焦点呼出键盘。
+                state.priorInput = field?.text?.toString().orEmpty()
+                field?.setText(state.draft)
+                state.editing = true
+                split?.let { FloatUi.renderDraftStrip(it.draftStrip, true, state.draft) }
+                focusDraftInput()
+            }
+        }
+    }
+
+    /** 起草通知点开（方案 §8.1 N4）：切代拟会话 → 开分屏 → 草稿态渲染代拟条。 */
+    private fun handleShowDraft(intent: Intent?) {
+        val conversationId = intent?.getLongExtra(
+            AdvisorNotificationListener.EXTRA_CONVERSATION_ID, -1L,
+        ) ?: -1L
+        val contactId = intent?.getLongExtra(
+            AdvisorNotificationListener.EXTRA_CONTACT_ID, -1L,
+        ) ?: -1L
+        val contactName = intent?.getStringExtra(AdvisorNotificationListener.EXTRA_CONTACT_NAME)
+        val imPackage = intent?.getStringExtra(AdvisorNotificationListener.EXTRA_IM_PACKAGE)
+        val draft = intent?.getStringExtra(AdvisorNotificationListener.EXTRA_DRAFT)
+        if (conversationId <= 0 || contactId <= 0 ||
+            contactName.isNullOrBlank() || draft.isNullOrBlank()
+        ) {
+            return
+        }
+        screenAdvisor.showDraftConversation(conversationId, contactId, contactName)
+        ensureSplit()
+        draftState = DraftUi(draft, imPackage.orEmpty(), conversationId)
+        split?.let { FloatUi.renderDraftStrip(it.draftStrip, editing = false, text = draft) }
+    }
+
+    /**
+     * 一键发送（M2 人肉一键档，方案 §5.1 发送决策位）：草稿复制进剪贴板并
+     * 跳转对应 IM，粘贴发送由用户完成——绝不自动发出任何消息。
+     */
+    private fun copyAndJump(text: String, imPackage: String) {
+        runCatching {
+            val clipboard = getSystemService(ClipboardManager::class.java)
+            clipboard?.setPrimaryClip(
+                ClipData.newPlainText(getString(R.string.float_copy_desc), text),
+            )
+            toast(R.string.float_draft_copied)
+            if (imPackage.isNotBlank()) {
+                packageManager.getLaunchIntentForPackage(imPackage)?.let { launch ->
+                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(launch)
+                }
+            }
+        }.onFailure { android.util.Log.d("FloatBallService", "copyAndJump failed", it) }
+    }
+
+    /** 「改后发送」把焦点交回输入行：先聚焦窗口，落定后呼出键盘。 */
+    private fun focusDraftInput() {
+        val field = inputHandle?.field ?: return
+        setSplitWindowFocus(true)
+        field.postDelayed({
+            field.requestFocus()
+            val imm = getSystemService(InputMethodManager::class.java) ?: return@postDelayed
+            imm.showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
+        }, 150)
+    }
+
+    /** 发送（或会话关闭）后退出版本草稿态：代拟条隐藏，编辑残留一并清除。 */
+    private fun exitDraftState() {
+        draftState = null
+        split?.let { FloatUi.renderDraftStrip(it.draftStrip, editing = false, text = null) }
     }
 
     /**

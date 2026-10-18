@@ -431,6 +431,7 @@ internal object FloatUi {
         onAuto: () -> Unit,
         onSmalltalk: () -> Unit,
         inputCallbacks: InputBarCallbacks,
+        draftCallbacks: DraftStripCallbacks,
     ): SplitPanel {
         val transcriptContainer = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -538,6 +539,7 @@ internal object FloatUi {
 
         val inputBar = buildInputBar(context, inputCallbacks)
         val strategyStrip = buildStrategyStrip(context)
+        val draftStrip = buildDraftStrip(context, draftCallbacks)
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -556,9 +558,12 @@ internal object FloatUi {
             addView(statusBar)
             addView(strategyStrip.root)
             addView(transcriptContainer)
+            addView(draftStrip.root)
             addView(inputBar)
         }
-        return SplitPanel(root, header, transcriptContainer, inputBar, statusBar, chip, strategyStrip)
+        return SplitPanel(
+            root, header, transcriptContainer, inputBar, statusBar, chip, strategyStrip, draftStrip,
+        )
     }
 
     /** 分屏面板句柄：服务层操作所需的句柄集合。 */
@@ -570,6 +575,7 @@ internal object FloatUi {
         val statusBar: TextView,
         val directionChip: TextView,
         val strategyStrip: StrategyStrip,
+        val draftStrip: DraftStrip,
     )
 
     /** 策略条回调（P2）：轻确认三键与任务令展开；P3：分叉提议两键 + reroute 三件。服务层接线，视图不带业务。 */
@@ -1227,4 +1233,90 @@ internal object FloatUi {
 
     private fun dp(context: Context, value: Int): Int =
         (value * context.resources.displayMetrics.density).toInt()
+
+    // ── M2-a 起草档代拟条（方案 §8.1 N4）：草稿态两键 + 编辑态两键，整条默认 GONE ──
+
+    /** 代拟条回调：主键=一键发送/发送编辑稿，次键=改后发送/放弃编辑。服务层接线。 */
+    interface DraftStripCallbacks {
+        fun onDraftPrimary()
+        fun onDraftSecondary()
+    }
+
+    /** 代拟条视图句柄：服务层按草稿态/编辑态渲染，回调随渲染刷新。 */
+    class DraftStrip(
+        val root: LinearLayout,
+        val message: TextView,
+        val primaryButton: TextView,
+        val secondaryButton: TextView,
+    ) {
+        internal var callbacksRef: DraftStripCallbacks? = null
+    }
+
+    private fun buildDraftStrip(context: Context, callbacks: DraftStripCallbacks): DraftStrip {
+        val message = TextView(context).apply {
+            setTextColor(0xEEFFFFFF.toInt())
+            textSize = 13f
+            setPadding(dp(context, 16), dp(context, 5), dp(context, 12), dp(context, 2))
+        }
+        fun draftButton(filled: Boolean): TextView = TextView(context).apply {
+            setTextColor(if (filled) Color.WHITE else 0xCCFFFFFF.toInt())
+            textSize = 12.5f
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 12).toFloat()
+                setColor(if (filled) DIRECTION_CHIP_ON else 0x22FFFFFF)
+            }
+            setPadding(dp(context, 12), dp(context, 5), dp(context, 12), dp(context, 5))
+            isClickable = true
+            selectableBackground(this)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(context, 8) }
+        }
+        val primaryButton = draftButton(filled = true)
+        val secondaryButton = draftButton(filled = false)
+        val buttons = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(context, 12), dp(context, 4), dp(context, 12), dp(context, 6))
+            addView(primaryButton)
+            addView(secondaryButton)
+        }
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            background = GradientDrawable().apply { setColor(0x14FFFFFF) }
+            addView(message)
+            addView(buttons)
+        }
+        val strip = DraftStrip(root, message, primaryButton, secondaryButton)
+        primaryButton.setOnClickListener { strip.callbacksRef?.onDraftPrimary() }
+        secondaryButton.setOnClickListener { strip.callbacksRef?.onDraftSecondary() }
+        strip.callbacksRef = callbacks
+        return strip
+    }
+
+    /**
+     * 渲染代拟条：[text] 为 null 整条隐藏；[editing] 切草稿态（预览+一键发送/
+     * 改后发送）与编辑态（编辑提示+发送编辑稿/放弃编辑）两套文案。
+     */
+    fun renderDraftStrip(strip: DraftStrip, editing: Boolean, text: String?) {
+        if (text == null) {
+            strip.root.visibility = View.GONE
+            return
+        }
+        strip.root.visibility = View.VISIBLE
+        if (editing) {
+            strip.message.text = strip.message.context.getString(
+                R.string.float_draft_editing_hint,
+                text,
+            )
+            strip.primaryButton.text = strip.message.context.getString(R.string.float_draft_send_edited)
+            strip.secondaryButton.text = strip.message.context.getString(R.string.float_draft_edit_cancel)
+        } else {
+            strip.message.text = strip.message.context.getString(R.string.float_draft_preview, text)
+            strip.primaryButton.text = strip.message.context.getString(R.string.float_draft_send)
+            strip.secondaryButton.text = strip.message.context.getString(R.string.float_draft_edit)
+        }
+    }
 }

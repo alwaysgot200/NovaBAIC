@@ -84,6 +84,19 @@ class AdvisorPrefs @Inject constructor(
          * 2=增强（预留位，读到时回退为智能）。
          */
         val strategyMode: Int = STRATEGY_SMART,
+        /**
+         * M2-a 起草档总开关：通知监听到达聊天通知时后台代拟回复并发起草
+         * 通知。默认关闭（隐私优先：通知读取是强权限，须显式开启）。
+         */
+        val draftEnabled: Boolean = false,
+        /**
+         * M2-b 主动保温总闸（周期检点载体开关）：开启后按 [proactiveIntervalHours]
+         * 周期检点 proactive_policies，命中频控的联系人才产出保温草稿。
+         * 默认关闭（主动是稀缺资源，方案 §7.3）。
+         */
+        val proactiveEnabled: Boolean = false,
+        /** 周期检点间隔（小时），固定档位见 [PROACTIVE_INTERVAL_OPTIONS]。 */
+        val proactiveIntervalHours: Int = PROACTIVE_DEFAULT_INTERVAL,
     ) {
         /** OCR 层文本相似度阈值（FrameDiffEngine 用）：越严格阈值越高，越少发问。 */
         val ocrDedupSimilarity: Float
@@ -174,6 +187,10 @@ class AdvisorPrefs @Inject constructor(
                     STRATEGY_SMART
                 }
             },
+            draftEnabled = prefs.getBoolean(KEY_DRAFT_ENABLED, false),
+            proactiveEnabled = prefs.getBoolean(KEY_PROACTIVE_ENABLED, false),
+            proactiveIntervalHours = prefs.getInt(KEY_PROACTIVE_INTERVAL, PROACTIVE_DEFAULT_INTERVAL)
+                .let { if (it in PROACTIVE_INTERVAL_OPTIONS) it else PROACTIVE_DEFAULT_INTERVAL },
         )
 
     private val _tokenStats = MutableStateFlow(loadTokenStats())
@@ -286,6 +303,25 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(strategyMode = value) }
     }
 
+    /** M2-a 起草档总开关（通知监听随开关即时生效/停发）。 */
+    fun setDraftEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_DRAFT_ENABLED, enabled).apply()
+        _state.update { it.copy(draftEnabled = enabled) }
+    }
+
+    /** M2-b 主动保温总闸（调度侧随开关重挂/撤销闹钟，见 ProactiveCheckpoint）。 */
+    fun setProactiveEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PROACTIVE_ENABLED, enabled).apply()
+        _state.update { it.copy(proactiveEnabled = enabled) }
+    }
+
+    /** M2-b 周期检点间隔（固定档位，改后下次重挂闹钟即生效）。 */
+    fun setProactiveIntervalHours(hours: Int) {
+        val value = hours.takeIf { it in PROACTIVE_INTERVAL_OPTIONS } ?: PROACTIVE_DEFAULT_INTERVAL
+        prefs.edit().putInt(KEY_PROACTIVE_INTERVAL, value).apply()
+        _state.update { it.copy(proactiveIntervalHours = value) }
+    }
+
     /** 记录一个主参谋回合的实际用量（模型 Usage 事件；缺测按 0 计），累计持久化。 */
     fun recordTurnUsage(inputTokens: Long, outputTokens: Long) {
         val current = _tokenStats.value
@@ -377,6 +413,9 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_DEDUP_LEVEL = "dedup_level"
         const val KEY_SESSION_BUDGET = "session_token_budget"
         const val KEY_STRATEGY_MODE = "strategy_mode"
+        const val KEY_DRAFT_ENABLED = "draft_reply_enabled"
+        const val KEY_PROACTIVE_ENABLED = "proactive_enabled"
+        const val KEY_PROACTIVE_INTERVAL = "proactive_interval_hours"
         const val KEY_TOTAL_INPUT = "usage_total_input"
         const val KEY_TOTAL_OUTPUT = "usage_total_output"
         const val KEY_TOTAL_TURNS = "usage_total_turns"
@@ -411,6 +450,10 @@ class AdvisorPrefs @Inject constructor(
 
         /** 连续模式 token 预算档（0=不限）。 */
         val TOKEN_BUDGET_OPTIONS = setOf(0L, 20_000L, 50_000L, 100_000L)
+
+        /** M2-b 周期检点间隔档（小时）与默认值。 */
+        val PROACTIVE_INTERVAL_OPTIONS = setOf(1, 2, 4, 6, 12)
+        const val PROACTIVE_DEFAULT_INTERVAL = 4
 
         /** 策略模式档。 */
         const val STRATEGY_OFF = 0

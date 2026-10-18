@@ -39,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -144,6 +145,7 @@ internal fun GoalsTab(
     runtime: com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime,
     briefs: BriefCompiler,
     plays: ActionPlanner,
+    policies: com.verlintas.baic2.floatball.director.ProactivePolicyRepository,
     onOpenStrategyCard: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -292,6 +294,9 @@ internal fun GoalsTab(
 
     // ⑤.6 行动建议（M1 ActionPlanner：谋略库按阶段选条定制，draft 落库，用户采纳驱动）
     AdvisorPlaysCard(contactId = contactId, planner = plays)
+
+    // ⑤.7 主动保温（M2-b：联系人级 ProactivePolicy 开关与频控三参数，周期检点消费）
+    AdvisorProactiveCard(contactId = contactId, policies = policies)
 
     // ⑥ 策略卡入口
     Surface(
@@ -1304,6 +1309,196 @@ private fun actionStatusBadge(status: String): String = stringResource(
 
 /** 单条建议最多展示的步骤行数（落库上限 4 条，展示同额）。 */
 private const val ACTION_STEPS_SHOW = 4
+
+// ------------------------------------------------------------ proactive card（M2-b 主动保温）
+
+/** 每日主动上限预设（条）。 */
+private val PROACTIVE_CAP_OPTIONS = listOf(1, 2, 3)
+
+/** 两次主动最小间隔预设（小时）。 */
+private val PROACTIVE_GAP_OPTIONS = listOf(12, 24, 48, 72)
+
+/** 静默开始/结束预设（HH:mm，编辑层只出合法值，跨午夜由规则表判定）。 */
+private val PROACTIVE_QUIET_START_OPTIONS = listOf("20:00", "21:00", "22:00", "22:30", "23:30")
+private val PROACTIVE_QUIET_END_OPTIONS = listOf("06:00", "07:00", "08:00", "08:30", "09:30")
+
+/** 参数选择弹窗的目标项。 */
+private enum class ProactivePick { CAP, GAP, QUIET_START, QUIET_END }
+
+/**
+ * 主动保温卡（M2-b，方案 §6 表四 proactive_policies）：联系人级开关 +
+ * dailyCap/minGapHours/quiet 时段编辑（preferSmalltalk 固定 true 不出编辑位）。
+ * 周期检点每班读取此配置过 DirectorRoutes 五分支；「发不发」由频控确定性裁决，
+ * 产出只走起草通知，绝不自动发送。
+ */
+@Composable
+private fun AdvisorProactiveCard(
+    contactId: Long,
+    policies: com.verlintas.baic2.floatball.director.ProactivePolicyRepository,
+) {
+    val scope = rememberCoroutineScope()
+    val policy by policies.observeFor(contactId).collectAsStateWithLifecycle(initialValue = null)
+    var pick by remember { mutableStateOf<ProactivePick?>(null) }
+    val enabled = policy?.enabled == true
+
+    GoalCardSurface {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.float_proactive_card_title),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = stringResource(R.string.float_proactive_card_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { on ->
+                        scope.launch {
+                            policies.upsert(
+                                (policy ?: com.verlintas.baic2.floatball.advisor.data.ProactivePolicyEntity(
+                                    contactId = contactId,
+                                )).copy(enabled = on, updatedAt = System.currentTimeMillis()),
+                            )
+                        }
+                    },
+                )
+            }
+            if (enabled && policy != null) {
+                val current = policy!!
+                ProactiveOptionRow(
+                    label = stringResource(R.string.float_proactive_daily_cap),
+                    valueText = stringResource(R.string.float_proactive_cap_value, current.dailyCap),
+                ) { pick = ProactivePick.CAP }
+                ProactiveOptionRow(
+                    label = stringResource(R.string.float_proactive_min_gap),
+                    valueText = stringResource(
+                        R.string.float_proactive_gap_value,
+                        current.minGapHours,
+                    ),
+                ) { pick = ProactivePick.GAP }
+                ProactiveOptionRow(
+                    label = stringResource(R.string.float_proactive_quiet),
+                    valueText = stringResource(
+                        R.string.float_proactive_quiet_value,
+                        current.quietStart,
+                        current.quietEnd,
+                    ),
+                ) { pick = ProactivePick.QUIET_START }
+            }
+        }
+    }
+
+    pick?.let { target ->
+        val current = policy ?: return@let
+        val (title, options, selectedIndex) = when (target) {
+            ProactivePick.CAP -> Triple(
+                stringResource(R.string.float_proactive_daily_cap),
+                PROACTIVE_CAP_OPTIONS.map { stringResource(R.string.float_proactive_cap_value, it) },
+                PROACTIVE_CAP_OPTIONS.indexOf(current.dailyCap).takeIf { it >= 0 } ?: 0,
+            )
+            ProactivePick.GAP -> Triple(
+                stringResource(R.string.float_proactive_min_gap),
+                PROACTIVE_GAP_OPTIONS.map { stringResource(R.string.float_proactive_gap_value, it) },
+                PROACTIVE_GAP_OPTIONS.indexOf(current.minGapHours).takeIf { it >= 0 } ?: 0,
+            )
+            ProactivePick.QUIET_START -> Triple(
+                stringResource(R.string.float_proactive_quiet),
+                PROACTIVE_QUIET_START_OPTIONS,
+                PROACTIVE_QUIET_START_OPTIONS.indexOf(current.quietStart).takeIf { it >= 0 } ?: 0,
+            )
+            ProactivePick.QUIET_END -> Triple(
+                stringResource(R.string.float_proactive_quiet),
+                PROACTIVE_QUIET_END_OPTIONS,
+                PROACTIVE_QUIET_END_OPTIONS.indexOf(current.quietEnd).takeIf { it >= 0 } ?: 0,
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { pick = null },
+            title = { Text(title) },
+            text = {
+                Column {
+                    options.forEachIndexed { index, option ->
+                        Text(
+                            text = option,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (index == selectedIndex) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        policies.upsert(
+                                            when (target) {
+                                                ProactivePick.CAP -> current.copy(
+                                                    dailyCap = PROACTIVE_CAP_OPTIONS[index],
+                                                    updatedAt = System.currentTimeMillis(),
+                                                )
+                                                ProactivePick.GAP -> current.copy(
+                                                    minGapHours = PROACTIVE_GAP_OPTIONS[index],
+                                                    updatedAt = System.currentTimeMillis(),
+                                                )
+                                                ProactivePick.QUIET_START -> current.copy(
+                                                    quietStart = PROACTIVE_QUIET_START_OPTIONS[index],
+                                                    updatedAt = System.currentTimeMillis(),
+                                                )
+                                                ProactivePick.QUIET_END -> current.copy(
+                                                    quietEnd = PROACTIVE_QUIET_END_OPTIONS[index],
+                                                    updatedAt = System.currentTimeMillis(),
+                                                )
+                                            },
+                                        )
+                                    }
+                                    pick = if (target == ProactivePick.QUIET_START) {
+                                        ProactivePick.QUIET_END // 选完开始顺势接结束
+                                    } else {
+                                        null
+                                    }
+                                }
+                                .padding(vertical = 10.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { pick = null }) {
+                    Text(stringResource(R.string.float_profile_cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun ProactiveOptionRow(label: String, valueText: String, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = valueText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
 
 // ------------------------------------------------------------ shared goal UI
 

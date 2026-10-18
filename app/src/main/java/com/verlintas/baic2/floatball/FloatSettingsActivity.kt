@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -47,8 +48,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.core.app.NotificationManagerCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -102,6 +105,9 @@ class FloatSettingsActivity : ComponentActivity() {
     @Inject
     lateinit var strategyCards: StrategyCardRepository
 
+    @Inject
+    lateinit var proactiveCheckpoint: com.verlintas.baic2.floatball.director.ProactiveCheckpoint
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -137,6 +143,7 @@ class FloatSettingsActivity : ComponentActivity() {
                     balanceRepository = balanceRepository,
                     runtime = strategyRuntime,
                     strategyCards = strategyCards,
+                    proactiveCheckpoint = proactiveCheckpoint,
                     onClose = { finish() },
                 )
             }
@@ -151,6 +158,7 @@ private fun AdvisorSettingsScreen(
     balanceRepository: DeepSeekBalanceRepository,
     runtime: StrategyRuntime,
     strategyCards: StrategyCardRepository,
+    proactiveCheckpoint: com.verlintas.baic2.floatball.director.ProactiveCheckpoint,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
@@ -320,6 +328,112 @@ private fun AdvisorSettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onSurfaceVariant,
                 )
+                // M2-a 起草档：总开关 + 通知读取权限跳转 + 白名单说明。
+                SectionLabel(stringResource(R.string.float_settings_draft_section))
+                ToggleRow(
+                    title = stringResource(R.string.float_settings_draft),
+                    hint = stringResource(R.string.float_settings_draft_hint),
+                    checked = settings.draftEnabled,
+                    onChange = { prefs.setDraftEnabled(it) },
+                )
+                PermissionRow(
+                    title = stringResource(R.string.float_settings_perm_notification),
+                    granted = NotificationManagerCompat.getEnabledListenerPackages(context)
+                        .contains(context.packageName),
+                    actionLabel = stringResource(R.string.float_settings_go_enable),
+                ) {
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.float_settings_draft_packages_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                )
+                // M2-b 主动保温：总闸 + 检点间隔（联系人级参数在画像页目标 Tab）。
+                SectionLabel(stringResource(R.string.float_settings_proactive_section))
+                ToggleRow(
+                    title = stringResource(R.string.float_settings_proactive),
+                    hint = stringResource(R.string.float_settings_proactive_hint),
+                    checked = settings.proactiveEnabled,
+                    onChange = { on ->
+                        prefs.setProactiveEnabled(on)
+                        if (on) {
+                            proactiveCheckpoint.ensureScheduled()
+                        } else {
+                            proactiveCheckpoint.cancel()
+                        }
+                    },
+                )
+                var intervalDialog by remember { mutableStateOf(false) }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = scheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clickable { intervalDialog = true },
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.float_settings_proactive_interval),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.float_proactive_gap_value,
+                                settings.proactiveIntervalHours,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = scheme.primary,
+                        )
+                    }
+                }
+                if (intervalDialog) {
+                    val intervalOptions = AdvisorPrefs.PROACTIVE_INTERVAL_OPTIONS.sorted()
+                    AlertDialog(
+                        onDismissRequest = { intervalDialog = false },
+                        title = {
+                            Text(stringResource(R.string.float_settings_proactive_interval))
+                        },
+                        text = {
+                            Column {
+                                intervalOptions.forEach { hours ->
+                                    Text(
+                                        text = stringResource(
+                                            R.string.float_proactive_gap_value,
+                                            hours,
+                                        ),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = if (hours == settings.proactiveIntervalHours) {
+                                            scheme.primary
+                                        } else {
+                                            scheme.onSurface
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                prefs.setProactiveIntervalHours(hours)
+                                                intervalDialog = false
+                                            }
+                                            .padding(vertical = 10.dp),
+                                    )
+                                }
+                            }
+                        },
+                        confirmButton = {},
+                        dismissButton = {
+                            TextButton(onClick = { intervalDialog = false }) {
+                                Text(stringResource(R.string.float_profile_cancel))
+                            }
+                        },
+                    )
+                }
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = scheme.surfaceContainer,

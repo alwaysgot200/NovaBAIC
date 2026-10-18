@@ -609,6 +609,26 @@ interface DirectorLogDao {
             "(SELECT id FROM director_logs WHERE contactId = :contactId ORDER BY id DESC LIMIT :keep)",
     )
     suspend fun trimFor(contactId: Long, keep: Int = 200)
+
+    // ---- M2-b 频控与对账（追加式）：频控数据一律从台账查出，不加新表 ----
+
+    /** 当日主动计数：trigger+route 组合在 [sinceMs]（当日零点）之后的行数。 */
+    @Query(
+        "SELECT COUNT(*) FROM director_logs WHERE contactId = :contactId " +
+            "AND trigger = :trigger AND route = :route AND createdAt >= :sinceMs",
+    )
+    suspend fun countSince(contactId: Long, trigger: String, route: String, sinceMs: Long): Int
+
+    /** 上次主动时间：trigger+route 组合的最新一条时间戳；从未发生为 null。 */
+    @Query(
+        "SELECT MAX(createdAt) FROM director_logs WHERE contactId = :contactId " +
+            "AND trigger = :trigger AND route = :route",
+    )
+    suspend fun latestAt(contactId: Long, trigger: String, route: String): Long?
+
+    /** 对账消化（方案 §13.1）：近窗口全量台账，按触发源×路由分布统计。 */
+    @Query("SELECT * FROM director_logs WHERE createdAt >= :sinceMs ORDER BY id DESC LIMIT :limit")
+    suspend fun recentSince(sinceMs: Long, limit: Int = 500): List<DirectorLogEntity>
 }
 
 /** 行动建议 DAO（v7，M1 ActionPlanner 读写）：插入 / 状态流转 / 草稿与最近列表。 */
@@ -654,4 +674,13 @@ interface ProactivePolicyDao {
 
     @Query("SELECT * FROM proactive_policies WHERE contactId = :contactId")
     suspend fun forContact(contactId: Long): ProactivePolicyEntity?
+
+    // ---- M2-b（追加式）：检点枚举 + 设置页观察 ----
+
+    /** 全部已启用的主动策略（周期检点逐个过频控规则）。 */
+    @Query("SELECT * FROM proactive_policies WHERE enabled = 1")
+    suspend fun listEnabled(): List<ProactivePolicyEntity>
+
+    @Query("SELECT * FROM proactive_policies WHERE contactId = :contactId")
+    fun observeFor(contactId: Long): Flow<ProactivePolicyEntity?>
 }

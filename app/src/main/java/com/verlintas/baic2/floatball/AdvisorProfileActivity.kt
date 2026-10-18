@@ -157,6 +157,9 @@ class AdvisorProfileActivity : ComponentActivity() {
     @Inject
     lateinit var actionPlanner: com.verlintas.baic2.floatball.director.ActionPlanner
 
+    @Inject
+    lateinit var proactivePolicies: com.verlintas.baic2.floatball.director.ProactivePolicyRepository
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -480,6 +483,7 @@ private fun ContactDetailScreen(
                 runtime = activity.strategyRuntime,
                 briefs = activity.briefCompiler,
                 plays = activity.actionPlanner,
+                policies = activity.proactivePolicies,
                 onOpenStrategyCard = {
                     context.startActivity(
                         android.content.Intent(context, StrategyCardActivity::class.java)

@@ -31,6 +31,8 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- M2-a 起草档：通知监听（BIND 由系统授予，非运行时权限） -->
+    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -160,6 +162,27 @@
             android:name=".keepalive.KeepAliveSettingsActivity"
             android:exported="false"
             android:label="@string/float_keepalive_title" />
+
+        <!-- M2-a 起草档：聊天通知监听（仅白名单 IM、未建档联系人静默忽略） -->
+        <service
+            android:name=".floatball.director.AdvisorNotificationListener"
+            android:exported="false"
+            android:label="@string/float_draft_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- M2-b 主动保温：周期检点闹钟（应用内事件，不导出；开机重挂经 FloatBallService.onCreate） -->
+        <receiver
+            android:name=".floatball.director.ProactiveCheckpointReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.verlintas.baic2.floatball.action.PROACTIVE_TICK" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
