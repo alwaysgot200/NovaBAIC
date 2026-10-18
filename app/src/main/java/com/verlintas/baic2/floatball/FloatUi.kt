@@ -429,6 +429,7 @@ internal object FloatUi {
         onClose: () -> Unit,
         onDirection: () -> Unit,
         onAuto: () -> Unit,
+        onSmalltalk: () -> Unit,
         inputCallbacks: InputBarCallbacks,
     ): SplitPanel {
         val transcriptContainer = FrameLayout(context).apply {
@@ -508,6 +509,14 @@ internal object FloatUi {
 
             addView(View(context).apply {
                 layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+            })
+            // M1 保温闲聊手动入口：出一条开场草稿到分屏，绝不自动发送。
+            addView(TextView(context).apply {
+                text = context.getString(R.string.float_split_smalltalk)
+                setTextColor(0xB3FFFFFF.toInt())
+                textSize = 12.5f
+                setPadding(dp(context, 8), dp(context, 4), dp(context, 4), dp(context, 4))
+                setOnClickListener { onSmalltalk() }
             })
             addView(TextView(context).apply {
                 text = context.getString(R.string.float_split_auto)

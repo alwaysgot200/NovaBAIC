@@ -35,8 +35,10 @@ class DirectorRoutesTest {
         failStreak: Int = 0,
         retreats: Int = 0,
         lastIncomingAtMs: Long? = 1_000L,
+        requestSmalltalk: Boolean = false,
     ) = DirectorInput(
         trigger = trigger,
+        requestSmalltalk = requestSmalltalk,
         failStreak = failStreak,
         consecutiveRetreats = retreats,
         lastIncomingAtMs = lastIncomingAtMs,
@@ -59,6 +61,23 @@ class DirectorRoutesTest {
         assertEquals(DirectorRoute.REPLY, d.route)
         assertEquals("manual_default", d.reason)
         assertFalse(d.replanHint)
+    }
+
+    // ── M1：分屏「来点闲聊」手动保温入口 ─────────────────────────────────
+
+    @Test
+    fun manualSmalltalkEntry_routesSmallTalk() {
+        val d = DirectorRoutes.decide(input(DirectorTrigger.MANUAL, requestSmalltalk = true))
+        assertEquals(DirectorRoute.SMALL_TALK, d.route)
+        assertEquals("manual_smalltalk_entry", d.reason)
+        assertFalse(d.replanHint)
+    }
+
+    @Test
+    fun requestSmalltalk_onlyAffectsManualTrigger() {
+        val d = DirectorRoutes.decide(input(DirectorTrigger.INCOMING, requestSmalltalk = true))
+        assertEquals(DirectorRoute.REPLY, d.route)
+        assertEquals("incoming_default", d.reason)
     }
 
     @Test

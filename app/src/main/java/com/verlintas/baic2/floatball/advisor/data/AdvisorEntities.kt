@@ -251,12 +251,24 @@ const val CARD_DRAFT = "draft"
 const val CARD_CONFIRMED = "confirmed"
 const val CARD_ARCHIVED = "archived"
 
-/** talk_missions.result：待裁 / 推进 / 维持 / 倒退 / 未采纳。 */
+/** talk_missions.result：待裁 / 推进 / 维持 / 倒退 / 未采纳 / 保温信息回合。 */
 const val MISSION_PENDING = "pending"
 const val MISSION_ADVANCED = "advanced"
 const val MISSION_HELD = "held"
 const val MISSION_REGRESSED = "regressed"
 const val MISSION_IGNORED = "ignored"
+
+/**
+ * M1 保温闲聊回合的任务令终态（方案 D4）：计入台账（话题指纹去重依赖它）
+ * 但永不 pending、不参与阶段/目标裁决——Judge 见此标记直接豁免 settle。
+ */
+const val MISSION_INFORMATIONAL = "informational"
+
+/**
+ * 保温任务令文本前缀（M1，方案 D4）：`warm_chat|<话题>|<模型任务令>`。
+ * 回放区分与指纹解码据此识别；与 [MISSION_INFORMATIONAL] 成对使用。
+ */
+const val WARM_CHAT_MISSION_PREFIX = "warm_chat|"
 
 /**
  * 三级目标（v5，方案 §4/§6.5）：L3 远期愿景 / L2 中期成果 / L1 近期目标，同表用 [horizon] 区分、
@@ -416,9 +428,12 @@ const val TRIGGER_PROACTIVE = "proactive"
 const val TRIGGER_SCHEDULED = "scheduled"
 const val TRIGGER_MANUAL = "manual"
 
-/** director_logs.route：reply=现有主链路；guide=推进引导；smalltalk=保温闲聊；replan_hint/action_hint=建议条；brief=简报；noop=不动。 */
+/**
+ * director_logs.route：reply=现有主链路；smalltalk=保温闲聊；replan_hint/action_hint=建议条；
+ * brief=简报；noop=不动。guide 已按 v2 方案 D6 移出路由表（推进意图 T2 后才产生，
+ * Director 前置拿不到）；历史台账行中的 guide 值仅作历史记录保留。
+ */
 const val ROUTE_REPLY = "reply"
-const val ROUTE_GUIDE = "guide"
 const val ROUTE_SMALL_TALK = "smalltalk"
 const val ROUTE_REPLAN_HINT = "replan_hint"
 const val ROUTE_ACTION_HINT = "action_hint"

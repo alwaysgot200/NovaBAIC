@@ -1,0 +1,235 @@
+/*
+ * Copyright (C) 2026 Verlintas
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of BetterAIChat2.
+ *
+ * BetterAIChat2 is free software: you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * BetterAIChat2 is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+ * A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.verlintas.baic2.floatball.director
+
+import com.verlintas.baic2.floatball.advisor.data.WARM_CHAT_MISSION_PREFIX
+import kotlinx.serialization.Serializable
+
+/**
+ * 素材三源（方案 §7.2）。枚举声明顺序即选题优先级：对方画像钩子（最贴合
+ * 对方、最易被接住）＞ 共同经历（关系专属）＞ 种子库（中庸兜底）。
+ */
+enum class TopicSource { PROFILE_HOOK, SHARED_EXPERIENCE, SEED_BANK }
+
+/** 保温话题种子（assets/advisor/topic_seeds.json 单条，方案 §6 静态资产）。 */
+@Serializable
+data class TopicSeed(
+    val topic: String = "",
+    /** 切入角度：给 LLM 的"怎么聊"提示；空 = 由模型按语境自定。 */
+    val angle: String = "",
+    /** 素材类型标签（饮食/兴趣/日常…），与对方画像 tags 的命中数作同源内加权。 */
+    val tags: List<String> = emptyList(),
+    /** 话题深度：1=浅层（兴趣/见闻）2=中层（经历/观点）3=深层（个人往事/情感）。 */
+    val depth: Int = TopicEngine.DEPTH_SHALLOW,
+)
+
+/** 种子库文件根结构（照 scenario_packs 惯例带外壳，便于后续扩展元字段）。 */
+@Serializable
+data class TopicSeedBank(val seeds: List<TopicSeed> = emptyList())
+
+/**
+ * 保温选题纯函数引擎（M1 方案 §7.2，零 LLM、零 Android 依赖，JVM 可单测）。
+ *
+ * 约束：LLM 只负责"把选题聊活"，"选什么题"由本引擎确定性裁决——同输入恒同
+ * 输出（无随机、不读时钟，时间一律经 [Materials.nowMs] 注入）。硬规则：
+ * ①话题指纹去重（近 [DEDUP_WINDOW] 条已用不重复）；②同题冷却（[COOLDOWN_MS]
+ * 内不复用，覆盖去重窗口之外的慢频率联系人）；③阶段门控（深度超过
+ * [Materials.stageDepth] 的话题不投喂——弱联系只碰浅层）。全部候选被滤尽
+ * 时逐级放宽（先放冷却、再放去重，兜底取"最久未用"），保证手动入口在题库
+ * 见底时仍能出题而非空转；时事禁令不在此处（D3 属提示词约束，见调用方）。
+ */
+object TopicEngine {
+
+    /** 浅层：兴趣/见闻/日常，任何阶段可用。 */
+    const val DEPTH_SHALLOW = 1
+
+    /** 中层：经历/观点，舒适度建立后才碰。 */
+    const val DEPTH_MEDIUM = 2
+
+    /** 深层：个人往事/情感话题，仅熟络期。 */
+    const val DEPTH_DEEP = 3
+
+    /** 指纹去重窗口（条）：近期 N 条任务令内用过的话题不再重复（方案：读近 60 条台账）。 */
+    const val DEDUP_WINDOW = 20
+
+    /** 同一话题冷却期：去重窗口之外的"同题最短间隔"（慢频率联系人场景）。 */
+    const val COOLDOWN_MS = 7L * 24 * 60 * 60 * 1000
+
+    /** 画像钩子/共同经历参与候选的条数上限（防极端画像把提示词撑爆）。 */
+    const val MAX_HOOKS = 6
+    const val MAX_EXPERIENCES = 6
+
+    /** 话题文本长度上限：钩子/经历源自自由文本，超长截断保持"话题"粒度。 */
+    const val MAX_TOPIC_CHARS = 40
+
+    /** 已用话题记录：[fingerprint] 为 [fingerprintOf] 规范化结果；列表契约 = 新→旧。 */
+    data class UsedTopic(val fingerprint: String, val usedAtMs: Long)
+
+    /**
+     * 选题输入（三源 + 门控原料）。[usedTopics] 由调用方从 talk_missions
+     * 台账解码（新→旧，上限 60 条）；[stageDepth] 用 [stageDepthOf] 从站码换算。
+     */
+    data class Materials(
+        val profileHooks: List<String> = emptyList(),
+        val interestTags: Set<String> = emptySet(),
+        val sharedExperiences: List<String> = emptyList(),
+        val seeds: List<TopicSeed> = emptyList(),
+        val usedTopics: List<UsedTopic> = emptyList(),
+        val stageDepth: Int = DEPTH_SHALLOW,
+        val nowMs: Long = 0L,
+    )
+
+    /** 选题产物：拼进保温提示词段与 missionHint（"话题候选=X（角度=Y），可弃用"）。 */
+    data class TopicPick(
+        val source: TopicSource,
+        val topic: String,
+        val angle: String,
+    )
+
+    /** 候选（内部形态）：ordinal 为同源内原始顺序，保证排序全序、结果确定。 */
+    private data class Candidate(
+        val source: TopicSource,
+        val topic: String,
+        val angle: String,
+        val tagMatches: Int,
+        val depth: Int,
+        val ordinal: Int,
+        val fingerprint: String,
+    )
+
+    /**
+     * 确定性选题。排序键（宽松档额外前置"最久未用"）：源优先级 → 标签命中数
+     * 降序 → 同源原始顺序。返回 null 仅当阶段门控后无任何候选。
+     */
+    fun select(materials: Materials): TopicPick? {
+        val candidates = candidatesOf(materials)
+        if (candidates.isEmpty()) return null
+        val nowMs = materials.nowMs
+
+        val window = materials.usedTopics.asSequence().take(DEDUP_WINDOW)
+            .map { it.fingerprint }.toHashSet()
+        val lastUsedAt = HashMap<String, Long>()
+        materials.usedTopics.forEach { used ->
+            val prev = lastUsedAt[used.fingerprint]
+            if (prev == null || used.usedAtMs > prev) lastUsedAt[used.fingerprint] = used.usedAtMs
+        }
+
+        // 逐级放宽：严格（去重+冷却）→ 仅去重 → 全放开（取最久未用）。
+        val strict = candidates.filter { c ->
+            c.fingerprint !in window && (lastUsedAt[c.fingerprint]?.let { nowMs - it >= COOLDOWN_MS } ?: true)
+        }
+        val dedupOnly = candidates.filter { c -> c.fingerprint !in window }
+        val (pool, preferOldest) = when {
+            strict.isNotEmpty() -> strict to false
+            dedupOnly.isNotEmpty() -> dedupOnly to false
+            else -> candidates to true
+        }
+        val pick = pool.sortedWith(
+            compareBy(
+                { if (preferOldest) lastUsedAt[it.fingerprint] ?: 0L else 0L },
+                { it.source.ordinal },
+                { -it.tagMatches },
+                { it.ordinal },
+            ),
+        ).first()
+        return TopicPick(pick.source, pick.topic, pick.angle)
+    }
+
+    /** 三源候选构建 + 阶段门控（深度越界直接不投喂）。 */
+    private fun candidatesOf(m: Materials): List<Candidate> {
+        val stageDepth = m.stageDepth.coerceIn(DEPTH_SHALLOW, DEPTH_DEEP)
+        val out = ArrayList<Candidate>()
+        m.profileHooks.asSequence()
+            .map { it.trim() }.filter { it.isNotEmpty() }
+            .take(MAX_HOOKS)
+            .forEachIndexed { i, text ->
+                out += Candidate(
+                    TopicSource.PROFILE_HOOK, text.take(MAX_TOPIC_CHARS), "", 0,
+                    DEPTH_SHALLOW, i, fingerprintOf(text),
+                )
+            }
+        m.sharedExperiences.asSequence()
+            .map { it.trim() }.filter { it.isNotEmpty() }
+            .take(MAX_EXPERIENCES)
+            .forEachIndexed { i, text ->
+                out += Candidate(
+                    TopicSource.SHARED_EXPERIENCE, text.take(MAX_TOPIC_CHARS), "", 0,
+                    DEPTH_MEDIUM, i, fingerprintOf(text),
+                )
+            }
+        m.seeds.asSequence()
+            .map { it.copy(topic = it.topic.trim(), angle = it.angle.trim()) }
+            .filter { it.topic.isNotEmpty() }
+            .forEachIndexed { i, seed ->
+                out += Candidate(
+                    TopicSource.SEED_BANK,
+                    seed.topic.take(MAX_TOPIC_CHARS),
+                    seed.angle,
+                    seed.tags.count { tag -> tag.trim() in m.interestTags },
+                    seed.depth.coerceIn(DEPTH_SHALLOW, DEPTH_DEEP),
+                    i,
+                    fingerprintOf(seed.topic),
+                )
+            }
+        return out.filter { it.depth <= stageDepth }
+    }
+
+    /** 话题指纹：去首尾与内部空白（中文话题无大小写差异，保持最小规范化）。 */
+    fun fingerprintOf(topic: String): String = topic.trim().replace(whitespace, "")
+
+    /**
+     * 站码 → 深度档（1..3）：按场景包站点列表近似均分三档；未知站/无包一律
+     * 按最保守的浅层处理（弱联系只碰浅层话题，方案 §7.2 阶段门控）。
+     */
+    fun stageDepthOf(stageCodes: List<String>, stageCode: String?): Int {
+        if (stageCode.isNullOrBlank() || stageCodes.isEmpty()) return DEPTH_SHALLOW
+        val idx = stageCodes.indexOf(stageCode)
+        if (idx < 0) return DEPTH_SHALLOW
+        return DEPTH_SHALLOW + (idx * 3 / stageCodes.size).coerceIn(0, DEPTH_DEEP - DEPTH_SHALLOW)
+    }
+
+    /**
+     * 保温任务令编码：`warm_chat|<话题>|<模型任务令>`。前缀是回放与 Judge 豁免
+     * 的识别标记（D4）；话题内的 `|` 归一为全角，防止解码错位。话题为空 =
+     * 选题耗尽的自由轻聊回合（无指纹可去重）。
+     */
+    fun encodeWarmChatMission(topic: String, mission: String): String =
+        WARM_CHAT_MISSION_PREFIX + topic.trim().replace('|', '／') + "|" + mission.trim()
+
+    /** 从任务令文本解码保温话题指纹源；非保温任务令或自由轻聊回合返回 null。 */
+    fun decodeWarmChatTopic(mission: String): String? =
+        mission.takeIf { isWarmChatMission(it) }
+            ?.removePrefix(WARM_CHAT_MISSION_PREFIX)
+            ?.substringBefore('|')
+            ?.takeIf { it.isNotBlank() }
+
+    fun isWarmChatMission(mission: String): Boolean = mission.startsWith(WARM_CHAT_MISSION_PREFIX)
+
+    private val whitespace = Regex("\\s+")
+
+    private val quotedTopicRegex = Regex("「(.{1,${MAX_TOPIC_CHARS * 2}}?)」")
+
+    /**
+     * 从保温回合的提问文本提取「话题」：共享会话（无联系人）没有任务令台账，
+     * 调用方以消息文本近似指纹去重，避免手动连点重复同一题。
+     */
+    fun topicOfQuestion(question: String): String? =
+        quotedTopicRegex.find(question)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
+}

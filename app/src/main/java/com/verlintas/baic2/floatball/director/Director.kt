@@ -24,7 +24,6 @@ import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.DirectorLogEntity
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_ACTION_HINT
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_BRIEF
-import com.verlintas.baic2.floatball.advisor.data.ROUTE_GUIDE
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_NOOP
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_REPLAN_HINT
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_REPLY
@@ -87,7 +86,6 @@ class Director @Inject constructor(private val db: AdvisorDatabase) {
 
     private fun DirectorRoute.code(): String = when (this) {
         DirectorRoute.REPLY -> ROUTE_REPLY
-        DirectorRoute.GUIDE -> ROUTE_GUIDE
         DirectorRoute.SMALL_TALK -> ROUTE_SMALL_TALK
         DirectorRoute.REPLAN_HINT -> ROUTE_REPLAN_HINT
         DirectorRoute.ACTION_HINT -> ROUTE_ACTION_HINT

@@ -704,6 +704,7 @@ class FloatBallService : Service() {
             onClose = { closeSplit(keepBall = false) },
             onDirection = { showDirectionMenu() },
             onAuto = { toast(R.string.float_split_auto_soon) },
+            onSmalltalk = { screenAdvisor.requestSmalltalk() },
             inputCallbacks = inputCallbacks,
         )
         panel.handle.setOnTouchListener(makeResizeListener())

@@ -55,6 +55,10 @@ import kotlinx.serialization.Serializable
  *    「距上次裁决 ≥ [JUDGE_EVERY_TURNS] 回合 / 规则命中推进信号」之一时，
  *    发一次 200 token、temp=0、[JUDGE_TIMEOUT_MS] 硬超时的轻裁决；结果回写
  *    talk_missions、阶段计数/有向图移动、目标进展或倒退。LLM 失败只保留 pending。
+ *
+ * 保温豁免（M1，方案 D4）：informational 台账行（保温闲聊回合）永不 pending，
+ * 天然不进入上述两层裁决；保温回合本身也不触发对旧 pending 的裁决（调用方在
+ * smalltalk 回合跳过 [judgePending]）。
  */
 @Singleton
 class MissionJudgeRunner @Inject constructor(

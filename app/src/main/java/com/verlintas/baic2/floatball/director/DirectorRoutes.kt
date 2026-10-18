@@ -26,19 +26,23 @@ package com.verlintas.baic2.floatball.director
 enum class DirectorTrigger { INCOMING, PROACTIVE, SCHEDULED, MANUAL }
 
 /**
- * 路由决策（方案 §5.1 规则表）。M0 只放行 REPLY / BRIEF / NOOP 三类；
- * GUIDE / SMALL_TALK / REPLAN_HINT / ACTION_HINT 为 M1/M2 落地的占位枚举，
- * 规则表放行前不会作为路由产出。
+ * 路由决策（方案 §5.1 规则表）。M0 放行 REPLY / BRIEF / NOOP；M1 起放行
+ * SMALL_TALK（手动保温入口）；REPLAN_HINT / ACTION_HINT 为 M1/M2 落地的
+ * 占位枚举，规则表放行前不会作为路由产出。GUIDE 已按 v2 方案 D6 移出路由
+ * 表——推进意图在 T2 态势评估之后才产生，Director 前置拿不到（时序倒挂），
+ * 它是既有意图系统行为，不占路由。
  */
-enum class DirectorRoute { REPLY, GUIDE, SMALL_TALK, REPLAN_HINT, ACTION_HINT, BRIEF, NOOP }
+enum class DirectorRoute { REPLY, SMALL_TALK, REPLAN_HINT, ACTION_HINT, BRIEF, NOOP }
 
 /**
- * Director 的输入态势。M0 规则表只消费 [trigger] 与失败信号（failStreak /
- * consecutiveRetreats）；其余字段为 M1/M2 预留（StrategyBrief.assess 与
- * ProactivePolicy 接入后填充），缺省即可，不参与路由。
+ * Director 的输入态势。规则表消费 [trigger]、[requestSmalltalk] 与失败信号
+ * （failStreak / consecutiveRetreats）；其余字段为 M2 预留（ProactivePolicy
+ * 接入后填充），缺省即可，不参与路由。
  */
 data class DirectorInput(
     val trigger: DirectorTrigger,
+    /** M1：分屏「来点闲聊」手动入口标记；仅对 MANUAL 生效（方案 §10/§13.2 矛盾#3）。 */
+    val requestSmalltalk: Boolean = false,
     val stageCode: String? = null,
     val failStreak: Int = 0,
     val consecutiveRetreats: Int = 0,
@@ -74,16 +78,24 @@ object DirectorRoutes {
     const val REPLAN_RETREAT_STREAK_THRESHOLD = 2
 
     /**
-     * 按触发源路由（M0 逐字规则）：
+     * 按触发源路由（M0 逐字规则 + M1 保温手动入口）：
      * - INCOMING → REPLY（incoming_default）：走现有 T2→T6 主链路；
      * - MANUAL → REPLY（manual_default）：与现状一致，零回归；
+     * - MANUAL + requestSmalltalk → SMALL_TALK（manual_smalltalk_entry）：M1 分屏
+     *   「来点闲聊」入口（方案 §13.2 矛盾#3：PROACTIVE 触发源 M2 才放开，保温
+     *   验收经手动入口触发）；字段只对 MANUAL 生效，其余触发源带上也不改路；
      * - PROACTIVE → NOOP（proactive_not_enabled_m0）：M2 放开前不主动打扰；
      * - SCHEDULED → BRIEF（scheduled_brief）：周期检点产出汇总简报。
      */
     fun decide(input: DirectorInput): DirectorDecision {
         val (route, reason) = when (input.trigger) {
             DirectorTrigger.INCOMING -> DirectorRoute.REPLY to "incoming_default"
-            DirectorTrigger.MANUAL -> DirectorRoute.REPLY to "manual_default"
+            DirectorTrigger.MANUAL ->
+                if (input.requestSmalltalk) {
+                    DirectorRoute.SMALL_TALK to "manual_smalltalk_entry"
+                } else {
+                    DirectorRoute.REPLY to "manual_default"
+                }
             DirectorTrigger.PROACTIVE -> DirectorRoute.NOOP to "proactive_not_enabled_m0"
             DirectorTrigger.SCHEDULED -> DirectorRoute.BRIEF to "scheduled_brief"
         }

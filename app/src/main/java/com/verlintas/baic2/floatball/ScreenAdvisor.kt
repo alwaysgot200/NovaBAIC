@@ -53,6 +53,7 @@ import com.verlintas.baic2.floatball.advisor.data.GOAL_ACTIVE
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L1
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L2
 import com.verlintas.baic2.floatball.advisor.data.MISSION_IGNORED
+import com.verlintas.baic2.floatball.advisor.data.MISSION_INFORMATIONAL
 import com.verlintas.baic2.floatball.advisor.data.MISSION_PENDING
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_BRANCH
 import com.verlintas.baic2.floatball.advisor.strategy.EDGE_KIND_BRANCH
@@ -73,6 +74,12 @@ import com.verlintas.baic2.floatball.contact.DealFact
 import com.verlintas.baic2.floatball.director.Director
 import com.verlintas.baic2.floatball.director.DirectorInput
 import com.verlintas.baic2.floatball.director.DirectorTrigger
+import com.verlintas.baic2.floatball.director.GateReasons
+import com.verlintas.baic2.floatball.director.GateRejection
+import com.verlintas.baic2.floatball.director.Gatekeeper
+import com.verlintas.baic2.floatball.director.TopicEngine
+import com.verlintas.baic2.floatball.director.TopicEngineStore
+import com.verlintas.baic2.floatball.director.WarmChatPrompt
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -140,6 +147,8 @@ class ScreenAdvisor @Inject constructor(
     private val strategyRuntime: com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime,
     private val tacticalAdvisor: com.verlintas.baic2.floatball.advisor.TacticalAdvisor,
     private val director: Director,
+    private val topicEngineStore: TopicEngineStore,
+    private val gatekeeper: Gatekeeper,
 ) {
 
     /** 面板渲染所需的一切：会话消息 + 正在流式的回答 + 阶段状态。 */
@@ -408,14 +417,43 @@ class ScreenAdvisor @Inject constructor(
         conversationId: Long,
         contact: ContactRef?,
         turnMessageId: Long,
+        smalltalk: TopicEngine.TopicPick? = null,
     ) {
-        if (snapshot == null) {
-            resetMissionUi()
-            return
-        }
         val planRaw = filter?.plan()
         val plan = planRaw?.let { raw ->
             runCatching { Tactician.parsePlan(raw) }.getOrNull()
+        }
+        if (smalltalk != null) {
+            // 保温回合台账（M1，D4）：mission 带 warm_chat| 前缀供话题指纹去重
+            // 解码，result 恒为 informational——计入台账但永不 pending，Judge 豁免
+            // settle；话题为空（选题耗尽的自由轻聊）时无指纹可记。分屏不出任务令
+            // 条，草稿本身就是本轮产出。
+            if (smalltalk.topic.isNotBlank()) {
+                runCatching {
+                    goalRepository.insertMission(
+                        TalkMissionEntity(
+                            conversationId = conversationId,
+                            contactId = contact?.contactId,
+                            turnMessageId = turnMessageId,
+                            stageCode = snapshot?.context?.stage?.stageCode,
+                            mission = TopicEngine.encodeWarmChatMission(
+                                topic = smalltalk.topic,
+                                mission = plan?.mission?.takeIf { it.isNotBlank() }
+                                    ?: context.getString(R.string.float_smalltalk_default_mission, smalltalk.topic),
+                            ),
+                            planBlockJson = planRaw,
+                            result = MISSION_INFORMATIONAL,
+                            createdAt = System.currentTimeMillis(),
+                        ),
+                    )
+                }.onFailure { android.util.Log.d(TAG, "insert warm-chat mission failed", it) }
+            }
+            resetMissionUi()
+            return
+        }
+        if (snapshot == null) {
+            resetMissionUi()
+            return
         }
         if (plan != null && plan.mission.isNotBlank()) {
             runCatching {
@@ -829,6 +867,58 @@ class ScreenAdvisor @Inject constructor(
         }
 
     /**
+     * 分屏「来点闲聊」手动入口（M1，方案 §10/§13.2 矛盾#3）：Director 路由
+     * SMALL_TALK → TopicEngine 确定性选题 → 走既有 Tactician→Responder 管线
+     * 出一条开场草稿，分屏展示、绝不自动发送。会话路由与手动追问同径（绑定
+     * 联系人进专属会话，否则续当前面板会话/共享会话）；专属会话靠 warm_chat|
+     * 任务令台账去重，共享会话（无台账）以提问文本中的「话题」近似指纹去重。
+     * 选题/取数全在 advisorScope 后台线程，失败只 Log.d，绝不影响悬浮球状态。
+     */
+    fun requestSmalltalk() {
+        if (_transcript.value.status == Status.Thinking) return
+        advisorScope.launch {
+            runCatching {
+                val contact = _activeContact.value
+                val conversationId = resolveConversation(
+                    contact,
+                    context.getString(R.string.float_smalltalk_question_free),
+                )
+                val pick = if (contact != null) {
+                    topicEngineStore.selectFor(contact)
+                } else {
+                    topicEngineStore.selectFor(null, sharedUsedTopics(conversationId))
+                }
+                val question = pick?.topic
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { context.getString(R.string.float_smalltalk_question_fmt, it) }
+                    ?: context.getString(R.string.float_smalltalk_question_free)
+                conversationRepository.append(
+                    ChatMessage(
+                        conversationId = conversationId,
+                        role = ChatRole.USER,
+                        content = question,
+                        createdAt = System.currentTimeMillis(),
+                    ),
+                )
+                executePrepared(conversationId, contact, backgroundTurn = false, smalltalk = pick)
+            }.onFailure { android.util.Log.d(TAG, "requestSmalltalk failed", it) }
+        }
+    }
+
+    /** 共享会话已用话题：近若干条用户消息文本里的「话题」提取为指纹（新→旧）。 */
+    private suspend fun sharedUsedTopics(conversationId: Long): List<TopicEngine.UsedTopic> =
+        runCatching {
+            historyGateway.recentMessages(conversationId, SHARED_USED_MESSAGES)
+                .filter { it.role == ChatRole.USER }
+                .asReversed()
+                .mapNotNull { message ->
+                    TopicEngine.topicOfQuestion(stripScreenLabel(message.content))
+                        ?.let { TopicEngine.UsedTopic(TopicEngine.fingerprintOf(it), message.createdAt) }
+                }
+                .distinctBy { it.fingerprint }
+        }.getOrDefault(emptyList())
+
+    /**
      * 阶段一：识别联系人、路由会话、截断、去重、把屏幕消息写入会话（不跑 LLM）。
      * 自动屏幕消息若与上一条屏幕消息高度相似（[FrameQuality.textSimilarity]
      * ≥ [DUP_SCREEN_SIMILARITY]），直接 [PreparedTurn.Unchanged]——
@@ -1000,17 +1090,20 @@ class ScreenAdvisor @Inject constructor(
         return conversationId
     }
 
-    /** 阶段二：串行队列里跑一个 LLM 回合。 */
+    /** 阶段二：串行队列里跑一个 LLM 回合；[smalltalk] 非空 = 保温闲聊回合（M1）。 */
     private suspend fun executePrepared(
         conversationId: Long,
         contact: ContactRef?,
         backgroundTurn: Boolean,
+        smalltalk: TopicEngine.TopicPick? = null,
     ) {
-        // M0 调度中枢旁路（方案 §5）：连续/后台回合=INCOMING，手动回合=MANUAL。
-        // 只落 director_logs 不改控制流；未绑定联系人时 Director 内部只决策不落库。
+        // M0 调度中枢旁路（方案 §5）：连续/后台回合=INCOMING，手动回合=MANUAL；
+        // 「来点闲聊」入口记 SMALL_TALK（manual_smalltalk_entry，方案 §10）。
+        // 未绑定联系人时 Director 内部只决策不落库。
         director.route(
             DirectorInput(
                 trigger = if (backgroundTurn) DirectorTrigger.INCOMING else DirectorTrigger.MANUAL,
+                requestSmalltalk = smalltalk != null,
                 nowMs = System.currentTimeMillis(),
             ),
             contactId = contact?.contactId,
@@ -1018,7 +1111,7 @@ class ScreenAdvisor @Inject constructor(
         )
         _transcript.update { it.copy(status = Status.Thinking, lastUsage = null) }
         turnMutex.withLock {
-            runAdvisorTurn(conversationId, contact, backgroundTurn)
+            runAdvisorTurn(conversationId, contact, backgroundTurn, smalltalk)
         }
     }
 
@@ -1069,7 +1162,12 @@ class ScreenAdvisor @Inject constructor(
      * 零文本失败（首字超时/连接失败/零文本 Failed）按递增间隔重试；
      * 已见文本（含思考过程）后失败绝不重试，保存 partial 并报错。
      */
-    private suspend fun runAdvisorTurn(conversationId: Long, contact: ContactRef?, tightRetry: Boolean) {
+    private suspend fun runAdvisorTurn(
+        conversationId: Long,
+        contact: ContactRef?,
+        tightRetry: Boolean,
+        smalltalk: TopicEngine.TopicPick? = null,
+    ) {
         val settings = prefs.state.value
         val config: ProviderConfig = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
             ?: run {
@@ -1160,17 +1258,23 @@ class ScreenAdvisor @Inject constructor(
                                 .filter { it.status == GOAL_ACTIVE }
                                 .take(GoalRepository.CAP_L1)
                         }.getOrDefault(emptyList())
-                        val outcome = runCatching {
-                            missionJudge.judgePending(
-                                contactId = c.contactId,
-                                pack = first.context.pack,
-                                stage = first.context.stage,
-                                roadmap = first.context.roadmap,
-                                incomingText = judgeText,
-                                replyText = lastReply,
-                                activeL1 = activeL1ForJudge,
-                            )
-                        }.getOrNull()
+                        // 保温回合不触发对旧 pending 的裁决（D4：informational 回合
+                        // 不参与裁决链，「对方来信」语义对闲聊草稿不成立）。
+                        val outcome = if (smalltalk == null) {
+                            runCatching {
+                                missionJudge.judgePending(
+                                    contactId = c.contactId,
+                                    pack = first.context.pack,
+                                    stage = first.context.stage,
+                                    roadmap = first.context.roadmap,
+                                    incomingText = judgeText,
+                                    replyText = lastReply,
+                                    activeL1 = activeL1ForJudge,
+                                )
+                            }.getOrNull()
+                        } else {
+                            null
+                        }
                         val judged = outcome?.judged == true
                         outcome?.branch?.let { b ->
                             _missionUi.update {
@@ -1377,6 +1481,8 @@ class ScreenAdvisor @Inject constructor(
             PREAMBLE_SECTION,
             styleWithLength,
             strategySection,
+            // 保温闲聊段紧跟策略段（KPI 覆盖：自然度优先于任务推进，见 WarmChatPrompt）。
+            smalltalk?.let { WarmChatPrompt.section(it) },
             sources.brief?.styleSection,
             directionSection,
             sources.brief?.section,
@@ -1453,14 +1559,33 @@ class ScreenAdvisor @Inject constructor(
                                 }
                             }
                         }
-                        // P2：plan 块解析入库 + 分屏策略条（任务令/观察期轻确认）。
+                        // P2：plan 块解析入库 + 分屏策略条（任务令/观察期轻确认）；
+                        // 保温回合走 informational 台账分支（D4）。
                         finalizeMission(
                             snapshot = strategySnapshot,
                             filter = planFilter,
                             conversationId = conversationId,
                             contact = contact,
                             turnMessageId = question.id,
+                            smalltalk = smalltalk,
                         )
+                        // M1-C Gatekeeper 事前审（方案 §10/§13.2 矛盾#4）：连续模式
+                        // 回合（tightRetry=INCOMING）与保温闲聊回合（smalltalk≠null，
+                        // §12 以 Gatekeeper AI 腔检测为保温闲聊对策之一）成稿后过审；
+                        // 单次手动参谋/追问不挂（M2 随起草档迁移）。拦截走「降级不丢
+                        // 弃」：分屏渲染副本换上替换/截断版本与原因，落库原文不动。
+                        if (tightRetry || smalltalk != null) {
+                            gateTurn(
+                                conversationId = conversationId,
+                                assistantMessageId = outcome.assistantMessageId,
+                                priorReplies = allMessages
+                                    .filter { it.role == ChatRole.ASSISTANT }
+                                    .takeLast(GATE_REPEAT_WINDOW)
+                                    .map { it.content },
+                                maxChars = (settings.answerTargetChars * 2)
+                                    .coerceAtLeast(GATE_LENGTH_FLOOR),
+                            )
+                        }
                         // 后台滚动摘要 + 画像萃取：独立协程，不占串行队列、不阻塞 UI。
                         // 上一回合的沉淀仍在跑则跳过（素材每次按全量回合重算，不丢信息）。
                         advisorScope.launch {
@@ -2012,7 +2137,11 @@ class ScreenAdvisor @Inject constructor(
             launch {
                 conversationRepository.observeMessages(conversationId).collect { messages ->
                     _transcript.update {
-                        if (it.conversationId == conversationId) it.copy(messages = messages) else it
+                        if (it.conversationId == conversationId) {
+                            it.copy(messages = applyGateOverlays(messages))
+                        } else {
+                            it
+                        }
                     }
                 }
             }
@@ -2042,6 +2171,90 @@ class ScreenAdvisor @Inject constructor(
     /** 浮窗关闭时清掉流式/状态等瞬态，会话与消息保持原样。 */
     fun resetTransient() {
         _transcript.update { it.copy(streaming = null, status = Status.Idle) }
+    }
+
+    // ── M1-C：Gatekeeper 事前审（方案 §5.3 critic·事前 / §10 / §13.2 矛盾#4） ──
+
+    /**
+     * 分屏降级渲染层：assistantMessageId → 降级后的气泡文本。落库原文不动
+     * （M1 无发送概念，起草档 M2 才存在；与 AdvisorHistory「只改发送副本」
+     * 同一纪律），只在消息观察者的发射路径上套一层。仅内存、有界（最旧淘汰），
+     * 消息 id 全局唯一，会话切换后依旧生效。
+     */
+    private val gateOverlays = LinkedHashMap<Long, String>()
+
+    /**
+     * 对一个已成稿回合执行事前审：确定性三查（红线/超长/重复）同步先行——
+     * 纯函数零成本，命中立刻挂降级层，抢在 Room 观察者首次发射之前；未命中
+     * 再在后台发起轻 LLM 审（≤120tok，只看 AI 腔/换皮重复）。批准偏置
+     * （方案 §5.3）：LLM 审任何失败一律放行，只拦阻断项，不挑刺文风。
+     */
+    private suspend fun gateTurn(
+        conversationId: Long,
+        assistantMessageId: Long,
+        priorReplies: List<String>,
+        maxChars: Int,
+    ) {
+        if (assistantMessageId <= 0L) return
+        // 本回合成稿是会话最新一条消息（回合内无并发写入）；LIMIT 1 有界读取。
+        val draft = runCatching {
+            historyGateway.recentMessages(conversationId, 1).lastOrNull()?.content.orEmpty()
+        }.getOrDefault("")
+        if (draft.isBlank()) return
+        val rejection = gatekeeper.deterministicReview(draft, priorReplies, maxChars)
+        if (rejection != null) {
+            applyGateRejection(assistantMessageId, draft, rejection)
+            return
+        }
+        advisorScope.launch {
+            val llm = runCatching {
+                gatekeeper.llmReview(draft, priorReplies.takeLast(GATE_LLM_PRIOR_WINDOW))
+            }.getOrNull() ?: return@launch
+            applyGateRejection(assistantMessageId, draft, llm)
+        }
+    }
+
+    /** 拒绝落地：原因码映射用户文案 + 替换/截断文本挂降级层，并刷新当前分屏。 */
+    private fun applyGateRejection(
+        messageId: Long,
+        original: String,
+        rejection: GateRejection,
+    ) {
+        val body = when {
+            rejection.replacement == null -> original
+            rejection.replacement.isNotBlank() -> rejection.replacement
+            else -> ""
+        }
+        val reasonText = context.getString(
+            when (rejection.reason) {
+                GateReasons.BLACKLIST -> R.string.float_gate_reason_blacklist
+                GateReasons.TOO_LONG -> R.string.float_gate_reason_too_long
+                GateReasons.REPETITIVE -> R.string.float_gate_reason_repetitive
+                else -> R.string.float_gate_reason_ai_tone
+            },
+        )
+        val notice = context.getString(R.string.float_gate_notice, reasonText)
+        val text = if (body.isBlank()) {
+            "$notice\n\n" + context.getString(R.string.float_gate_blocked_empty)
+        } else {
+            "$notice\n\n$body"
+        }
+        synchronized(gateOverlays) {
+            gateOverlays[messageId] = text
+            while (gateOverlays.size > GATE_OVERLAY_CAP) {
+                gateOverlays.remove(gateOverlays.keys.first())
+            }
+        }
+        _transcript.update { st -> st.copy(messages = applyGateOverlays(st.messages)) }
+    }
+
+    /** 消息观察者的降级渲染：命中降级层的气泡换文本，其余原样。 */
+    private fun applyGateOverlays(messages: List<ChatMessage>): List<ChatMessage> {
+        if (gateOverlays.isEmpty()) return messages
+        val snapshot = synchronized(gateOverlays) { gateOverlays.toMap() }
+        return messages.map { message ->
+            snapshot[message.id]?.let { message.copy(content = it) } ?: message
+        }
     }
 
     // ── P3 §九：行内纠偏（采纳 / 长按三档重写 / 记错了） ─────────────────
@@ -2350,6 +2563,9 @@ class ScreenAdvisor @Inject constructor(
         /** 主回合历史的有界读取条数（与 AdvisorHistory.MAX_MESSAGES 对齐）。 */
         const val HISTORY_LOAD_MESSAGES = 60
 
+        /** 保温选题共享会话回看的用户消息条数（与专属会话台账口径一致）。 */
+        const val SHARED_USED_MESSAGES = 60
+
         /**
          * 刷新摘要时回看的最近屏幕回合数。摘要是带旧摘要的增量压缩，
          * 喂 6 个新屏即可接续背景（原 12 屏输入减半，输出质量不变）。
@@ -2409,5 +2625,19 @@ class ScreenAdvisor @Inject constructor(
         const val MEMORY_LEAD_IN =
             "以下是与当前参谋相关的用户记忆与联系人档案，请在分析时自然参考，" +
                 "不要逐条罗列或主动提及记忆的存在："
+
+        // ── M1-C：Gatekeeper 事前审 ─────────────────────────────────────
+
+        /** 重复判定的近期回复取样条数（成稿前的历史快照里取末尾若干条）。 */
+        const val GATE_REPEAT_WINDOW = 4
+
+        /** 轻 LLM 审随稿附带的近期回复条数（新→旧取末尾，Gatekeeper 内再截 2 条）。 */
+        const val GATE_LLM_PRIOR_WINDOW = 2
+
+        /** 降级渲染层容量上限（最旧淘汰；仅内存，进程重启即清）。 */
+        const val GATE_OVERLAY_CAP = 64
+
+        /** 超长判定的字数下限兜底（长度档最小时 2×120 已达此值，防御性保留）。 */
+        const val GATE_LENGTH_FLOOR = 240
     }
 }

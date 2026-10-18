@@ -139,6 +139,18 @@
     <string name="float_split_drag_desc">上下拖动调整分屏高度</string>
     <string name="float_split_auto">自动</string>
     <string name="float_split_auto_soon">AI 自动聊天即将上线</string>
+    <string name="float_split_smalltalk">来点闲聊</string>
+    <!-- 悬浮球 · M1 保温闲聊（手动入口出草稿，不自动发送） -->
+    <string name="float_smalltalk_question_fmt">来点闲聊（话题：「%1$s」）</string>
+    <string name="float_smalltalk_question_free">来点闲聊</string>
+    <string name="float_smalltalk_default_mission">以话题「%1$s」自然开场</string>
+    <!-- M1-C Gatekeeper 事前审（连续模式分屏预览降级提示；只拦红线/重复/超长三类，批准偏置） -->
+    <string name="float_gate_notice">⚠️ 老参谋事前审：%1$s</string>
+    <string name="float_gate_reason_blacklist">草稿触及红线（涉违法、钱财欺诈、隐私索取或人身威胁），已降级为截断版，请人工改写后再用</string>
+    <string name="float_gate_reason_too_long">草稿超出长度上限，已自动截断</string>
+    <string name="float_gate_reason_repetitive">草稿与近期回复高度雷同，建议长按气泡换个写法</string>
+    <string name="float_gate_reason_ai_tone">草稿 AI 腔偏重，以下为改写建议</string>
+    <string name="float_gate_blocked_empty">截断后已无可保留内容，原稿整体拦截，请长按气泡重新生成</string>
     <string name="float_dir_chip">方向 ▾</string>
     <string name="float_dir_set">方向：%1$s ▾</string>
     <string name="float_dir_loading">AI 拟定中…</string>
@@ -486,6 +498,24 @@
     <string name="float_brief_next_moves">下一步建议</string>
     <string name="float_brief_kind_weekly">每周</string>
     <string name="float_brief_kind_on_demand">按需</string>
+
+    <!-- 目标页：行动建议（M1 ActionPlanner，谋略库选条定制，用户采纳驱动） -->
+    <string name="float_action_title">行动建议</string>
+    <string name="float_action_generate">给点子</string>
+    <string name="float_action_generating">正在按当前阶段从谋略库挑路子…</string>
+    <string name="float_action_empty">还没有行动建议。点「给点子」，老参谋会结合当前阶段与谋略库，给出可执行的线下行动草案。</string>
+    <string name="float_action_no_candidates">当前阶段还没有适用的谋略候选，先推进阶段或完善场景后再试</string>
+    <string name="float_action_failed">行动建议生成失败，请稍后再试</string>
+    <string name="float_action_status_draft">待采纳</string>
+    <string name="float_action_status_adopted">已采纳</string>
+    <string name="float_action_status_done">已完成</string>
+    <string name="float_action_status_dropped">已放弃</string>
+    <string name="float_action_adopt">采纳</string>
+    <string name="float_action_done">完成</string>
+    <string name="float_action_drop">放弃</string>
+    <string name="float_action_cost">代价：%1$s</string>
+    <string name="float_action_risk">风险：%1$s</string>
+    <string name="float_action_prereq">前提：%1$s</string>
 
     <!-- 设置：我的聊天策略 -->
     <string name="float_settings_strategy_section">我的聊天策略</string>
