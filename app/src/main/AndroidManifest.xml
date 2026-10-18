@@ -32,8 +32,6 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <!-- M2-a 起草档：通知监听（BIND 由系统授予，非运行时权限） -->
-    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
-
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />

@@ -43,6 +43,7 @@ import com.verlintas.baic2.floatball.director.DirectorRoutes
 import com.verlintas.baic2.floatball.director.Gatekeeper
 import com.verlintas.baic2.floatball.director.GateReasons
 import com.verlintas.baic2.floatball.director.ProactivePolicyRepository
+import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -574,7 +575,7 @@ class CompanionWindowController @Inject constructor(
                 .addAction(0, context.getString(R.string.float_companion_end_renew), renewIntent)
                 .setAutoCancel(true)
                 .build()
-            manager.notify(NOTIFICATION_ID, notification)
+            NotifyGate.notifyIfPermitted(context, NOTIFICATION_ID, notification)
         }.onFailure { Log.d(TAG, "companion summary notification failed", it) }
     }
 

@@ -39,6 +39,7 @@ import com.verlintas.baic2.floatball.advisor.data.ROUTE_SMALL_TALK
 import com.verlintas.baic2.floatball.advisor.data.TRIGGER_PROACTIVE
 import com.verlintas.baic2.floatball.brief.BriefCompiler
 import com.verlintas.baic2.floatball.contact.ContactRef
+import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.Calendar
@@ -326,8 +327,9 @@ class ProactiveCheckpoint @Inject constructor(
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
             .build()
-        runCatching { manager.notify(DRAFT_NOTIFICATION_ID, notification) }
-            .onFailure { Log.d(TAG, "proactive draft notification failed", it) }
+        if (!NotifyGate.notifyIfPermitted(context, DRAFT_NOTIFICATION_ID, notification)) {
+            Log.d(TAG, "proactive draft notification skipped: no permission")
+        }
     }
 
     /** SCHEDULED 副产物：周报轻通知（正文带对账分布，验收「四触发源可回放」的透出口）。 */
@@ -354,8 +356,9 @@ class ProactiveCheckpoint @Inject constructor(
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
             .build()
-        runCatching { manager.notify(WEEKLY_NOTIFICATION_ID, notification) }
-            .onFailure { Log.d(TAG, "weekly notification failed", it) }
+        if (!NotifyGate.notifyIfPermitted(context, WEEKLY_NOTIFICATION_ID, notification)) {
+            Log.d(TAG, "weekly notification skipped: no permission")
+        }
     }
 
     companion object {

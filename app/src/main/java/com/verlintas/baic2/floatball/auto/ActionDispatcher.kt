@@ -38,6 +38,7 @@ import com.verlintas.baic2.floatball.advisor.data.DirectorLogEntity
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_REPLY
 import com.verlintas.baic2.floatball.advisor.data.TRIGGER_AUTO
 import com.verlintas.baic2.floatball.director.AdvisorNotificationListener
+import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -325,7 +326,7 @@ class ActionDispatcher @Inject constructor(
                 .setContentIntent(contentIntent)
                 .setAutoCancel(true)
                 .build()
-            manager.notify(derivedIdFor(request.contactId), notification)
+            NotifyGate.notifyIfPermitted(context, derivedIdFor(request.contactId), notification)
         }.onFailure { Log.d(TAG, "auto draft fallback failed", it) }
     }
 

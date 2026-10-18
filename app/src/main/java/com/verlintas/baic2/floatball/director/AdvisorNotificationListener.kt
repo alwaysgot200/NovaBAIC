@@ -36,6 +36,7 @@ import com.verlintas.baic2.floatball.ScreenAdvisor
 import com.verlintas.baic2.floatball.advisor.EngagementRules
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.contact.ContactDirectory
+import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -175,8 +176,9 @@ class AdvisorNotificationListener : NotificationListenerService() {
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
             .build()
-        runCatching { manager.notify(NOTIFICATION_ID, notification) }
-            .onFailure { Log.d(TAG, "draft notification failed", it) }
+        if (!NotifyGate.notifyIfPermitted(this, NOTIFICATION_ID, notification)) {
+            Log.d(TAG, "draft notification skipped: no permission")
+        }
     }
 
     override fun onDestroy() {
