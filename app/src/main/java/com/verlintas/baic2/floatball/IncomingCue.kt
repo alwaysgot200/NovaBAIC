@@ -119,6 +119,23 @@ internal object IncomingCue {
     }
 
     /**
+     * 内容级发言人统计（v10 追加，方案 §2.1 实体三态的提取面）：与 [speakerOf]
+     * 同一套过滤（剔除地址栏 URL/时间分割行等界面噪声后抓「名字：」行），
+     * 返回 其余发言人→发言行数（不含「我」）与「我」是否现身。
+     * EntityResolver 据此判定 PERSON（唯一他人且双方都有话）/ GROUP（多发言人）。
+     */
+    fun speakerStatsOf(screenBody: String): Pair<Map<String, Int>, Boolean> {
+        val speakers = screenBody.split('\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .filterNot { URL_LINE.matches(it) || TIME_LINE.matches(it) || DATE_LINE.matches(it) }
+            .mapNotNull { SPEAKER_LINE.find(it)?.groupValues?.get(1) }
+        val mine = speakers.any { it == "我" }
+        val others = speakers.filter { it != "我" }.groupingBy { it }.eachCount()
+        return others to mine
+    }
+
+    /**
      * 聊天结构发言人提取（联系人识别的内容级兜底）：存在「我」的发言且其余
      * 发言人唯一、出现 ≥2 行时返回对方名；无对话结构（文章/新闻/设置页）或
      * 多人群聊返回 null。地址栏 URL、时间分割行等界面噪声先剔除，避免被
@@ -126,13 +143,8 @@ internal object IncomingCue {
      * 绝不据此新建。
      */
     fun speakerOf(screenBody: String): String? {
-        val speakers = screenBody.split('\n')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .filterNot { URL_LINE.matches(it) || TIME_LINE.matches(it) || DATE_LINE.matches(it) }
-            .mapNotNull { SPEAKER_LINE.find(it)?.groupValues?.get(1) }
-        if (speakers.none { it == "我" }) return null
-        val others = speakers.filter { it != "我" }.groupingBy { it }.eachCount()
+        val (others, mine) = speakerStatsOf(screenBody)
+        if (!mine) return null
         if (others.size != 1) return null
         val (name, count) = others.entries.first()
         return if (count >= 2) name else null

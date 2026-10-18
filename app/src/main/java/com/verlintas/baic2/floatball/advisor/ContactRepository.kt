@@ -20,6 +20,10 @@
 package com.verlintas.baic2.floatball.advisor
 
 import androidx.room.withTransaction
+import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_GROUP
+import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_PERSON
+import com.verlintas.baic2.floatball.advisor.data.SCENE_CHAT
+import com.verlintas.baic2.floatball.advisor.data.SCENE_NON_CHAT
 import com.verlintas.baic2.floatball.advisor.data.ContactAliasEntity
 import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
@@ -27,6 +31,7 @@ import com.verlintas.baic2.floatball.advisor.data.ExtractionHoldEntity
 import com.verlintas.baic2.floatball.advisor.data.GroupMemberEntity
 import com.verlintas.baic2.floatball.advisor.data.MY_PERSONA_CONTACT_ID
 import com.verlintas.baic2.floatball.advisor.data.MergeRecordEntity
+import com.verlintas.baic2.floatball.advisor.data.SelfPersonaEntity
 import com.verlintas.baic2.floatball.advisor.data.PersonaFieldEntity
 import com.verlintas.baic2.floatball.advisor.data.SessionBindingEntity
 import javax.inject.Inject
@@ -110,25 +115,32 @@ class ContactRepository @Inject constructor(
 
         if (!createStub) return ResolveOutcome.Unknown(normalized)
         val now = System.currentTimeMillis()
-        val id = db.contactProfileDao().insert(
-            ContactProfileEntity(
-                imPackage = imPackage,
-                contactKey = ContactNames.contactKey(imPackage, normalized),
-                displayName = rawTitle.trim(),
-                createdAt = now,
-                updatedAt = now,
-            ),
-        )
+        // 建档即双建（v10，方案 §2.4）：我方侧面从全局 self_personas 复制为起点，
+        // 对方侧 identity/chatStyle/closeness 留空待萃取；建档+登记别名同事务原子。
+        val facetSeed = SelfFacets.encode(db.selfPersonaDao().listAll().map { it.tag })
+        val id = db.withTransaction {
+            val newId = db.contactProfileDao().insert(
+                ContactProfileEntity(
+                    imPackage = imPackage,
+                    contactKey = ContactNames.contactKey(imPackage, normalized),
+                    displayName = rawTitle.trim(),
+                    selfFacetJson = facetSeed,
+                    createdAt = now,
+                    updatedAt = now,
+                ),
+            )
+            db.contactAliasDao().insert(
+                ContactAliasEntity(
+                    contactId = newId,
+                    alias = normalized,
+                    rawAlias = rawTitle.trim(),
+                    source = source,
+                    lastSeenAt = now,
+                ),
+            )
+            newId
+        }
         val stub = db.contactProfileDao().findById(id)!!
-        db.contactAliasDao().insert(
-            ContactAliasEntity(
-                contactId = id,
-                alias = normalized,
-                rawAlias = rawTitle.trim(),
-                source = source,
-                lastSeenAt = now,
-            ),
-        )
         return ResolveOutcome.Matched(stub, newStub = true)
     }
 
@@ -180,10 +192,49 @@ class ContactRepository @Inject constructor(
         val existing = db.sessionBindingDao().find(conversationId)
         if (existing == null) {
             db.sessionBindingDao().upsert(SessionBindingEntity(conversationId, contactId, createdAt = now))
-        } else if (existing.contactId != contactId) {
-            db.sessionBindingDao().upsert(existing.copy(contactId = contactId))
+        } else {
+            if (existing.contactId != contactId) {
+                db.sessionBindingDao().upsert(existing.copy(contactId = contactId))
+            }
+            // 绑定了真实联系人即聊天会话：孤立会话（contactId=0 的 non_chat 行）
+            // 被手动关联后场景复位，人设区恢复显示（方案 §1.2 孤立可稍后手动关联）。
+            if (contactId != 0L && existing.scene != SCENE_CHAT) {
+                db.sessionBindingDao().setScene(conversationId, SCENE_CHAT)
+            }
         }
     }
+
+    /**
+     * 会话归属场景落行（v10，方案 §1.2）：非聊天屏孤立会话标记 non_chat——
+     * 会话可能尚无绑定行（共享会话），此时以 contactId=0（虚拟占位，与
+     * [MY_PERSONA_CONTACT_ID] 同口径的「非真实联系人」）建行再写场景，
+     * contactForConversation 对 0 行自然返回 null，下游行为不变。
+     *
+     * 守卫：chat 场景无绑定行时 no-op（共享会话本就按 chat 处理，不污染建行）；
+     * 已绑定真实联系人的行拒绝 non_chat 标记（联系人会话被相似度误复用时，
+     * 不得把联系人绑定改写成 non_chat，会话复用分区 V-B 另行处理）。
+     */
+    suspend fun markScene(conversationId: Long, scene: String) {
+        val existing = db.sessionBindingDao().find(conversationId)
+        if (existing == null) {
+            if (scene != SCENE_NON_CHAT) return
+            db.sessionBindingDao().upsert(
+                SessionBindingEntity(
+                    conversationId = conversationId,
+                    contactId = 0L,
+                    scene = scene,
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+        } else if (existing.scene != scene) {
+            if (scene == SCENE_NON_CHAT && existing.contactId != 0L) return
+            db.sessionBindingDao().setScene(conversationId, scene)
+        }
+    }
+
+    /** 读会话归属场景；无绑定行按 chat 处理（历史共享会话无行，不臆测）。 */
+    suspend fun sceneFor(conversationId: Long): String =
+        db.sessionBindingDao().find(conversationId)?.scene ?: SCENE_CHAT
 
     suspend fun contactForConversation(conversationId: Long): ContactProfileEntity? {
         val binding = db.sessionBindingDao().find(conversationId) ?: return null
@@ -247,6 +298,94 @@ class ContactRepository @Inject constructor(
         db.contactProfileDao().update(p.copy(contactType = type, updatedAt = System.currentTimeMillis()))
     }
 
+    // ---- 维持度 / 群标识 / 双方人设（v10，UltraAdvisor v2.2 方案 §2.4/§2.6） ----
+
+    /** 维持度读：空/未知档位归一 reactive（EngagementRules 同口径，默认「问了才答」）。 */
+    suspend fun engagement(contactId: Long): String =
+        EngagementRules.normalize(db.contactProfileDao().findById(contactId)?.engagement)
+
+    /** 维持度三档设置（画像页开关）：proactive/reactive/mute。 */
+    suspend fun setEngagement(contactId: Long, engagement: String) {
+        val now = System.currentTimeMillis()
+        db.contactProfileDao().setEngagement(contactId, EngagementRules.normalize(engagement), now)
+    }
+
+    /** isGroup 手动切换（误判修正）：与 contactType=group 同步写，保持两列同义。 */
+    suspend fun setGroup(contactId: Long, isGroup: Boolean) {
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        val now = System.currentTimeMillis()
+        val type = if (isGroup) CONTACT_TYPE_GROUP else CONTACT_TYPE_PERSON
+        db.contactProfileDao().update(p.copy(isGroup = isGroup, contactType = type, updatedAt = now))
+    }
+
+    /** 群档案标记（EntityResolver GROUP 自动建群壳后调用）：isGroup 与 contactType 一并落定。 */
+    suspend fun markGroup(contactId: Long) = setGroup(contactId, true)
+
+    /** 我方关系侧面标签集（v10 §2.4）；无档案/空标签返回空表。 */
+    suspend fun selfFacet(contactId: Long): List<String> =
+        SelfFacets.decode(db.contactProfileDao().findById(contactId)?.selfFacetJson)
+
+    /** 我方侧面待确认差异标签（合并协议暂存区，画像页核阅入口的数据面）。 */
+    suspend fun selfFacetPending(contactId: Long): List<String> =
+        SelfFacets.decode(db.contactProfileDao().findById(contactId)?.selfFacetPendingJson)
+
+    /** 我方侧面整集改写（画像页手动增删改，v10 §2.4 每关系独立）。 */
+    suspend fun setSelfFacet(contactId: Long, tags: List<String>) {
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        db.contactProfileDao().update(
+            p.copy(selfFacetJson = SelfFacets.encode(tags), updatedAt = System.currentTimeMillis()),
+        )
+    }
+
+    /** 待确认差异标签转正（画像页核阅后并入 facet，v10 §2.5 不静默丢弃的兑现口）。 */
+    suspend fun confirmFacetPending(contactId: Long) {
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        val promoted = SelfFacets.promoteAll(p.selfFacetJson, p.selfFacetPendingJson)
+        db.contactProfileDao().update(
+            p.copy(
+                selfFacetJson = promoted.facetJson,
+                selfFacetPendingJson = null,
+                // style 三值只在列为空时转正（promoteAll 契约）：手动设置绝不覆盖。
+                identity = p.identity ?: promoted.identity,
+                chatStyle = p.chatStyle ?: promoted.chatStyle,
+                closeness = p.closeness ?: promoted.closeness,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /**
+     * 风格标签萃取的待确认入口（V-C，方案 §4.1）：AI 萃取的一问双产出
+     * （对方 style 三标签 + 我方 facet 增量）先落待确认区，画像页核阅转正后
+     * 才生效，绝不直接写 [ContactProfileEntity.identity] 等列防静默覆盖手动值。
+     * 语义：facet 并集去重；style 值仅在**档案列为空**时进待确认（手动值优先）；
+     * 新萃取的 style 覆盖旧 pending 的 style 值（最新观察为准）。全空则清列。
+     */
+    suspend fun proposeStylePending(contactId: Long, incoming: SelfFacets.StylePending) {
+        if (incoming.isEmpty) return
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        val old = SelfFacets.decodePending(p.selfFacetPendingJson) ?: SelfFacets.StylePending()
+        val pending = SelfFacets.StylePending(
+            facet = (old.facet + incoming.facet).distinct(),
+            identity = p.identity?.takeIf { it.isNotBlank() } ?: incoming.identity,
+            chatStyle = p.chatStyle?.takeIf { it.isNotBlank() } ?: incoming.chatStyle,
+            closeness = p.closeness ?: incoming.closeness,
+        )
+        db.contactProfileDao().update(
+            p.copy(selfFacetPendingJson = SelfFacets.encodePending(pending), updatedAt = System.currentTimeMillis()),
+        )
+    }
+
+    /**
+     * 反馈热度增量落分（V-C，方案 §4.3）：两路信号（连续模式来信指纹变化 /
+     * 通知链来信正文）算出的增量经 [HeatRules.clamp] 夹逼到 0~100 后整列回写。
+     * 档案缺失静默忽略；不碰 updatedAt（热度属观测值，不让列表因它重排）。
+     */
+    suspend fun recordHeatDelta(contactId: Long, delta: Int) {
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        db.contactProfileDao().update(p.copy(heatScore = HeatRules.clamp(p.heatScore, delta)))
+    }
+
     /** 改主显示名：新名同时落一条 user 别名（旧名别名保留，旧笔记仍可召回）。 */
     suspend fun renameContact(contactId: Long, displayName: String) {
         val name = displayName.trim()
@@ -275,6 +414,9 @@ class ContactRepository @Inject constructor(
             bindConversation(conversationId, contactId)
         } else if (existing.contactId != contactId) {
             db.sessionBindingDao().rebind(conversationId, contactId)
+            if (existing.scene != SCENE_CHAT) {
+                db.sessionBindingDao().setScene(conversationId, SCENE_CHAT)
+            }
         }
     }
 
@@ -445,6 +587,18 @@ class ContactRepository @Inject constructor(
     // ---- 合并 / 撤销（§4.3） ----
 
     /**
+     * 跨包名手动合并协议入口（v10，方案 §2.5 五步，选主档案为 main）：①对方标签
+     * 并集去重（mergeContacts 字段步）；②双方人设 facet 主档案为准、other 差异标签
+     * 落主档案 selfFacetPendingJson 待确认区；③other 别名全转 main；④绑定会话
+     * 全量原子改绑（withTransaction 内 reassign）；⑤other 软合并降级（mergedInto
+     * 标记 + merge_records 快照，列表查询过滤，30 天可撤销）。全部复用
+     * [mergeContacts] 的单事务实现，类型不同（person≠group）仍拒绝。
+     */
+    suspend fun mergeInto(mainId: Long, otherId: Long) {
+        mergeContacts(fromId = otherId, targetId = mainId)
+    }
+
+    /**
      * 合并联系人：保留 [targetId]，并入 [fromId]。类型不同拒绝；
      * 返回 Unit，失败抛 IllegalStateException（UI 层映射文案）。
      */
@@ -463,12 +617,22 @@ class ContactRepository @Inject constructor(
             val targetFields = db.personaFieldDao().listFor(targetId)
             val now = System.currentTimeMillis()
 
-            // 1) 字段逐 key 择优并入 target。
+            // 1) 字段逐 key 择优并入 target；tags 类型（对方标签）按并集去重合并
+            //    （v10 §2.5 步骤①：一个标签都不丢），其余标量维持 winner 裁决。
             val targetByKey = targetFields.associateBy { it.field }
             fromFields.forEach { sourceField ->
                 val existing = targetByKey[sourceField.field]
                 if (existing == null) {
                     db.personaFieldDao().upsert(sourceField.copy(contactId = targetId))
+                } else if (typeOf(sourceField.field) == PersonaFieldType.TAGS) {
+                    val union = SelfFacets.encode(
+                        PersonaValues.decodeTags(existing.value) + PersonaValues.decodeTags(sourceField.value),
+                    ) ?: existing.value
+                    if (union != existing.value) {
+                        db.personaFieldDao().upsert(
+                            existing.copy(value = union, evidence = sourceField.evidence, updatedAt = now),
+                        )
+                    }
                 } else {
                     val winner = chooseWinner(sourceField, existing)
                     val loser = if (winner === sourceField) existing else sourceField
@@ -485,6 +649,14 @@ class ContactRepository @Inject constructor(
             }
             db.personaFieldDao().deleteByFields(fromId, fromFields.map { it.field })
 
+            // 1.5) 双方人设合并（v10 §2.5 步骤②）：facet 主档案为准，other 差异标签
+            //      与既有 pending 并集后落 selfFacetPendingJson 待确认区（不静默丢弃）。
+            val (facet, pending) = SelfFacets.mergePending(
+                mainJson = target.selfFacetJson,
+                otherJson = from.selfFacetJson,
+                mainPendingJson = target.selfFacetPendingJson,
+            )
+
             // 2) 别名去重后整体改指（tags 式并集：一个名字都不丢）。
             db.contactAliasDao().deleteDuplicatesWith(fromId, targetId)
             db.contactAliasDao().reassign(fromId, targetId)
@@ -492,11 +664,17 @@ class ContactRepository @Inject constructor(
             // 3) 会话绑定迁移（上游会话零搬运；各自游标保留）。
             db.sessionBindingDao().reassign(fromId, targetId)
 
-            // 4) goal/style 目标优先，target 空缺取 from。
+            // 4) goal/style 目标优先，target 空缺取 from；facet 差异按 1.5 落定。
             val mergedGoal = target.goal ?: from.goal
             val mergedStyle = target.style ?: from.style
             db.contactProfileDao().update(
-                target.copy(goal = mergedGoal, style = mergedStyle, updatedAt = now),
+                target.copy(
+                    goal = mergedGoal,
+                    style = mergedStyle,
+                    selfFacetJson = facet,
+                    selfFacetPendingJson = pending,
+                    updatedAt = now,
+                ),
             )
 
             // 5) 快照留证后软删除 from。
@@ -579,6 +757,50 @@ class ContactRepository @Inject constructor(
             db.mergeRecordDao().delete(fromId)
         }
     }
+
+    // ---- VA-2 UI 层写入口（v10 §2.4/§2.5，纯增量追加）：画像卡与人设库页经此落库，
+    // 不直连 DAO；只读改 contact_profiles 行，未触碰上方 VA-1 判定链。 ----
+
+    /** 对方风格三标签手动设置（方案 §4.1 手动通道）：空/空白按清空处理，closeness null=待定。 */
+    suspend fun setStyleTags(contactId: Long, identity: String?, chatStyle: String?, closeness: Int?) {
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        db.contactProfileDao().update(
+            p.copy(
+                identity = identity?.trim()?.takeIf { it.isNotEmpty() },
+                chatStyle = chatStyle?.trim()?.takeIf { it.isNotEmpty() },
+                closeness = closeness,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /** 待确认差异标签丢弃（与 [confirmFacetPending] 对偶的核阅出口，方案 §2.5 不静默生效）。 */
+    suspend fun discardFacetPending(contactId: Long) {
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        if (p.selfFacetPendingJson == null) return
+        db.contactProfileDao().update(
+            p.copy(selfFacetPendingJson = null, updatedAt = System.currentTimeMillis()),
+        )
+    }
+
+    /** 全局我方人设标签库读（建档双建的模板源，方案 §2.4）。 */
+    suspend fun selfPersonas(): List<SelfPersonaEntity> = db.selfPersonaDao().listAll()
+
+    /** 标签 upsert（tag 唯一键 REPLACE 去重；空标签忽略，备注空白按 null）。 */
+    suspend fun upsertSelfPersona(tag: String, note: String?) {
+        val clean = tag.trim()
+        if (clean.isEmpty()) return
+        db.selfPersonaDao().upsert(
+            SelfPersonaEntity(
+                tag = clean,
+                note = note?.trim()?.takeIf { it.isNotEmpty() },
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /** 全局标签删除（各关系侧面独立副本，删除模板不回溯既有 facet）。 */
+    suspend fun deleteSelfPersona(id: Long) = db.selfPersonaDao().deleteById(id)
 
     // ---- 内部工具 ----
 

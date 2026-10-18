@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.verlintas.baic2.R
+import com.verlintas.baic2.core.data.repository.ConversationRepository
 import com.verlintas.baic2.floatball.advisor.ContactRepository
 import com.verlintas.baic2.floatball.advisor.GoalOpResult
 import com.verlintas.baic2.floatball.advisor.GoalRepository
@@ -151,6 +152,7 @@ internal fun GoalsTab(
     policies: com.verlintas.baic2.floatball.director.ProactivePolicyRepository,
     materials: com.verlintas.baic2.floatball.director.PersonalMaterialRepository,
     director: com.verlintas.baic2.floatball.director.Director,
+    conversations: ConversationRepository,
     scroll: androidx.compose.foundation.ScrollState?,
     onOpenStrategyCard: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -231,6 +233,20 @@ internal fun GoalsTab(
             )
         }
     }
+
+    // ①.2 双方人设与维持度（v10，UltraAdvisor v2.2 §2.4/§2.5/§2.6，VA-2）：
+    // 对方风格三标签 + 我方关系侧面（含合并差异核阅）+ 维持度三档 + 群标识 + 手动合并。
+    // 区块实现独立成 AdvisorPersonaCard.kt，本文件只挂载（追加式，不动既有行）。
+    AdvisorPersonaCard(contactId = contactId, profile = profile, contacts = contacts)
+
+    // ①.3 该联系人的会话列表（V-B，UltraAdvisor v2.2 方案 §2.3/§3）：绑定会话
+    // 回看 + 主应用深链打开 + 手动新开会话（关联同档案）。区块独立成
+    // AdvisorConversationsCard.kt，本文件只挂载（追加式，不动既有行）。
+    AdvisorConversationsCard(
+        contactId = contactId,
+        contacts = contacts,
+        conversations = conversations,
+    )
 
     // ①.5 行动建议横幅（F7 action_hint 消费面）：Director 台账旁路信号命中时
     // 提示阶段驻留较久、引导到下方行动建议卡；点击按「同帧根坐标差」滚动定位
@@ -1162,6 +1178,8 @@ private fun AdvisorBriefCard(contactId: Long, briefs: BriefCompiler) {
             BriefSection(stringResource(R.string.float_brief_goal_progress), content.goalProgress)
             BriefSection(stringResource(R.string.float_brief_risks), content.risks)
             BriefSection(stringResource(R.string.float_brief_next_moves), content.nextMoves)
+            // V-C §4.5：下周期废话方向（topic_plans latest，空表不渲染）。
+            BriefSection(stringResource(R.string.float_brief_topic_directions), content.topicDirections)
         } else if (busy) {
             GoalSmallText(stringResource(R.string.float_brief_generating))
         } else if (noData) {

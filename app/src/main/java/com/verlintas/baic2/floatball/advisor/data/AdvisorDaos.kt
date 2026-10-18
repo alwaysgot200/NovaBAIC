@@ -86,6 +86,14 @@ interface ContactProfileDao {
 
     @Query("UPDATE contact_profiles SET activeCardId = :cardId, updatedAt = :now WHERE id = :id")
     suspend fun setActiveCard(id: Long, cardId: Long?, now: Long)
+
+    /** 维持度三档设置（v10，方案 §2.6）：画像页三态开关的第一手自动参与开关。 */
+    @Query("UPDATE contact_profiles SET engagement = :engagement, updatedAt = :now WHERE id = :id")
+    suspend fun setEngagement(id: Long, engagement: String, now: Long)
+
+    /** isGroup 手动切换（v10，方案 §1.4）：误判修正（把群标成人/把人标成群）。 */
+    @Query("UPDATE contact_profiles SET isGroup = :isGroup, updatedAt = :now WHERE id = :id")
+    suspend fun setGroupFlag(id: Long, isGroup: Boolean, now: Long)
 }
 
 /** 说话风格卡（v4）：全局卡 (my_default,0) 与按人卡 (contact,contactId) 各至多一行。 */
@@ -250,6 +258,10 @@ interface SessionBindingDao {
     /** v6：仅来信文本指纹确实变化时调用（调用方负责指纹判重，防 OCR 抖动反复刷）。 */
     @Query("UPDATE session_bindings SET lastIncomingAt = :at WHERE conversationId = :conversationId")
     suspend fun setLastIncomingAt(conversationId: Long, at: Long)
+
+    /** v10 场景归属（方案 §1.2）：非聊天屏孤立会话标记 non_chat；联系人绑定行恒 chat。 */
+    @Query("UPDATE session_bindings SET scene = :scene WHERE conversationId = :conversationId")
+    suspend fun setScene(conversationId: Long, scene: String)
 
     /** 联系人全部绑定会话的最近来信时间（v6 lastIncomingAt 聚合读，§7.3 incoming 优先消费；null=从未记录）。 */
     @Query("SELECT MAX(lastIncomingAt) FROM session_bindings WHERE contactId = :contactId")
@@ -705,6 +717,10 @@ interface ProactivePolicyDao {
     @Query("SELECT * FROM proactive_policies WHERE enabled = 1")
     suspend fun listEnabled(): List<ProactivePolicyEntity>
 
+    /** 全部策略行（V-C §4.5：显式行优先，无行按风格分档给缺省，需读全量判重）。 */
+    @Query("SELECT * FROM proactive_policies")
+    suspend fun listAll(): List<ProactivePolicyEntity>
+
     @Query("SELECT * FROM proactive_policies WHERE contactId = :contactId")
     fun observeFor(contactId: Long): Flow<ProactivePolicyEntity?>
 }
@@ -733,4 +749,37 @@ interface PersonalMaterialDao {
     /** 素材被保温选题采用后标记（防短期重选）。 */
     @Query("UPDATE personal_materials SET lastUsedAt = :atMs WHERE fingerprint = :fingerprint")
     suspend fun markUsedByFingerprint(fingerprint: String, atMs: Long)
+}
+
+// ─────────────────────── v10：双方人设 + 场景归属（UltraAdvisor v2.2 方案 §2.4/§4.4） ───────────────────────
+
+/** 全局我方人设标签库 DAO（v10）：全量查 / upsert（tag 唯一去重）/ 删除。 */
+@Dao
+interface SelfPersonaDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(persona: SelfPersonaEntity)
+
+    @Query("SELECT * FROM self_personas ORDER BY id")
+    suspend fun listAll(): List<SelfPersonaEntity>
+
+    @Query("SELECT COUNT(*) FROM self_personas")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM self_personas WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
+/** 周期废话方向计划 DAO（v10，V-C Planner 消费）：每联系人×每周一条，REPLACE upsert。 */
+@Dao
+interface TopicPlanDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(plan: TopicPlanEntity)
+
+    @Query("SELECT * FROM topic_plans WHERE contactId = :contactId ORDER BY cycleStart DESC, id DESC")
+    suspend fun forContact(contactId: Long): List<TopicPlanEntity>
+
+    @Query("SELECT * FROM topic_plans WHERE contactId = :contactId ORDER BY cycleStart DESC, id DESC LIMIT 1")
+    suspend fun latest(contactId: Long): TopicPlanEntity?
 }

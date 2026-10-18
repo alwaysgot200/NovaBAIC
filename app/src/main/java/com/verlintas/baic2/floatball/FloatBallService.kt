@@ -210,21 +210,20 @@ class FloatBallService : Service() {
             }
         }
         scope.launch {
-            // 转录面板跟随会话数据流刷新（分屏开着才渲染）。
+            // 转录面板跟随会话数据流刷新（分屏开着才渲染）；NON_CHAT 场景变化
+            // 同步驱动联系人状态条（v10 §1.3，VA-2 U3 隐藏人设区）。
             screenAdvisor.transcript.collect { state ->
                 transcriptView?.render(state)
+                applyStatusBarScene()
                 // 思考态变化联动输入行发送/停止键外观。
                 inputHandle?.refresh()
             }
         }
         scope.launch {
-            // 联系人状态条：绑定显示主名，未绑定显示引导，点击进画像管理页。
-            screenAdvisor.activeContact.collect { contact ->
-                split?.statusBar?.text = if (contact != null) {
-                    getString(R.string.float_profile_status_bound, contact.displayName)
-                } else {
-                    getString(R.string.float_profile_status_unbound)
-                }
+            // 联系人状态条：绑定显示主名，未绑定显示引导，点击进画像管理页；
+            // 具体按场景裁决收敛到 applyStatusBarScene（transcript/activeContact 双流汇合）。
+            screenAdvisor.activeContact.collect { _ ->
+                applyStatusBarScene()
             }
         }
         scope.launch {
@@ -290,6 +289,32 @@ class FloatBallService : Service() {
 
         override fun onRerouteReject() {
             screenAdvisor.rejectPendingReroute()
+        }
+    }
+
+    /**
+     * 联系人状态条按场景渲染（v10 §1.3，VA-2 U3）：NON_CHAT 分屏隐藏人设区——
+     * 不出现「未绑定联系人」的人设暗示，只显示纯问答标识且不可点（孤立参谋
+     * 无档案可管）；CHAT 屏绑定显示主名、未绑定保留手动关联入口（点击进画像
+     * 管理页）。transcript 与 activeContact 双流的汇合点：任一发射都重读双流
+     * 现值，两个收集器并发时以最后一次渲染为准（幂等）。
+     */
+    private fun applyStatusBarScene() {
+        val panel = split ?: return
+        if (screenAdvisor.transcript.value.isNonChat) {
+            panel.statusBar.text = getString(R.string.float_profile_status_nonchat)
+            panel.statusBar.setOnClickListener(null)
+            panel.statusBar.isClickable = false
+        } else {
+            val contact = screenAdvisor.activeContact.value
+            panel.statusBar.text = if (contact != null) {
+                getString(R.string.float_profile_status_bound, contact.displayName)
+            } else {
+                getString(R.string.float_profile_status_unbound)
+            }
+            panel.statusBar.setOnClickListener {
+                openProfileManager(contact?.contactId ?: -1L)
+            }
         }
     }
 
@@ -855,6 +880,8 @@ class FloatBallService : Service() {
         panel.statusBar.setOnClickListener {
             openProfileManager(screenAdvisor.activeContact.value?.contactId ?: -1L)
         }
+        // 场景化覆写（VA-2 U3）：NON_CHAT 时上一段的人设文案/点击被纯问答标识替换。
+        applyStatusBarScene()
         renderDirectionChip(panel.directionChip, screenAdvisor.direction.value)
         FloatUi.renderStrategyStrip(
             panel.strategyStrip,

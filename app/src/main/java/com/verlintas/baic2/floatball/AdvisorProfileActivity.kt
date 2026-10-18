@@ -492,6 +492,7 @@ private fun ContactDetailScreen(
                 policies = activity.proactivePolicies,
                 materials = activity.materialLibrary,
                 director = activity.director,
+                conversations = activity.conversationRepository,
                 scroll = tabScroll,
                 onOpenStrategyCard = {
                     context.startActivity(
@@ -1015,6 +1016,35 @@ private fun MyPersonaScreen(onBack: () -> Unit) {
         onClose = null,
         onBack = onBack,
     ) {
+        // VA-2 U1：全局我方人设标签库入口（方案 §2.4「我的 → 人设」）。上游
+        // 「我的/设置」导航零侵入，入口挂在 floatball 自己的画像链路（本屏顶部，
+        // 与 persona_fields 版我方人设同屏可达）最短路径；独立 Activity 载体。
+        val libraryContext = LocalContext.current
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp)
+                .clickable {
+                    libraryContext.startActivity(
+                        android.content.Intent(libraryContext, SelfPersonaLibraryActivity::class.java)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                },
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                Text(
+                    text = stringResource(R.string.float_selfpersona_entry),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    text = stringResource(R.string.float_selfpersona_entry_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         StyleEntryCard(contactId = MY_PERSONA_CONTACT_ID)
         schemas.get().myFields.groupBy { it.group }.forEach { (group, defs) ->
             SectionTitle(group)

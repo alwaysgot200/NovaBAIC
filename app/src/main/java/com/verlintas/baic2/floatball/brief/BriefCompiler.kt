@@ -47,6 +47,7 @@ import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_SKIP
 import com.verlintas.baic2.floatball.advisor.data.StageHistoryEntity
 import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
+import com.verlintas.baic2.floatball.director.TopicPlanner
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -72,6 +73,8 @@ internal data class BriefContent(
     val risks: List<String> = emptyList(),
     /** 下一步建议。 */
     val nextMoves: List<String> = emptyList(),
+    /** 下周期废话方向（V-C §4.4，确定性附加面——非 LLM 输出，落库前从 topic_plans 取）。 */
+    val topicDirections: List<String> = emptyList(),
 )
 
 /**
@@ -292,13 +295,21 @@ class BriefCompiler @Inject constructor(
                 Log.d(TAG, "brief parse failed: ${raw.take(120)}")
                 return@withContext null
             }
+            // V-C §4.5：周报附加下周期废话方向（确定性数据面，取自 topic_plans
+            // latest；Planner 未跑/无方向时空表，GoalTab 的 BriefSection 空表不渲染）。
+            val withDirections = content.copy(
+                topicDirections = runCatching { db.topicPlanDao().latest(contactId) }
+                    .getOrNull()
+                    ?.let { plan -> TopicPlanner.decodeDirections(plan.directionsJson) }
+                    .orEmpty(),
+            )
             val now = System.currentTimeMillis()
             val entity = BriefOutputEntity(
                 contactId = contactId,
                 kind = kind,
                 rangeStart = facts.rangeStart,
                 rangeEnd = facts.rangeEnd,
-                contentJson = strategyJson.encodeToString(BriefContent.serializer(), content),
+                contentJson = strategyJson.encodeToString(BriefContent.serializer(), withDirections),
                 createdAt = now,
             )
             runCatching {

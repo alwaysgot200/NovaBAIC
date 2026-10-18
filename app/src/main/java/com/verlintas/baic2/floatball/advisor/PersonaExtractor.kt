@@ -84,7 +84,7 @@ class PersonaExtractor @Inject constructor(
 
         val parsed = parse(raw, extractable)
         var landed = 0
-        for (draft in parsed.take(MAX_DRAFTS)) {
+        for (draft in parsed.fields.take(MAX_DRAFTS)) {
             val stored = contacts.applyDraft(
                 contactId = contactId,
                 field = draft.field,
@@ -93,6 +93,14 @@ class PersonaExtractor @Inject constructor(
                 action = draft.actionEnum,
             )
             if (stored != null) landed++
+        }
+        // 一问双产出（V-C，方案 §4.1）：style 三标签与我方 facet 增量先落
+        // 待确认通道（proposeStylePending 内部保证绝不覆盖手动值），核阅后转正。
+        if (parsed.style.facet.isNotEmpty() || parsed.style.identity != null ||
+            parsed.style.chatStyle != null || parsed.style.closeness != null
+        ) {
+            runCatching { contacts.proposeStylePending(contactId, parsed.style) }
+                .onFailure { android.util.Log.d(TAG, "style pending failed", it) }
         }
         // 无论模型是否提取到东西都盖时间戳，避免空窗期每回合重复调用。
         contacts.setLastExtractAt(conversationId, System.currentTimeMillis())
@@ -114,16 +122,24 @@ class PersonaExtractor @Inject constructor(
             规则：
             1. 只提取有明确对话依据、跨回合仍成立的事实（身份、职业、偏好、关系、预算、需求、禁忌等）；
                一次性寒暄、情绪、时间不确定的内容不要提取；严禁臆测。
-            2. 只提取【对方】的信息，不要提取「我」（用户本人）的信息。
-            3. field 必须且只能取自以下字段目录；目录外的键一律丢弃；
+            2. fields 只提取【对方】的信息；selfFacet 才提取「我」（用户本人）在这段关系里
+               呈现的侧面标签（如 办事周到/国企背景/随和耐烦），每条不超过 6 字、最多 3 条。
+            3. fields 的 field 必须且只能取自以下字段目录；目录外的键一律丢弃；
                带可选值的字段，value 必须原样使用可选值中文，不要自造同义词：
             $catalog
             4. action：新值或覆盖旧草稿用 set；tags 类字段追加标签用 add、撤销标签用 remove。
             5. value 简洁客观，单个不超过 80 字；tags 类多个标签用顿号分隔；
                evidence 填对话中支持该事实的原文短句（不超过 60 字）。
-            6. 最多输出 $MAX_DRAFTS 条；没有值得提取的内容就输出 []。
-            7. 只输出 JSON 数组，不要任何解释或 Markdown 代码块。格式：
-            [{"field":"字段键","value":"值","action":"set","evidence":"原文短句"}]
+            6. fields 最多输出 $MAX_DRAFTS 条。
+            7. style 是对方风格三标签（可整体缺省，拿不准就不要填）：
+               identity 只能取 领导/客户/同事/朋友/家人/暧昧对象/其他 之一；
+               chatStyle 只能取 严肃/随和/幽默/热情/冷淡 之一；
+               closeness 取 0~3 的整数（0 陌生/1 熟识/2 亲近/3 亲密）。
+            8. 没有值得提取的内容就输出空的 {"fields":[],"style":{},"selfFacet":[]}。
+            9. 只输出一个 JSON 对象，不要任何解释或 Markdown 代码块。格式：
+            {"fields":[{"field":"字段键","value":"值","action":"set","evidence":"原文短句"}],
+             "style":{"identity":"领导","chatStyle":"严肃","closeness":1},
+             "selfFacet":["办事周到"]}
         """.trimIndent()
     }
 
@@ -136,16 +152,73 @@ class PersonaExtractor @Inject constructor(
             }
         }
 
-    private fun parse(raw: String, fields: List<PersonaFieldDef>): List<DraftJson> {
+    /** 一次萃取的产物：fields 走 applyDraft 草稿，style+selfFacet 走待确认通道。 */
+    private data class Parsed(
+        val fields: List<DraftJson>,
+        val style: SelfFacets.StylePending,
+    )
+
+    /** 模型 style 段输出协议（字段全部缺省容忍；宽松 JSON 由外层 Json 承担）。 */
+    @Serializable
+    private data class StyleJson(
+        val identity: String? = null,
+        val chatStyle: String? = null,
+        /** 数字或中文词皆可（0~3 / 陌生~亲密），原样取 content 交 [StyleVocab.closenessOf]。 */
+        val closeness: kotlinx.serialization.json.JsonPrimitive? = null,
+    )
+
+    @Serializable
+    private data class OutputJson(
+        val fields: List<DraftJson> = emptyList(),
+        val style: StyleJson = StyleJson(),
+        val selfFacet: List<String> = emptyList(),
+    )
+
+    /**
+     * 宽松解析（V-C 一问双产出）：优先按对象协议 `{"fields":[…],"style":{…},
+     * "selfFacet":[…]}` 截首个 {…}；裸数组 `[…]`（旧协议/模型不守规矩）回退为
+     * fields-only，style 全空。style 三值经 [StyleVocab] 词表归一，词表外丢弃；
+     * selfFacet 每条 ≤6 字、最多 3 条、去重保序。
+     */
+    private fun parse(raw: String, fields: List<PersonaFieldDef>): Parsed {
         val text = raw.trim()
             .removePrefix("```json").removePrefix("```").removeSuffix("```")
             .trim()
-        val start = text.indexOf('[')
-        val end = text.lastIndexOf(']')
-        if (start < 0 || end <= start) return emptyList()
-        val list = runCatching {
-            json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(DraftJson.serializer()), text.substring(start, end + 1))
-        }.getOrDefault(emptyList())
+        val objStart = text.indexOf('{')
+        val objEnd = text.lastIndexOf('}')
+        val arrStart = text.indexOf('[')
+        val arrEnd = text.lastIndexOf(']')
+        val output: OutputJson = when {
+            objStart >= 0 && objEnd > objStart && (arrStart < 0 || objStart < arrStart) ->
+                runCatching { json.decodeFromString(OutputJson.serializer(), text.substring(objStart, objEnd + 1)) }
+                    .getOrNull()
+            arrStart >= 0 && arrEnd > arrStart ->
+                runCatching {
+                    OutputJson(
+                        fields = json.decodeFromString(
+                            kotlinx.serialization.builtins.ListSerializer(DraftJson.serializer()),
+                            text.substring(arrStart, arrEnd + 1),
+                        ),
+                    )
+                }.getOrNull()
+            else -> null
+        } ?: return Parsed(emptyList(), SelfFacets.StylePending())
+        val normalized = normalizeFields(output.fields, fields)
+        val style = SelfFacets.StylePending(
+            facet = output.selfFacet.asSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it.length <= FACET_MAX_CHARS }
+                .distinct()
+                .take(MAX_FACETS)
+                .toList(),
+            identity = StyleVocab.normalizeIdentity(output.style.identity),
+            chatStyle = StyleVocab.normalizeChatStyle(output.style.chatStyle),
+            closeness = StyleVocab.closenessOf(output.style.closeness?.content),
+        )
+        return Parsed(normalized, style)
+    }
+
+    private fun normalizeFields(list: List<DraftJson>, fields: List<PersonaFieldDef>): List<DraftJson> {
         val allowed = fields.associateBy { it.key }
         return list.mapNotNull { draft ->
             val def = allowed[draft.field] ?: return@mapNotNull null
@@ -192,6 +265,8 @@ class PersonaExtractor @Inject constructor(
     )
 
     private companion object {
+        private const val TAG = "PersonaExtractor"
+
         /** 默认萃取节流（调用方未显式传参时；正常链路由 AdvisorPrefs 决定）。 */
         const val DEFAULT_EVERY_TURNS = 5
         // 萃取素材屏数 6→4：萃取只看最近新增量（节流已是每 3/5/10 屏），
@@ -202,6 +277,10 @@ class PersonaExtractor @Inject constructor(
         const val REPLY_CHARS = 300
         const val VALUE_MAX_CHARS = 80
         const val EVIDENCE_MAX_CHARS = 60
+
+        /** 我方 facet 待确认标签的单条长度与条数上限（V-C：短标签、少量增量）。 */
+        const val FACET_MAX_CHARS = 6
+        const val MAX_FACETS = 3
         val ACTIONS = setOf("set", "add", "remove")
 
         val json = Json {

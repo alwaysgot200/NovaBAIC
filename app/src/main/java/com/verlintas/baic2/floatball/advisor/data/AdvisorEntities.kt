@@ -32,6 +32,15 @@ const val CONTACT_TYPE_GROUP = "group"
 /** 我方全局人设的虚拟 contactId（my_ 前缀字段都挂这里）。 */
 const val MY_PERSONA_CONTACT_ID = 0L
 
+/** 维持度三档（v10，UltraAdvisor v2.2 方案 §2.6）：联系人的第一手自动参与开关。 */
+const val ENGAGEMENT_PROACTIVE = "proactive"
+const val ENGAGEMENT_REACTIVE = "reactive"
+const val ENGAGEMENT_MUTE = "mute"
+
+/** 会话归属场景（v10，方案 §1）：session_bindings.scene；NON_CHAT 会话零人设管线。 */
+const val SCENE_CHAT = "chat"
+const val SCENE_NON_CHAT = "non_chat"
+
 /**
  * 联系人画像主档。唯一键 = IM 包名 + 首见标识；[mergedInto] 非空表示已软合并
  * （30 天内可经 merge_records 撤销，见方案 §4.3）。
@@ -60,6 +69,36 @@ data class ContactProfileEntity(
     val scenarioCode: String? = null,
     /** 当前生效的策略卡 id（v5）：null = 回退全局卡或无卡基线。 */
     val activeCardId: Long? = null,
+    /**
+     * 群标识（v10，方案 §1.4/§2.1）：自动判定（EntityResolver 多发言人）与画像页
+     * 手动切换共用一个属性；与 [contactType] 的 group 值保持同义（markGroup 同步写）。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val isGroup: Boolean = false,
+    /**
+     * 维持度三档（v10，方案 §2.6）：proactive/reactive/mute，默认 reactive——
+     * 自动建卡不主动，只有用户手动升级才进入主动维持；engagement 是
+     * ProactivePolicy（dailyCap/minGap/quiet）之上的第一手开关。
+     */
+    @ColumnInfo(defaultValue = "reactive")
+    val engagement: String = ENGAGEMENT_REACTIVE,
+    /** 对方身份类型（v10，方案 §4.1）：领导/客户/同事/朋友/家人/暧昧对象/其他；空 = 待萃取。 */
+    val identity: String? = null,
+    /** 对方聊天风格（v10，方案 §4.1）：严肃/随和/幽默/热情/冷淡；空 = 待萃取。 */
+    val chatStyle: String? = null,
+    /** 亲疏等级（v10，方案 §4.1）：0~3（陌生/熟识/亲近/亲密）；null = 待萃取。 */
+    val closeness: Int? = null,
+    /** 反馈热度分（v10，方案 §4.3）：0~100，迁移历史行默认 50（中性）；null = 无信号。 */
+    @ColumnInfo(defaultValue = "50")
+    val heatScore: Int? = null,
+    /** 我方在该关系中的侧面人设标签集（v10，方案 §2.4 双方人设）：JSON 数组；建档时从 self_personas 复制为起点。 */
+    val selfFacetJson: String? = null,
+    /**
+     * 我方侧面待确认差异标签（v10，方案 §2.5 合并协议第 2 步）：被并档案的
+     * selfFacet 与主档案的差异标签暂存于此（JSON 数组），画像页核阅转正后才
+     * 并入 [selfFacetJson]，不静默丢弃、也不直接生效。
+     */
+    val selfFacetPendingJson: String? = null,
     val createdAt: Long,
     val updatedAt: Long,
 )
@@ -152,6 +191,12 @@ data class SessionBindingEntity(
     val digestUpdatedAt: Long? = null,
     /** 对方最后一次新来信的时间（v6）：24h 静默时序信号用；仅来信文本指纹确实变化时更新。 */
     val lastIncomingAt: Long? = null,
+    /**
+     * 会话归属场景（v10，方案 §1.2）：chat（默认）/ non_chat。非聊天屏的孤立
+     * 参谋会话在此标记，会话复用只同场景互串（V-B 消费）；联系人绑定行恒 chat。
+     */
+    @ColumnInfo(defaultValue = "chat")
+    val scene: String = SCENE_CHAT,
     val createdAt: Long,
 )
 
@@ -572,4 +617,40 @@ data class PersonalMaterialEntity(
     val createdAt: Long = 0L,
     /** 最近一次被保温选题采用的时间；从未被选用为 null。 */
     val lastUsedAt: Long? = null,
+)
+
+// ─────────────────────── v10：双方人设 + 场景归属（UltraAdvisor v2.2 方案 §2.4/§5） ───────────────────────
+
+/**
+ * 全局我方人设标签库（v10，方案 §2.4）：「我的 → 人设」页维护的模板源。
+ * 建档即双建时把全库标签复制为新档案的 selfFacetJson 起点；此后各关系侧面
+ * 独立增删改，不随全局变化自动同步。tag 唯一索引去重，重复录入按 REPLACE 以最新为准。
+ */
+@Entity(tableName = "self_personas", indices = [Index(value = ["tag"], unique = true)])
+data class SelfPersonaEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    /** 我方标签本体（如「博学」「风趣」「办事周到」），唯一键。 */
+    val tag: String,
+    /** 可选备注：标签的语境/边界说明。 */
+    val note: String? = null,
+    val createdAt: Long = 0L,
+)
+
+/**
+ * 周期废话方向计划（v10，方案 §4.4，V-C Planner 产出）：每联系人×每周一条，
+ * (contactId, cycleStart) 唯一索引支撑 REPLACE upsert；directionsJson 为方向 2~3 条
+ * 的 JSON 数组，TopicEngine 选题优先消费、无方向退回四源（本版本只建表+DAO）。
+ */
+@Entity(
+    tableName = "topic_plans",
+    indices = [Index(value = ["contactId", "cycleStart"], unique = true)],
+)
+data class TopicPlanEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val contactId: Long,
+    /** 周期起点（毫秒，周检点的当日零点），与周检点节奏对齐。 */
+    val cycleStart: Long,
+    /** 废话方向 JSON 数组（如 ["行业见闻","工作观察"]）。 */
+    val directionsJson: String = "[]",
+    val createdAt: Long = 0L,
 )

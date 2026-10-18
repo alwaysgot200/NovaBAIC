@@ -52,8 +52,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BriefOutputEntity::class,
         ProactivePolicyEntity::class,
         PersonalMaterialEntity::class,
+        SelfPersonaEntity::class,
+        TopicPlanEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -97,6 +99,10 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun proactivePolicyDao(): ProactivePolicyDao
 
     abstract fun personalMaterialDao(): PersonalMaterialDao
+
+    abstract fun selfPersonaDao(): SelfPersonaDao
+
+    abstract fun topicPlanDao(): TopicPlanDao
 }
 
 /**
@@ -457,5 +463,62 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
                 "ON `personal_materials` (`fingerprint`)",
         )
         ensureColumn(db, "director_logs", "actionHint", "actionHint INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * v9 → v10（UltraAdvisor v2.2 场景归属与废话分层，方案 §5，幂等迁移保数据）：
+ * 1. contact_profiles 加七列：isGroup（群标识，方案 §1.4）、engagement（维持度三档
+ *    默认 reactive，§2.6）、identity/chatStyle/closeness（对方风格三标签，§4.1）、
+ *    heatScore（反馈热度分默认 50 中性，§4.3）、selfFacetJson/selfFacetPendingJson
+ *    （我方关系侧面 + 合并差异待确认区，§2.4/§2.5）；
+ * 2. 新表 self_personas（全局我方人设标签库，建档双建的模板源，§2.4）；
+ * 3. session_bindings 加 scene（会话归属 chat/non_chat，§1）；
+ * 4. 新表 topic_plans（每联系人×每周一条的废话方向计划，V-C 消费，§4.4）。
+ * 列走 ensureColumn 幂等补列（Room 2.8 校验 defaultValue，实体 @ColumnInfo 与
+ * DDL DEFAULT 逐字对齐），建表 IF NOT EXISTS，不搬不删任何既有数据。
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        ensureColumn(db, "contact_profiles", "isGroup", "isGroup INTEGER NOT NULL DEFAULT 0")
+        ensureColumn(db, "contact_profiles", "engagement", "engagement TEXT NOT NULL DEFAULT 'reactive'")
+        ensureColumn(db, "contact_profiles", "identity", "identity TEXT")
+        ensureColumn(db, "contact_profiles", "chatStyle", "chatStyle TEXT")
+        ensureColumn(db, "contact_profiles", "closeness", "closeness INTEGER")
+        ensureColumn(db, "contact_profiles", "heatScore", "heatScore INTEGER DEFAULT 50")
+        ensureColumn(db, "contact_profiles", "selfFacetJson", "selfFacetJson TEXT")
+        ensureColumn(db, "contact_profiles", "selfFacetPendingJson", "selfFacetPendingJson TEXT")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `self_personas` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `tag` TEXT NOT NULL,
+                `note` TEXT,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_self_personas_tag` ON `self_personas` (`tag`)",
+        )
+
+        ensureColumn(db, "session_bindings", "scene", "scene TEXT NOT NULL DEFAULT 'chat'")
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `topic_plans` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `cycleStart` INTEGER NOT NULL,
+                `directionsJson` TEXT NOT NULL,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_topic_plans_contactId_cycleStart` " +
+                "ON `topic_plans` (`contactId`, `cycleStart`)",
+        )
     }
 }

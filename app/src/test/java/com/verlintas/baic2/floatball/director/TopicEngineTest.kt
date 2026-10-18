@@ -42,26 +42,36 @@ class TopicEngineTest {
         angle: String = "",
         tags: List<String> = emptyList(),
         depth: Int = TopicEngine.DEPTH_SHALLOW,
-    ) = TopicSeed(topic = topic, angle = angle, tags = tags, depth = depth)
+        minCloseness: Int = 0,
+    ) = TopicSeed(topic = topic, angle = angle, tags = tags, depth = depth, minCloseness = minCloseness)
 
     private fun materials(
         hooks: List<String> = emptyList(),
         tags: Set<String> = emptySet(),
         experiences: List<String> = emptyList(),
         personalMaterials: List<String> = emptyList(),
+        materialItems: List<MaterialItem> = emptyList(),
         seeds: List<TopicSeed> = emptyList(),
         used: List<TopicEngine.UsedTopic> = emptyList(),
         stageDepth: Int = TopicEngine.DEPTH_DEEP,
         nowMs: Long = NOW,
+        planDirections: List<String> = emptyList(),
+        filter: TopicFilter? = null,
     ) = TopicEngine.Materials(
         profileHooks = hooks,
         interestTags = tags,
         sharedExperiences = experiences,
-        personalMaterials = personalMaterials,
+        personalMaterials = if (materialItems.isEmpty()) {
+            personalMaterials.map { MaterialItem(it) }
+        } else {
+            materialItems
+        },
         seeds = seeds,
         usedTopics = used,
         stageDepth = stageDepth,
         nowMs = nowMs,
+        planDirections = planDirections,
+        filter = filter,
     )
 
     // ── 源优先级（枚举声明序即优先级） ─────────────────────────────────
@@ -372,5 +382,158 @@ class TopicEngineTest {
     @Test
     fun topicOfQuestion_noQuotes_returnsNull() {
         assertNull(TopicEngine.topicOfQuestion("来点闲聊"))
+    }
+
+    // ── V-C §4.4：Planner 方向优先消费 ─────────────────────────────────
+
+    @Test
+    fun planDirection_beatsAllSources() {
+        val pick = TopicEngine.select(
+            materials(
+                hooks = listOf("钓鱼"),
+                planDirections = listOf("行业见闻"),
+                seeds = listOf(seed("周末安排")),
+            ),
+        )
+        assertEquals(TopicSource.PLAN_DIRECTION, pick?.source)
+        assertEquals("行业见闻", pick?.topic)
+        assertTrue(pick!!.angle.contains("方向"))
+    }
+
+    /** 方向在去重窗口内 = 近期已聊：自动轮换退回四源，不空转。 */
+    @Test
+    fun planDirection_usedRecently_fallsBackToFourSources() {
+        val pick = TopicEngine.select(
+            materials(
+                hooks = listOf("钓鱼"),
+                planDirections = listOf("行业见闻"),
+                used = listOf(TopicEngine.UsedTopic(TopicEngine.fingerprintOf("行业见闻"), NOW - DAY_MS)),
+            ),
+        )
+        assertEquals(TopicSource.PROFILE_HOOK, pick?.source)
+        assertEquals("钓鱼", pick?.topic)
+    }
+
+    @Test
+    fun planDirection_blankSkipped() {
+        val pick = TopicEngine.select(
+            materials(
+                hooks = listOf("钓鱼"),
+                planDirections = listOf("  ", ""),
+            ),
+        )
+        assertEquals(TopicSource.PROFILE_HOOK, pick?.source)
+    }
+
+    /** 方向超长截断到话题粒度上限（与四源口径一致）。 */
+    @Test
+    fun planDirection_truncatedToTopicChars() {
+        val long = "一".repeat(50)
+        val pick = TopicEngine.select(materials(planDirections = listOf(long)))
+        assertEquals(TopicEngine.MAX_TOPIC_CHARS, pick?.topic?.length)
+    }
+
+    // ── V-C §4.2：三重过滤（风格禁区/降权/亲疏门） ───────────────────────
+
+    /** 禁区：领导型联系人（forbidden 含吃喝/玩乐/段子）→ 带风格词的种子被整体剔除。 */
+    @Test
+    fun forbiddenTags_removeStyleTaggedSeeds() {
+        val pick = TopicEngine.select(
+            materials(
+                tags = setOf("饮食"),
+                seeds = listOf(
+                    seed("周末安排"),
+                    seed("最近吃到的好吃的", tags = listOf("饮食")),
+                ),
+                filter = TopicFilter(forbiddenTags = setOf(TopicStyleTags.FOOD)),
+            ),
+        )
+        assertEquals("周末安排", pick?.topic)
+    }
+
+    /** 亲疏门：种子 minCloseness 高于对方 closeness 的不投喂。 */
+    @Test
+    fun seedMinCloseness_aboveContactCloseness_gated() {
+        val pick = TopicEngine.select(
+            materials(
+                seeds = listOf(
+                    seed("个人往事", minCloseness = 2),
+                    seed("周末安排", minCloseness = 0),
+                ),
+                filter = TopicFilter(closeness = 1),
+            ),
+        )
+        assertEquals("周末安排", pick?.topic)
+    }
+
+    /** 亲疏门：closeness 未萃取（null）不设限，全交阶段门控兜底。 */
+    @Test
+    fun seedMinCloseness_noClosenessExtracted_permissive() {
+        val pick = TopicEngine.select(
+            materials(
+                seeds = listOf(seed("个人往事", minCloseness = 3, depth = TopicEngine.DEPTH_DEEP)),
+                filter = TopicFilter(closeness = null),
+            ),
+        )
+        assertEquals("个人往事", pick?.topic)
+    }
+
+    /** 深度双门：风格 maxDepth 与阶段档取更严（此处风格收到浅层）。 */
+    @Test
+    fun filterMaxDepth_gatesDeepSeedsEvenInDeepStage() {
+        val pick = TopicEngine.select(
+            materials(
+                seeds = listOf(
+                    seed("个人往事", depth = TopicEngine.DEPTH_DEEP),
+                    seed("周末安排"),
+                ),
+                stageDepth = TopicEngine.DEPTH_DEEP,
+                filter = TopicFilter(maxDepth = TopicEngine.DEPTH_SHALLOW),
+            ),
+        )
+        assertEquals("周末安排", pick?.topic)
+    }
+
+    /** 降权生效：段子种子被降权后输给命中兴趣标签的其他种子（不剔除、只让位）。 */
+    @Test
+    fun penaltyTags_loseToTagMatchedAlternative() {
+        val pick = TopicEngine.select(
+            materials(
+                tags = setOf("饮食", "搞笑"),
+                seeds = listOf(
+                    seed("最近看到的搞笑段子", tags = listOf("搞笑")),
+                    seed("最近吃到的好吃的", tags = listOf("饮食")),
+                ),
+                filter = TopicFilter(penaltyTags = setOf(TopicStyleTags.JOKE)),
+            ),
+        )
+        // 段子：1 命中 - 1 降权 = 0；吃喝：1 命中 - 0 = 1 → 吃喝胜出。
+        assertEquals("最近吃到的好吃的", pick?.topic)
+    }
+
+    /** 素材风格词命中禁区同样被剔除（素材与种子同口径过滤）。 */
+    @Test
+    fun forbiddenTags_removeMaterialsByStyleTag() {
+        val pick = TopicEngine.select(
+            materials(
+                materialItems = listOf(
+                    MaterialItem("周末爬山", styleTags = listOf("玩乐")),
+                    MaterialItem("聊聊家常"),
+                ),
+                filter = TopicFilter(forbiddenTags = setOf(TopicStyleTags.FUN)),
+            ),
+        )
+        assertEquals("聊聊家常", pick?.topic)
+    }
+
+    /** 无 filter（共享会话/未萃取路径）时一切照旧放行。 */
+    @Test
+    fun nullFilter_noRestrictions() {
+        val pick = TopicEngine.select(
+            materials(
+                seeds = listOf(seed("个人往事", minCloseness = 3, depth = TopicEngine.DEPTH_DEEP)),
+            ),
+        )
+        assertEquals("个人往事", pick?.topic)
     }
 }

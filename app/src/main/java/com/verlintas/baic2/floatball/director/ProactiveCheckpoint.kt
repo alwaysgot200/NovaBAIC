@@ -32,6 +32,7 @@ import com.verlintas.baic2.MainActivity
 import com.verlintas.baic2.R
 import com.verlintas.baic2.floatball.AdvisorPrefs
 import com.verlintas.baic2.floatball.ScreenAdvisor
+import com.verlintas.baic2.floatball.advisor.EngagementRules
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.DirectorLogEntity
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_SMALL_TALK
@@ -124,6 +125,7 @@ class ProactiveCheckpoint @Inject constructor(
     private val briefs: BriefCompiler,
     private val prefs: AdvisorPrefs,
     private val director: Director,
+    private val topicPlanner: TopicPlanner,
 ) {
 
     /** 总闸开→挂下一班闹钟；关→撤销既有闹钟。开关切换/服务创建时调用。 */
@@ -169,7 +171,8 @@ class ProactiveCheckpoint @Inject constructor(
 
         // 2) SCHEDULED：先落 scheduled/brief 决策行（四触发源可回放），再周报惰性
         //    刷新（自带 7 天节流 + 无数据不调 LLM；节流在执行面，决策面每检点
-        //    必记——与 PROACTIVE 分支同口径，频控/对账消费的是决策行）。
+        //    必记——与 PROACTIVE 分支同口径，频控/对账消费的是决策行），
+        //    最后 Planner 慢车道产出下周期废话方向（V-C §4.4，自守 engagement 门）。
         val weeklyContacts = mutableListOf<String>()
         runCatching { db.contactProfileDao().listAllAlive() }.getOrDefault(emptyList())
             .forEach { contact ->
@@ -179,64 +182,83 @@ class ProactiveCheckpoint @Inject constructor(
                 )
                 val brief = runCatching { briefs.refreshWeeklyIfStale(contact.id) }.getOrNull()
                 if (brief != null) weeklyContacts.add(contact.displayName)
+                // 方向规划挂周报之后（方案 §4.4）：失败静默（无方向退回四源选题）。
+                runCatching { topicPlanner.planWeekly(contact.id, now) }
+                    .onFailure { Log.d(TAG, "topic plan failed: contact=${contact.id}", it) }
             }
         if (weeklyContacts.isNotEmpty()) {
             postWeeklyNotification(weeklyContacts, summary.cellLine())
         }
 
-        // 3) PROACTIVE：enabled 联系人逐个过五分支频控。
+        // 3) PROACTIVE：proactive 档联系人逐个过五分支频控。策略取值两级：
+        //    显式 policy 行（含 enabled=false 的显式关闭）一律优先；无行时按
+        //    风格分档给缺省（V-C §4.5：领导/严肃 1条/48h、亲熟热情 3条/8h、
+        //    其余 2条/24h，heat<30 降一档）——不落库（下次检点重算，跟随画像演进）。
         val dayStart = startOfDayMs(now)
-        val policies = runCatching { db.proactivePolicyDao().listEnabled() }.getOrDefault(emptyList())
-        policies.forEach { policy ->
-            val contact = runCatching { db.contactProfileDao().findById(policy.contactId) }
-                .getOrNull()
-                ?.takeIf { it.mergedInto == null && it.deletedAt == null }
-                ?: return@forEach
-            val countToday = runCatching {
-                db.directorLogDao()
-                    .countSince(policy.contactId, TRIGGER_PROACTIVE, ROUTE_SMALL_TALK, dayStart)
-            }.getOrDefault(0)
-            val lastAt = runCatching {
-                db.directorLogDao().latestAt(policy.contactId, TRIGGER_PROACTIVE, ROUTE_SMALL_TALK)
-            }.getOrNull()
-            // §7.3 incoming 优先：对方最近来信时间（v6 lastIncomingAt 聚合读）。
-            val lastIncomingAt = runCatching {
-                db.sessionBindingDao().lastIncomingAtFor(policy.contactId)
-            }.getOrNull()
-            val input = DirectorInput(
-                trigger = DirectorTrigger.PROACTIVE,
-                proactivePolicy = ProactivePolicySnapshot(
-                    enabled = policy.enabled,
-                    dailyCap = policy.dailyCap,
-                    minGapHours = policy.minGapHours,
-                    quietStart = policy.quietStart,
-                    quietEnd = policy.quietEnd,
-                ),
-                proactiveCountToday = countToday,
-                lastProactiveAtMs = lastAt,
-                lastIncomingAtMs = lastIncomingAt,
-                nowMs = now,
-            )
-            val decision = director.route(input, policy.contactId)
-            if (decision.route != DirectorRoute.SMALL_TALK) return@forEach
-            val ref = runCatching {
-                val aliases = db.contactAliasDao().listFor(policy.contactId).map { it.alias }
-                ContactRef(contact.id, contact.displayName, aliases, contact.goal, contact.style)
-            }.getOrNull() ?: return@forEach
-            val result = runCatching { screenAdvisor.runProactiveSmalltalk(ref) }
-                .onFailure { Log.d(TAG, "proactive turn failed: contact=${policy.contactId}", it) }
-                .getOrNull() ?: return@forEach
-            // §6 三层回放链：检点先落决策行（无消息 id），回合落库触发消息后回填锚点。
-            result.turnMessageId?.let { director.attachProactiveTurnMessage(policy.contactId, it) }
-            val draft = result.draft?.takeIf { it.isNotBlank() } ?: return@forEach
-            postDraftNotification(
-                contactName = contact.displayName,
-                imPackage = contact.imPackage,
-                conversationId = result.conversationId,
-                contactId = contact.id,
-                draft = draft,
-            )
-        }
+        val explicitPolicies = runCatching { db.proactivePolicyDao().listAll() }
+            .getOrDefault(emptyList())
+            .associateBy { it.contactId }
+        runCatching { db.contactProfileDao().listAllAlive() }.getOrDefault(emptyList())
+            .forEach { contact ->
+                // 维持度第一手开关（v10 方案 §2.6）：只有 proactive 档参与主动维持，
+                // reactive（问了才答）/mute 直接跳过；ProactivePolicy 频控只是其下的
+                // 第二层参数（dailyCap/minGap/quiet），不会把档位放大。
+                if (!EngagementRules.proactiveEligible(contact.engagement)) return@forEach
+                val policy = explicitPolicies[contact.id]
+                    ?: ProactiveStyleTiers.defaultPolicy(
+                        contactId = contact.id,
+                        identity = contact.identity,
+                        chatStyle = contact.chatStyle,
+                        closeness = contact.closeness,
+                        heatScore = contact.heatScore,
+                        nowMs = now,
+                    )
+                if (!policy.enabled) return@forEach
+                val countToday = runCatching {
+                    db.directorLogDao()
+                        .countSince(contact.id, TRIGGER_PROACTIVE, ROUTE_SMALL_TALK, dayStart)
+                }.getOrDefault(0)
+                val lastAt = runCatching {
+                    db.directorLogDao().latestAt(contact.id, TRIGGER_PROACTIVE, ROUTE_SMALL_TALK)
+                }.getOrNull()
+                // §7.3 incoming 优先：对方最近来信时间（v6 lastIncomingAt 聚合读）。
+                val lastIncomingAt = runCatching {
+                    db.sessionBindingDao().lastIncomingAtFor(contact.id)
+                }.getOrNull()
+                val input = DirectorInput(
+                    trigger = DirectorTrigger.PROACTIVE,
+                    proactivePolicy = ProactivePolicySnapshot(
+                        enabled = policy.enabled,
+                        dailyCap = policy.dailyCap,
+                        minGapHours = policy.minGapHours,
+                        quietStart = policy.quietStart,
+                        quietEnd = policy.quietEnd,
+                    ),
+                    proactiveCountToday = countToday,
+                    lastProactiveAtMs = lastAt,
+                    lastIncomingAtMs = lastIncomingAt,
+                    nowMs = now,
+                )
+                val decision = director.route(input, contact.id)
+                if (decision.route != DirectorRoute.SMALL_TALK) return@forEach
+                val ref = runCatching {
+                    val aliases = db.contactAliasDao().listFor(contact.id).map { it.alias }
+                    ContactRef(contact.id, contact.displayName, aliases, contact.goal, contact.style, contact.engagement)
+                }.getOrNull() ?: return@forEach
+                val result = runCatching { screenAdvisor.runProactiveSmalltalk(ref) }
+                    .onFailure { Log.d(TAG, "proactive turn failed: contact=${contact.id}", it) }
+                    .getOrNull() ?: return@forEach
+                // §6 三层回放链：检点先落决策行（无消息 id），回合落库触发消息后回填锚点。
+                result.turnMessageId?.let { director.attachProactiveTurnMessage(contact.id, it) }
+                val draft = result.draft?.takeIf { it.isNotBlank() } ?: return@forEach
+                postDraftNotification(
+                    contactName = contact.displayName,
+                    imPackage = contact.imPackage,
+                    conversationId = result.conversationId,
+                    contactId = contact.id,
+                    draft = draft,
+                )
+            }
     }
 
     /** 本机时区的当日零点（频控「当日计数」的窗口起点）。 */

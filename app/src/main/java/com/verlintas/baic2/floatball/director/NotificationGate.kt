@@ -77,12 +77,13 @@ class NotificationGate @Inject constructor() {
         return true
     }
 
-    private companion object {
+    internal companion object {
         /**
          * 常见 IM 包名白名单（M2-a 起草档的感知面；通知文本即取即用，
-         * 只处理聊天类通知，其余应用一概不进管线）。
+         * 只处理聊天类通知，其余应用一概不进管线）。v10 起同为 SceneGate
+         * 的场景白名单同源常量（方案 §1.3），改这里两处同步生效。
          */
-        val LISTENED_PACKAGES = setOf(
+        internal val LISTENED_PACKAGES = setOf(
             "com.tencent.mm",            // 微信
             "com.tencent.mobileqq",      // QQ
             "com.tencent.tim",           // TIM

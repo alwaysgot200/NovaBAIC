@@ -26,6 +26,7 @@ import com.verlintas.baic2.floatball.advisor.GoalRepository
 import com.verlintas.baic2.floatball.advisor.PersonaFieldType
 import com.verlintas.baic2.floatball.advisor.PersonaSchemas
 import com.verlintas.baic2.floatball.advisor.PersonaValues
+import com.verlintas.baic2.floatball.advisor.SelfFacets
 import com.verlintas.baic2.floatball.advisor.StrategyBrief
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.PersonalMaterialEntity
@@ -72,7 +73,7 @@ class TopicEngineStore @Inject constructor(
         if (contact == null) {
             val pick = TopicEngine.select(
                 TopicEngine.Materials(
-                    personalMaterials = materials.map { it.content },
+                    personalMaterials = materials.toItems(),
                     seeds = seeds,
                     usedTopics = sharedUsedTopics + materials.usedFingerprints(),
                     stageDepth = TopicEngine.DEPTH_SHALLOW,
@@ -114,6 +115,19 @@ class TopicEngineStore @Inject constructor(
             }
         }
 
+        // 风格三重过滤（V-C §4.2）：对方 identity/chatStyle/closeness + 我方 facet +
+        // heatScore 推导禁区/降权/深度门；画像缺失时 filterFor 各维 null 不设限。
+        val profile = runCatching { contacts.profile(contact.contactId) }.getOrNull()
+        val filter = profile?.let {
+            TopicStyleRules.filterFor(
+                identity = it.identity,
+                chatStyle = it.chatStyle,
+                closeness = it.closeness,
+                facetTags = SelfFacets.decode(it.selfFacetJson),
+                heatScore = it.heatScore,
+            )
+        }
+
         // 共同经历：按主名+别名只读召回该联系人的交往事实（不 touch、不强化）。
         val names = (listOf(contact.displayName) + contact.aliases)
             .map { it.trim() }
@@ -139,21 +153,34 @@ class TopicEngineStore @Inject constructor(
                     ?.let { TopicEngine.UsedTopic(TopicEngine.fingerprintOf(it), mission.createdAt) }
             }
 
+        // Planner 周方向（V-C §4.4）：latest 一条的方向列表交给引擎优先消费；
+        // 方向在窗口内视为已聊，引擎自动落到四源。
+        val planDirections = runCatching { db.topicPlanDao().latest(contact.contactId) }
+            .getOrNull()
+            ?.let { plan -> TopicPlanner.decodeDirections(plan.directionsJson) }
+            .orEmpty()
+
         val pick = TopicEngine.select(
             TopicEngine.Materials(
                 profileHooks = hooks,
                 interestTags = interestTags,
                 sharedExperiences = sharedExperiences,
-                personalMaterials = materials.map { it.content },
+                personalMaterials = materials.toItems(),
                 seeds = seeds,
                 usedTopics = usedTopics + materials.usedFingerprints(),
                 stageDepth = TopicEngine.stageDepthOf(pack?.stages?.map { it.code }.orEmpty(), stageCode),
                 nowMs = nowMs,
+                planDirections = planDirections,
+                filter = filter,
             ),
         )
         markMaterialUsed(pick, nowMs)
         return pick
     }
+
+    /** 素材行 → 引擎条目：风格词由用户自由 tag 归一派生（TopicStyleTags 同源）。 */
+    private fun List<PersonalMaterialEntity>.toItems(): List<MaterialItem> =
+        map { MaterialItem(content = it.content, styleTags = listOfNotNull(it.tag)) }
 
     /** 素材已用指纹（新→旧，按 lastUsedAt 降序）：并轨进 [TopicEngine.Materials.usedTopics]。 */
     private fun List<PersonalMaterialEntity>.usedFingerprints(): List<TopicEngine.UsedTopic> =

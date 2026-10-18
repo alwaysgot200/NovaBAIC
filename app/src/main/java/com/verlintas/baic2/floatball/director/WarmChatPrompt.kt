@@ -30,12 +30,18 @@ package com.verlintas.baic2.floatball.director
 object WarmChatPrompt {
 
     fun section(pick: TopicEngine.TopicPick?): String {
-        val topicLine = if (pick == null || pick.topic.isBlank()) {
-            "· 本轮没有既定话题（题库暂缺）：从对话语境里挑一个最轻松的中性话题自由开场。"
-        } else {
-            val angle = pick.angle.takeIf { it.isNotBlank() }?.let { "（切入角度：$it）" }.orEmpty()
-            "· 话题候选：${pick.topic}$angle。优先围绕它展开；确实不合适时可以换成" +
-                "同样轻松的近似话题，不必生硬硬凑。"
+        val topicLine = when {
+            pick == null || pick.topic.isBlank() ->
+                "· 本轮没有既定话题（题库暂缺）：从对话语境里挑一个最轻松的中性话题自由开场。"
+            // V-C §4.4：方向源自 Planner 周编译（基调而非具体话题），措辞随之调整。
+            pick.source == TopicSource.PLAN_DIRECTION ->
+                "· 本轮话题方向：${pick.topic}（周期计划给出）。从中挑一个具体话头自然展开，" +
+                    "不必拘泥原文表述；确实不合适时可以换成同样轻松的近似话题。"
+            else -> {
+                val angle = pick.angle.takeIf { it.isNotBlank() }?.let { "（切入角度：$it）" }.orEmpty()
+                "· 话题候选：${pick.topic}$angle。优先围绕它展开；确实不合适时可以换成" +
+                    "同样轻松的近似话题，不必生硬硬凑。"
+            }
         }
         return """
             【本轮是保温闲聊】用户点了「来点闲聊」，要你给一条发出去就能自然聊起来的开场草稿：

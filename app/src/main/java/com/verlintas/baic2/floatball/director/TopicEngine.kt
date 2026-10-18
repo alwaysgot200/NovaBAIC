@@ -23,15 +23,16 @@ import com.verlintas.baic2.floatball.advisor.data.WARM_CHAT_MISSION_PREFIX
 import kotlinx.serialization.Serializable
 
 /**
- * 素材源（方案 §7.2）。枚举声明顺序即选题优先级：对方画像钩子（最贴合
- * 对方、最易被接住）＞ 共同经历（关系专属）＞ 个人素材（用户投喂，鲜活但
- * 泛于画像/经历）＞ 种子库（中庸兜底）。个人素材插位推导：方案 §7.2 把
- * 「我的素材库」（种子+投喂）列为源②，但同图标注「权重=画像 tag 匹配度」
- * 而非源序硬分——源序只是枚举。投喂素材由用户主动录入、比静态种子鲜活
- * （具个人色彩、可含时效内容），但相关度弱于对方画像钩子与双方共同经历
+ * 素材源（方案 §7.2）。枚举声明顺序即选题优先级：方向（Planner 周编译的下周期
+ * 废话方向，V-C 方案 §4.4——最贴目标阶段但易空转，靠既有指纹去重轮换）＞
+ * 对方画像钩子（最贴合对方、最易被接住）＞ 共同经历（关系专属）＞ 个人素材
+ * （用户投喂，鲜活但泛于画像/经历）＞ 种子库（中庸兜底）。个人素材插位推导：
+ * 方案 §7.2 把「我的素材库」（种子+投喂）列为源②，但同图标注「权重=画像 tag
+ * 匹配度」而非源序硬分——源序只是枚举。投喂素材由用户主动录入、比静态种子
+ * 鲜活（具个人色彩、可含时效内容），但相关度弱于对方画像钩子与双方共同经历
  * （那两源天然贴着「这个人、这段关系」），故置于共同经历之后、种子库之前。
  */
-enum class TopicSource { PROFILE_HOOK, SHARED_EXPERIENCE, PERSONAL_MATERIAL, SEED_BANK }
+enum class TopicSource { PLAN_DIRECTION, PROFILE_HOOK, SHARED_EXPERIENCE, PERSONAL_MATERIAL, SEED_BANK }
 
 /** 保温话题种子（assets/advisor/topic_seeds.json 单条，方案 §6 静态资产）。 */
 @Serializable
@@ -43,7 +44,16 @@ data class TopicSeed(
     val tags: List<String> = emptyList(),
     /** 话题深度：1=浅层（兴趣/见闻）2=中层（经历/观点）3=深层（个人往事/情感）。 */
     val depth: Int = TopicEngine.DEPTH_SHALLOW,
+    /** 亲疏门槛（V-C §4.2）：0~3，低于对方 closeness 的种子不投喂；缺省 0 不设限。 */
+    val minCloseness: Int = 0,
 )
+
+/**
+ * 个人素材的引擎内形态（V-C）：[content] 为素材正文（话题本体），[styleTags]
+ * 为归一后的风格词（吃喝/玩乐/段子…，由 TopicStyleRules.styleTagsOf 从用户
+ * 自由 tag 派生），供三重过滤的禁区/降权裁决。
+ */
+data class MaterialItem(val content: String, val styleTags: List<String> = emptyList())
 
 /** 种子库文件根结构（照 scenario_packs 惯例带外壳，便于后续扩展元字段）。 */
 @Serializable
@@ -91,19 +101,25 @@ object TopicEngine {
     data class UsedTopic(val fingerprint: String, val usedAtMs: Long)
 
     /**
-     * 选题输入（三源 + 门控原料）。[usedTopics] 由调用方从 talk_missions
-     * 台账解码（新→旧，上限 60 条）；[stageDepth] 用 [stageDepthOf] 从站码换算。
+     * 选题输入（方向 + 三源 + 门控原料）。[usedTopics] 由调用方从 talk_missions
+     * 台账解码（新→旧，上限 60 条）；[stageDepth] 用 [stageDepthOf] 从站码换算；
+     * [planDirections] 为 Planner 周编译的下周期方向（最前消费）；[filter] 为
+     * 风格三重过滤（null = 不设限，共享会话/无画像路径）。
      */
     data class Materials(
         val profileHooks: List<String> = emptyList(),
         val interestTags: Set<String> = emptySet(),
         val sharedExperiences: List<String> = emptyList(),
-        /** 我的素材库（用户投喂，方案 §7.2 源②）：内容列表，指纹与台账同轨去重。 */
-        val personalMaterials: List<String> = emptyList(),
+        /** 我的素材库（用户投喂，方案 §7.2 源②）：条目含风格词，指纹与台账同轨去重。 */
+        val personalMaterials: List<MaterialItem> = emptyList(),
         val seeds: List<TopicSeed> = emptyList(),
         val usedTopics: List<UsedTopic> = emptyList(),
         val stageDepth: Int = DEPTH_SHALLOW,
         val nowMs: Long = 0L,
+        /** Planner 周方向（V-C §4.4）：指纹不在去重窗口内的第一个方向优先出题。 */
+        val planDirections: List<String> = emptyList(),
+        /** 风格三重过滤（V-C §4.2）；null = 不过滤。 */
+        val filter: TopicFilter? = null,
     )
 
     /** 选题产物：拼进保温提示词段与 missionHint（"话题候选=X（角度=Y），可弃用"）。 */
@@ -127,14 +143,25 @@ object TopicEngine {
     /**
      * 确定性选题。排序键（宽松档额外前置"最久未用"）：源优先级 → 标签命中数
      * 降序 → 同源原始顺序。返回 null 仅当阶段门控后无任何候选。
+     * 方向优先（V-C §4.4）：指纹不在去重窗口内的第一个 [Materials.planDirections]
+     * 直接出题（TopicSource.PLAN_DIRECTION）；方向全用过则照常走四源。
      */
     fun select(materials: Materials): TopicPick? {
+        val window = materials.usedTopics.asSequence().take(DEDUP_WINDOW)
+            .map { it.fingerprint }.toHashSet()
+        // 方向优先消费：去过重（窗口内说明近期已聊），其余照旧。
+        materials.planDirections.firstOrNull { it.isNotBlank() && fingerprintOf(it) !in window }
+            ?.let { direction ->
+                return TopicPick(
+                    TopicSource.PLAN_DIRECTION,
+                    direction.take(MAX_TOPIC_CHARS),
+                    "围绕这个方向挑一个具体话头，自然开场，不必拘泥原文表述",
+                )
+            }
         val candidates = candidatesOf(materials)
         if (candidates.isEmpty()) return null
         val nowMs = materials.nowMs
 
-        val window = materials.usedTopics.asSequence().take(DEDUP_WINDOW)
-            .map { it.fingerprint }.toHashSet()
         val lastUsedAt = HashMap<String, Long>()
         materials.usedTopics.forEach { used ->
             val prev = lastUsedAt[used.fingerprint]
@@ -162,9 +189,19 @@ object TopicEngine {
         return TopicPick(pick.source, pick.topic, pick.angle)
     }
 
-    /** 三源候选构建 + 阶段门控（深度越界直接不投喂）。 */
+    /**
+     * 三源候选构建 + 门控（V-C 三重过滤 + 阶段门控）。风格禁区/降权/深度双门
+     * 只作用于种子库与个人素材（两源是**泛化**内容，风格词可判）；画像钩子与
+     * 共同经历不过滤——它们天然贴着对方本人/双方关系，是过滤后仍要保住的
+     * 兜底源（否则领导型联系人会开天窗无题可出）。
+     */
     private fun candidatesOf(m: Materials): List<Candidate> {
         val stageDepth = m.stageDepth.coerceIn(DEPTH_SHALLOW, DEPTH_DEEP)
+        // 深度双门：阶段档与风格 maxDepth 取更严（filter null = 不设限）。
+        val styleMaxDepth = m.filter?.maxDepth?.coerceIn(DEPTH_SHALLOW, DEPTH_DEEP) ?: DEPTH_DEEP
+        val gateDepth = minOf(stageDepth, styleMaxDepth)
+        val forbidden = m.filter?.forbiddenTags.orEmpty()
+        val penalty = m.filter?.penaltyTags.orEmpty()
         val out = ArrayList<Candidate>()
         m.profileHooks.asSequence()
             .map { it.trim() }.filter { it.isNotEmpty() }
@@ -187,29 +224,41 @@ object TopicEngine {
         // 个人素材：深度恒浅层——投喂素材以趣事/见闻/资源为主（方案 §7.2），
         // 弱联系期也可投喂；更私人的素材天然走共同经历源，不在此提级。
         m.personalMaterials.asSequence()
-            .map { it.trim() }.filter { it.isNotEmpty() }
+            .map { it.copy(content = it.content.trim()) }
+            .filter { it.content.isNotEmpty() }
             .take(MAX_MATERIALS)
-            .forEachIndexed { i, text ->
+            .forEachIndexed { i, item ->
+                val styleTags = TopicStyleTags.styleTagsOf(item.styleTags)
+                if (styleTags.any { it in forbidden }) return@forEachIndexed
+                // 素材无正加权（保持原语义恒 0）；风格词命中降权表只扣分。
+                val matched = -styleTags.count { it in penalty }
                 out += Candidate(
-                    TopicSource.PERSONAL_MATERIAL, text.take(MAX_TOPIC_CHARS), "", 0,
-                    DEPTH_SHALLOW, i, fingerprintOf(text),
+                    TopicSource.PERSONAL_MATERIAL, item.content.take(MAX_TOPIC_CHARS), "",
+                    matched, DEPTH_SHALLOW, i, fingerprintOf(item.content),
                 )
             }
         m.seeds.asSequence()
             .map { it.copy(topic = it.topic.trim(), angle = it.angle.trim()) }
             .filter { it.topic.isNotEmpty() }
             .forEachIndexed { i, seed ->
+                // 亲疏门（V-C）：种子要求浅于对方亲疏才投喂（filter null = 未萃取不设限）。
+                val filter = m.filter
+                if (filter != null && !filter.seedAllowed(seed.minCloseness)) return@forEachIndexed
+                val seedStyle = TopicStyleTags.styleTagsOf(seed.tags)
+                if (seedStyle.any { it in forbidden }) return@forEachIndexed
+                val matched = seed.tags.count { tag -> tag.trim() in m.interestTags } -
+                    seedStyle.count { it in penalty }
                 out += Candidate(
                     TopicSource.SEED_BANK,
                     seed.topic.take(MAX_TOPIC_CHARS),
                     seed.angle,
-                    seed.tags.count { tag -> tag.trim() in m.interestTags },
+                    matched,
                     seed.depth.coerceIn(DEPTH_SHALLOW, DEPTH_DEEP),
                     i,
                     fingerprintOf(seed.topic),
                 )
             }
-        return out.filter { it.depth <= stageDepth }
+        return out.filter { it.depth <= gateDepth }
     }
 
     /** 话题指纹：去首尾与内部空白（中文话题无大小写差异，保持最小规范化）。 */

@@ -46,6 +46,7 @@ import com.verlintas.baic2.floatball.advisor.AdvisorResponder
 import com.verlintas.baic2.floatball.advisor.ChatBriefBuilder
 import com.verlintas.baic2.floatball.advisor.ContactNames
 import com.verlintas.baic2.floatball.advisor.GoalRepository
+import com.verlintas.baic2.floatball.advisor.HeatRules
 import com.verlintas.baic2.floatball.advisor.MissionJudgeRunner
 import com.verlintas.baic2.floatball.advisor.StrategyBrief
 import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
@@ -55,6 +56,8 @@ import com.verlintas.baic2.floatball.advisor.data.HORIZON_L2
 import com.verlintas.baic2.floatball.advisor.data.MISSION_IGNORED
 import com.verlintas.baic2.floatball.advisor.data.MISSION_INFORMATIONAL
 import com.verlintas.baic2.floatball.advisor.data.MISSION_PENDING
+import com.verlintas.baic2.floatball.advisor.data.SCENE_CHAT
+import com.verlintas.baic2.floatball.advisor.data.SCENE_NON_CHAT
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_BRANCH
 import com.verlintas.baic2.floatball.advisor.strategy.EDGE_KIND_BRANCH
 import com.verlintas.baic2.floatball.advisor.strategy.EdgeDef
@@ -66,11 +69,13 @@ import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
 import kotlinx.serialization.encodeToString
 import com.verlintas.baic2.floatball.advisor.PersonaExtractor
 import com.verlintas.baic2.floatball.brief.ContactBriefSection
+import com.verlintas.baic2.floatball.contact.BoundConversation
 import com.verlintas.baic2.floatball.contact.ContactDirectory
 import com.verlintas.baic2.floatball.contact.ContactHistoryGateway
 import com.verlintas.baic2.floatball.contact.ContactMemoryReader
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.floatball.contact.DealFact
+import com.verlintas.baic2.floatball.contact.SessionReuse
 import com.verlintas.baic2.floatball.director.Director
 import com.verlintas.baic2.floatball.director.DirectorInput
 import com.verlintas.baic2.floatball.director.DirectorTrigger
@@ -169,6 +174,12 @@ class ScreenAdvisor @Inject constructor(
         val basisByMessage: Map<Long, List<String>> = emptyMap(),
         /** P3 §九：已用过一次长按重写的「被修正回合」触发消息 id（每回合限一次）。 */
         val regeneratedTurns: Set<Long> = emptySet(),
+        /**
+         * 场景归属信号（v10，方案 §1.2）：当前会话是否 NON_CHAT（非聊天屏孤立
+         * 参谋）。分屏据此隐藏人设区（不出现「未绑定联系人」的人设暗示），
+         * 只做纯问答参谋；VA-2 UI 消费。
+         */
+        val isNonChat: Boolean = false,
     )
 
     /** 任务令在气泡行内交互所需的最小投影。 */
@@ -906,6 +917,17 @@ class ScreenAdvisor @Inject constructor(
         if (isDuplicateScreen(conversationId, question)) {
             return NotificationTurnResult(SubmitOutcome.SKIPPED_UNCHANGED, conversationId)
         }
+        // V-C §4.3 通知链路的 heat 信号：通知正文可得，gap=距对方上次来信；
+        // 顺带补 markIncomingAt（通知本身就是对方来信到达的最直接观测）。与连续
+        // 模式差分路互斥不重复记：此后若屏幕再见到同文来信，会被上方去重拦住。
+        runCatching {
+            val gap = contactDirectory.lastIncomingAt(conversationId)
+                ?.let { System.currentTimeMillis() - it }
+            HeatRules.delta(HeatRules.Signal(body, gap))?.let { d ->
+                contactDirectory.recordHeatDelta(contact.contactId, d)
+            }
+            contactDirectory.markIncomingAt(conversationId, System.currentTimeMillis())
+        }
         val turnMessageId = conversationRepository.append(
             ChatMessage(
                 conversationId = conversationId,
@@ -1027,24 +1049,52 @@ class ScreenAdvisor @Inject constructor(
         }.getOrDefault(emptyList())
 
     /**
-     * 阶段一：识别联系人、路由会话、截断、去重、把屏幕消息写入会话（不跑 LLM）。
-     * 自动屏幕消息若与上一条屏幕消息高度相似（[FrameQuality.textSimilarity]
-     * ≥ [DUP_SCREEN_SIMILARITY]），直接 [PreparedTurn.Unchanged]——
-     * 不写库、不调模型，主屏/锁屏反复点亮不再制造垃圾回合。
+     * 阶段一：场景分类、识别联系人、路由会话、截断、去重、把屏幕消息写入
+     * 会话（不跑 LLM）。自动屏幕回合先过 [SceneGate]（v10 方案 §1.3）：
+     * NON_CHAT/UNCERTAIN 保守走孤立参谋会话（零人设管线，不查档案不建卡）；
+     * CHAT 才进 [resolveContact]。自动屏幕消息若与上一条屏幕消息高度相似
+     * （[FrameQuality.textSimilarity] ≥ [DUP_SCREEN_SIMILARITY]），直接
+     * [PreparedTurn.Unchanged]——不写库、不调模型，主屏/锁屏反复点亮不再
+     * 制造垃圾回合。
      */
     private suspend fun prepareTurn(content: String, titleFallback: String? = null): PreparedTurn {
         val question = content.trim().take(MAX_SCREEN_CHARS)
         if (question.isEmpty()) return PreparedTurn.Empty
         // 手动追问不重新识别（保持当前绑定，面板续聊时状态条不闪「未绑定」）；
         // 自动屏幕回合带正文做内容级兜底（T11）。
-        val contact = if (content.startsWith(screenLabel)) {
-            resolveContact(titleFallback, stripScreenLabel(content))
+        val isScreenTurn = content.startsWith(screenLabel)
+        val screenBody = if (isScreenTurn) stripScreenLabel(content) else null
+        var nonChat = false
+        val contact = if (isScreenTurn) {
+            when (SceneGate.classify(perceiver.foregroundPackage(), screenBody)) {
+                SceneGate.Scene.Chat -> resolveContact(titleFallback, screenBody)
+                SceneGate.Scene.NonChat, SceneGate.Scene.Uncertain -> {
+                    // TODO(V-A-2): UNCERTAIN 的轻 LLM 兜底 hook（AuxiliaryTasks
+                    // ≤80tok「这是聊天界面吗」，命中 CHAT 再回 resolveContact）；
+                    // 本版保守判 NON_CHAT，宁可不关联也不错关联。
+                    nonChat = true
+                    null
+                }
+            }
         } else {
             _activeContact.value
         }
         _activeContact.value = contact
+        // 手动追问保持面板当前场景；屏幕回合随本次分类刷新（UI 由 VA-2 消费）。
+        if (isScreenTurn) _transcript.update { it.copy(isNonChat = nonChat) }
         switchDirection(contact?.let { "c:${it.contactId}" } ?: DIRECTION_KEY_SHARED)
-        val conversationId = resolveConversation(contact, question)
+        val conversationId = resolveConversation(contact, question, nonChat)
+        // 场景落行（v10 §1.2）：非聊天回合把会话标成 non_chat 孤立会话（联系人
+        // 绑定行有守卫不会被误标）；聊天屏幕回合若复用了先前 non_chat 的共享
+        // 会话则把场景校正回 chat。任何落行失败静默降级，不阻断参谋。
+        if (isScreenTurn) {
+            runCatching {
+                contactDirectory.markScene(
+                    conversationId,
+                    if (nonChat) SCENE_NON_CHAT else SCENE_CHAT,
+                )
+            }
+        }
         if (isDuplicateScreen(conversationId, question)) {
             _transcript.updateStatus(Status.Idle)
             return PreparedTurn.Unchanged
@@ -1061,14 +1111,16 @@ class ScreenAdvisor @Inject constructor(
     }
 
     /**
-     * 联系人识别（v3 §11.1 + T11）：L1 = 前台包名 + a11y 窗口标题；L1 未命中且
-     * [titleFallback] 非空（像素路径 OCR 标题带，L2）时用标题带再试一次。两级
-     * 标题均先过壳标题过滤（浏览器等非 IM 应用的窗口标题是应用自身名，如
-     * Chrome 的「Chrome」——既会误命中同名键档案，也会被懒建成 Stub）。
-     * [screenBody] 非空时追加内容级兜底：正文呈「X：…」聊天结构且对方唯一、
-     * 已有同名档案才绑定（allowStub=false，绝不据内容新建，防网页误建档）。
-     * 规范化、决策表与懒创建由 [ContactDirectory] 实现侧完成；任何失败按
-     * 未绑定处理，不阻断参谋。
+     * 联系人识别（v3 §11.1 + T11 + v10 §2.1）：仅 [SceneGate.Scene.Chat] 后调用。
+     * L1 = 前台包名 + a11y 窗口标题；L1 未命中且 [titleFallback] 非空（像素路径
+     * OCR 标题带，L2）时用标题带再试一次。两级标题均先过壳标题过滤（浏览器等
+     * 非 IM 应用的窗口标题是应用自身名，如 Chrome 的「Chrome」——既会误命中
+     * 同名键档案，也会被懒建成 Stub）。正文级先走 [EntityResolver] 三态：
+     * 多发言人 → 群（群名取标题带，无标题孤立返回，绝不据正文建个人 stub）；
+     * 否则标题两级未命中时以正文唯一发言人兜底——此处 allowStub=true 为方案
+     * §2.1 自动建档唯一入口（调用前已由 IM 白名单 + 聊天结构双重确认，且建档
+     * 即双建 self_personas）。规范化、决策表与懒创建由 [ContactDirectory]
+     * 实现侧完成；任何失败按未绑定处理，不阻断参谋。
      */
     private suspend fun resolveContact(
         titleFallback: String? = null,
@@ -1078,17 +1130,23 @@ class ScreenAdvisor @Inject constructor(
         // 桌面/系统壳不是聊天窗口：不建档、不识别，整轮回落到共享老参谋会话（方案 §6.8④）。
         if (!isChatWindow(pkg)) return null
         val l1 = perceiver.windowTitle()?.takeUnless { isShellTitle(pkg, it) }
+        val l2 = titleFallback?.takeUnless { it.isBlank() || isShellTitle(pkg, it) }
+        // 实体判别（v10 §2.1）：正文多发言人先判群——群标题若先走个人
+        // resolve 会误建个人 stub，故 Group 分支优先。
+        if (EntityResolver.judge(screenBody) is EntityResolver.Entity.Group) {
+            val groupTitle = l1 ?: l2 ?: return null
+            return runCatching { contactDirectory.resolveGroup(pkg, groupTitle) }.getOrNull()
+        }
         runCatching { contactDirectory.resolve(pkg, l1) }
             .getOrNull()
             ?.let { return it }
-        val l2 = titleFallback?.takeUnless { it.isBlank() || isShellTitle(pkg, it) }
         if (l2 != null) {
             runCatching { contactDirectory.resolve(pkg, l2) }.getOrNull()?.let { return it }
         }
         if (screenBody.isNullOrBlank()) return null
         val speaker = IncomingCue.speakerOf(screenBody) ?: return null
         return runCatching {
-            contactDirectory.resolve(pkg, speaker, allowStub = false)
+            contactDirectory.resolve(pkg, speaker, allowStub = true)
         }.getOrNull()
     }
 
@@ -1135,13 +1193,23 @@ class ScreenAdvisor @Inject constructor(
     }
 
     /**
-     * 回合会话路由。绑定联系人 → 专属会话；未绑定分两类：输入行手动追问
-     * （无屏幕前缀）延续面板正在展示的会话；自动屏幕回合（带屏幕前缀）按
-     * 内容相似度决定复用或新建共享会话（[resolveSharedConversation]）。
+     * 回合会话路由（V-B，UltraAdvisor v2.2 方案 §3）：绑定联系人 → 按内容
+     * 相似度回看该联系人全部会话取最高者续用（[resolveContactConversation]）；
+     * 未绑定分两类：输入行手动追问（无屏幕前缀）延续面板正在展示的会话；
+     * 自动屏幕回合（带屏幕前缀）按内容相似度决定复用或新建共享会话
+     * （[resolveSharedConversation]，[nonChat] 决定 non_chat 池隔离）。
      */
-    private suspend fun resolveConversation(contact: ContactRef?, incoming: String): Long {
+    private suspend fun resolveConversation(
+        contact: ContactRef?,
+        incoming: String,
+        nonChat: Boolean = false,
+    ): Long {
         if (contact != null) {
-            val conversationId = contactDirectory.ensureAdvisorConversation(contact)
+            // 自动屏幕回合带屏正文做相似度比对；手动追问/通知链回合无可比正文，
+            // 复用最近会话（复用优先）。
+            val screenBody = stripScreenLabel(incoming)
+                .takeIf { incoming.startsWith(screenLabel) && it.isNotBlank() }
+            val conversationId = resolveContactConversation(contact, screenBody)
             subscribeConversation(conversationId)
             return conversationId
         }
@@ -1155,32 +1223,88 @@ class ScreenAdvisor @Inject constructor(
             }
             return ensureSharedConversation()
         }
-        return resolveSharedConversation(stripScreenLabel(incoming))
+        return resolveSharedConversation(stripScreenLabel(incoming), nonChat)
     }
 
     /**
-     * 非联系人自动屏幕回合的共享会话路由：当前屏正文与最近共享会话的最近
-     * 一条屏幕消息相似（[SHARED_REUSE_SIMILARITY]）→ 复用（同场景连续滚动
-     * 追问）；内容已切到别的场景 → 再向最近 [SHARED_LOOKBACK_TURNS] 条屏幕
-     * 消息回看找相似（A→B→A 切回原场景时回到原会话，像素 OCR 漏认联系人的
-     * 回合也借内容相似找回原会话）；都不像 → 另起新会话并更新偏好指向，
+     * 绑定联系人回合的会话路由（V-B，方案 §3 复用优先强化）：该联系人名下
+     * **全部**会话（新→旧，含合并带来的多个）逐一与当前屏正文回看比对相似度
+     * （[FrameQuality.textSimilarity]），取最高者续用——复用优先，永不主动新建；
+     * 仅当最高相似度低于断崖阈值（[AdvisorPrefs.Settings.reuseCliffSimilarity]）
+     * 才判定重大话题转变，自动新开会话并**关联同档案**（旧会话保留可回看，
+     * 验收口径：同联系人连续使用不新建、断崖后档案不变）。分叉的 Tactician
+     * 轻判定留 hook：目前纯规则（相似度 < 阈值 X 即断崖），后续可在
+     * [SessionReuse.Route.Cliff] 分支前置一次 ≤80tok LLM 复核再放行新建。
+     * 候选会话内还没有屏幕消息（空/仅手动追问）时无从比较，复用最近一个
+     * 仍存在的会话（宁可续用）；全部绑定行失效才新建。
+     */
+    private suspend fun resolveContactConversation(contact: ContactRef, screenBody: String?): Long {
+        val bound = contactDirectory.boundConversations(contact.contactId)
+        if (bound.isEmpty()) return contactDirectory.createConversationFor(contact)
+        val body = screenBody?.takeIf { it.isNotBlank() } ?: return reuseNewestAlive(bound)
+            ?: contactDirectory.createConversationFor(contact)
+        val scored = buildList {
+            for (candidate in bound) {
+                // 会话可能已被用户删除：取不到最近屏幕消息就跳过（消息随会话删）。
+                val last = historyGateway.latestScreenBody(candidate.conversationId, screenLabel)
+                    ?: continue
+                add(
+                    SessionReuse.Scored(
+                        candidate.conversationId,
+                        FrameQuality.textSimilarity(body, stripScreenLabel(last)),
+                    ),
+                )
+            }
+        }
+        return when (val route = SessionReuse.route(scored, prefs.state.value.reuseCliffSimilarity.toDouble())) {
+            is SessionReuse.Route.Reuse -> route.conversationId
+            is SessionReuse.Route.Cliff -> contactDirectory.createConversationFor(contact)
+            SessionReuse.Route.NoComparable -> reuseNewestAlive(bound)
+                ?: contactDirectory.createConversationFor(contact)
+        }
+    }
+
+    /** 复用优先兜底：绑定行新→旧取第一个上游会话仍存在的；全部失效返回 null。 */
+    private suspend fun reuseNewestAlive(bound: List<BoundConversation>): Long? =
+        bound.firstOrNull { candidate ->
+            runCatching { conversationRepository.get(candidate.conversationId) }.getOrNull() != null
+        }?.conversationId
+
+    /**
+     * 非联系人自动屏幕回合的共享会话路由（V-B 增加池隔离）：当前屏正文与最近
+     * 共享会话的最近一条屏幕消息相似（[SHARED_REUSE_SIMILARITY]）→ 复用（同场景
+     * 连续滚动追问）；内容已切到别的场景 → 再向最近 [SHARED_LOOKBACK_TURNS] 条
+     * 屏幕消息回看找相似（A→B→A 切回原场景时回到原会话，像素 OCR 漏认联系人
+     * 的回合也借内容相似找回原会话）；都不像 → 另起新会话并更新偏好指向，
      * 旧会话留在库中可回看。会话内还没有屏幕消息（空/仅手动）时无从比较，
      * 直接复用。
+     *
+     * 池隔离（V-B，方案 §3 NON_CHAT 行）：[nonChat]=true 时只与 non_chat 会话
+     * 比对复用（桌面/新闻屏的孤立参谋上下文），聊天会话同理不串入 non_chat
+     * 池——偏好会话场景不同视同无偏好，回看窗口内不同场景的候选一律跳过
+     * （[SessionReuse.samePool]）。命中 contact 绑定的聊天会话属既有设计
+     * （T11 内容级兜底），保持不动。
      */
-    private suspend fun resolveSharedConversation(screenBody: String): Long {
+    private suspend fun resolveSharedConversation(screenBody: String, nonChat: Boolean): Long {
+        val scene = if (nonChat) SCENE_NON_CHAT else SCENE_CHAT
         val existing = prefs.conversationId().takeIf { it > 0 }
             ?.let { id -> runCatching { conversationRepository.get(id) }.getOrNull() }
-        if (existing != null) {
-            val last = historyGateway.latestScreenBody(existing.id, screenLabel)
+        // 偏好会话场景不同池（如聊天屏偏好指向 non_chat 会话）时不比对不复用。
+        val preferred = existing
+            ?.takeIf { SessionReuse.samePool(scene, contactDirectory.sceneFor(it.id)) }
+        if (preferred != null) {
+            val last = historyGateway.latestScreenBody(preferred.id, screenLabel)
             if (last == null ||
                 FrameQuality.textSimilarity(screenBody, stripScreenLabel(last)) >= SHARED_REUSE_SIMILARITY
             ) {
-                subscribeConversation(existing.id)
-                return existing.id
+                subscribeConversation(preferred.id)
+                return preferred.id
             }
         }
         for ((candidateId, body) in historyGateway.recentScreenBodies(screenLabel, SHARED_LOOKBACK_TURNS)) {
-            if (candidateId == existing?.id) continue // 偏好会话刚比对过，不相似
+            if (candidateId == preferred?.id) continue // 偏好会话刚比对过，不相似
+            // 池隔离：回看窗口里只认同场景会话（non_chat 不串聊天、聊天不串 non_chat）。
+            if (!SessionReuse.samePool(scene, contactDirectory.sceneFor(candidateId))) continue
             if (FrameQuality.textSimilarity(screenBody, stripScreenLabel(body)) < SHARED_REUSE_SIMILARITY) continue
             // 会话可能已被用户删除：取不到就跳过这一条。
             val conversation = runCatching { conversationRepository.get(candidateId) }.getOrNull()
@@ -1339,6 +1463,16 @@ class ScreenAdvisor @Inject constructor(
                 .firstOrNull()
             if (priorIncoming == null || !PromptDedup.isDuplicate(incoming, priorIncoming)) {
                 runCatching {
+                    // V-C §4.3 连续模式差分路的 heat 信号：文本（来信段）可得，
+                    // gap=距上次感知到对方来信的间隔；增量经 HeatRules 算出后落分，
+                    // 共享会话（contact=null）只补时间戳不记分。先读后写防自污染。
+                    if (contact != null) {
+                        val gap = contactDirectory.lastIncomingAt(conversationId)
+                            ?.let { System.currentTimeMillis() - it }
+                        HeatRules.delta(HeatRules.Signal(incoming, gap))?.let { d ->
+                            contactDirectory.recordHeatDelta(contact.contactId, d)
+                        }
+                    }
                     contactDirectory.markIncomingAt(conversationId, System.currentTimeMillis())
                 }
             }

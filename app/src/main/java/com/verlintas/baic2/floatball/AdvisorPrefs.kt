@@ -112,6 +112,13 @@ class AdvisorPrefs @Inject constructor(
          * 窗口继续感知、草稿一律降级起草通知。
          */
         val companionMaxSends: Int = DEFAULT_COMPANION_MAX_SENDS,
+        /**
+         * 会话复用断崖阈值 X（V-B，UltraAdvisor v2.2 方案 §3）：同联系人回看的
+         * 最高内容相似度低于该值判定「重大话题转变」，自动新开会话并关联同
+         * 档案；达到该值（含等于）取最高者续用。默认保守（宁可续用，不轻易
+         * 新建）；调低更保守、调高更易分叉。
+         */
+        val reuseCliffSimilarity: Float = REUSE_CLIFF_DEFAULT,
     ) {
         /** 白名单的 Long 视图（非法项静默忽略；与 [addAutoWhitelistContact] 同口径）。 */
         val autoWhitelistIds: Set<Long>
@@ -215,6 +222,8 @@ class AdvisorPrefs @Inject constructor(
                 ?.filter { it.isNotBlank() }?.take(MAX_AUTO_WHITELIST)?.toSet().orEmpty(),
             companionMaxSends = prefs.getInt(KEY_COMPANION_MAX_SENDS, DEFAULT_COMPANION_MAX_SENDS)
                 .let { if (it in COMPANION_SEND_OPTIONS) it else DEFAULT_COMPANION_MAX_SENDS },
+            reuseCliffSimilarity = prefs.getFloat(KEY_REUSE_CLIFF, REUSE_CLIFF_DEFAULT)
+                .coerceIn(0f, 1f),
         )
 
     private val _tokenStats = MutableStateFlow(loadTokenStats())
@@ -382,6 +391,13 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(companionMaxSends = value) }
     }
 
+    /** 会话复用断崖阈值 X（V-B，方案 §3）：[0,1]，下一回合即生效。 */
+    fun setReuseCliffSimilarity(value: Float) {
+        val clean = value.coerceIn(0f, 1f)
+        prefs.edit().putFloat(KEY_REUSE_CLIFF, clean).apply()
+        _state.update { it.copy(reuseCliffSimilarity = clean) }
+    }
+
     /** 记录一个主参谋回合的实际用量（模型 Usage 事件；缺测按 0 计），累计持久化。 */
     fun recordTurnUsage(inputTokens: Long, outputTokens: Long) {
         val current = _tokenStats.value
@@ -479,6 +495,10 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_AUTO_ENABLED = "auto_mode_enabled"
         const val KEY_AUTO_WHITELIST = "auto_whitelist_contacts"
         const val KEY_COMPANION_MAX_SENDS = "companion_max_sends"
+        const val KEY_REUSE_CLIFF = "reuse_cliff_similarity"
+
+        /** 断崖阈值默认值（V-B，方案 §3「默认保守」）：低于共享池续用线 0.45，日常聊天噪声不触发分叉。 */
+        const val REUSE_CLIFF_DEFAULT = 0.25f
 
         /** M3 自动档白名单上限（方案 §8.3：白名单联系人 ≤5）。 */
         const val MAX_AUTO_WHITELIST = 5

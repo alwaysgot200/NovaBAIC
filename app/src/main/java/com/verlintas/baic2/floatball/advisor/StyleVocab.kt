@@ -1,0 +1,94 @@
+/*
+ * Copyright (C) 2026 Verlintas
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of BetterAIChat2.
+ *
+ * BetterAIChat2 is free software: you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * BetterAIChat2 is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+ * A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.verlintas.baic2.floatball.advisor
+
+/**
+ * 对方风格三标签的中文词表（v10 方案 §4.1，V-C 废话分层的同源事实来源）。
+ *
+ * 单一来源原则：UI（AdvisorPersonaCard 的下拉芯片）从 strings.xml 的
+ * float_persona_* 键读词——两者的中文值必须一一对应（改词表时两处同步）；
+ * 判定侧（PersonaExtractor 归一、TopicStyleRules/ProactiveStyleTiers 分档、
+ * topic_seeds.json 种子 minCloseness）只认本对象常量，禁止散落硬编码字符串。
+ * 纯对象、零 Android 依赖，JVM 可直接单测。
+ */
+object StyleVocab {
+
+    const val IDENTITY_LEADER = "领导"
+    const val IDENTITY_CLIENT = "客户"
+    const val IDENTITY_COLLEAGUE = "同事"
+    const val IDENTITY_FRIEND = "朋友"
+    const val IDENTITY_FAMILY = "家人"
+    const val IDENTITY_ROMANCE = "暧昧对象"
+    const val IDENTITY_OTHER = "其他"
+
+    const val STYLE_SERIOUS = "严肃"
+    const val STYLE_EASY = "随和"
+    const val STYLE_HUMOR = "幽默"
+    const val STYLE_WARM = "热情"
+    const val STYLE_COLD = "冷淡"
+
+    const val CLOSENESS_STRANGER = "陌生"
+    const val CLOSENESS_FAMILIAR = "熟识"
+    const val CLOSENESS_CLOSE = "亲近"
+    const val CLOSENESS_INTIMATE = "亲密"
+
+    /** 身份词表（声明序即 UI 展示序）。 */
+    val IDENTITIES = listOf(
+        IDENTITY_LEADER, IDENTITY_CLIENT, IDENTITY_COLLEAGUE,
+        IDENTITY_FRIEND, IDENTITY_FAMILY, IDENTITY_ROMANCE, IDENTITY_OTHER,
+    )
+
+    /** 聊天风格词表。 */
+    val CHAT_STYLES = listOf(STYLE_SERIOUS, STYLE_EASY, STYLE_HUMOR, STYLE_WARM, STYLE_COLD)
+
+    /** 亲疏中文词（下标即等级 0~3）。 */
+    val CLOSENESS_LEVELS = listOf(CLOSENESS_STRANGER, CLOSENESS_FAMILIAR, CLOSENESS_CLOSE, CLOSENESS_INTIMATE)
+
+    /**
+     * 模型输出的身份词归一：精确命中词表原样收下；包含式近义（如「他是领导」）
+     * 只认词表词出现在输出中的情形，取最先命中的词表词；词表外一律 null（丢弃），
+     * 绝不自造枚举值。
+     */
+    fun normalizeIdentity(raw: String?): String? {
+        val text = raw?.trim().takeUnless { it.isNullOrEmpty() } ?: return null
+        IDENTITIES.firstOrNull { text == it }?.let { return it }
+        return IDENTITIES.firstOrNull { text.contains(it) }
+    }
+
+    /** 模型输出的聊天风格归一（口径同 [normalizeIdentity]）。 */
+    fun normalizeChatStyle(raw: String?): String? {
+        val text = raw?.trim().takeUnless { it.isNullOrEmpty() } ?: return null
+        CHAT_STYLES.firstOrNull { text == it }?.let { return it }
+        return CHAT_STYLES.firstOrNull { text.contains(it) }
+    }
+
+    /**
+     * 模型输出的亲疏等级归一：中文词或 0~3 整数皆可；越界/畸形/未知词 null（丢弃）。
+     */
+    fun closenessOf(raw: String?): Int? {
+        val text = raw?.trim().takeUnless { it.isNullOrEmpty() } ?: return null
+        CLOSENESS_LEVELS.indexOf(text).takeIf { it >= 0 }?.let { return it }
+        return text.toIntOrNull()?.takeIf { it in CLOSENESS_LEVELS.indices }
+    }
+
+    /** 亲疏等级 → 中文词（越界按最浅档 0 显示，仅展示用）。 */
+    fun closenessLabel(level: Int): String =
+        CLOSENESS_LEVELS.getOrNull(level.coerceIn(CLOSENESS_LEVELS.indices)) ?: CLOSENESS_STRANGER
+}
