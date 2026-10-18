@@ -11,8 +11,8 @@
     debug 构建注入 BuildConfig, App 首启由 DevAgentSeeder 自动预置 DeepSeek Agent,
     无需每次在模拟器里手动配置。release 构建恒为空串, 生产环境不受影响。
 
-    Android 模拟器 / 雷电模拟器 (多开实例) / USB 真机统一支持:
-    非交互命令 (dev 等) 已连设备直接用, 否则自动启动第一个 AVD/雷电实例;
+    Android 模拟器 / BlueStacks 模拟器 (多开实例) / USB 真机统一支持:
+    非交互命令 (dev 等) 已连设备直接用, 否则自动启动第一个 AVD/BlueStacks 实例;
     交互模式会先列出全部部署目标, 启动任何模拟器前都会确认。
 
 .EXAMPLE
@@ -153,104 +153,149 @@ function Show-ReleaseSigningWarning {
     return $false
 }
 
-# ======================== 雷电模拟器 (LDPlayer) ========================
+# ======================== BlueStacks 模拟器 ========================
 
-# 雷电模拟器控制台为 dnconsole.exe。安装路径优先从注册表卸载信息解析,
-# 找不到再扫常见目录。结果缓存, 避免每次刷新菜单都重复扫描。
-$script:LdDirCache = $null
-$script:LdDirResolved = $false
-function Get-LdPlayerDir {
-    if ($script:LdDirResolved) { return $script:LdDirCache }
-    $script:LdDirResolved = $true
+# BlueStacks 5 (Nxt) 主程序为 HD-Player.exe, 多开实例以 --instance <名称> 启动。
+# 安装路径优先从注册表 InstallDir 解析, 找不到再试常见目录。结果缓存, 避免重复扫描。
+$script:BstDirCache = $null
+$script:BstDirResolved = $false
+function Get-BstDir {
+    if ($script:BstDirResolved) { return $script:BstDirCache }
+    $script:BstDirResolved = $true
 
-    # 1) 注册表卸载信息 (DisplayName 含 雷电/LDPlayer)
-    $regRoots = @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
-        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    $candidates = @()
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\BlueStacks_nxt_cn', 'HKLM:\SOFTWARE\BlueStacks_nxt',
+        'HKLM:\SOFTWARE\WOW6432Node\BlueStacks_nxt_cn', 'HKLM:\SOFTWARE\WOW6432Node\BlueStacks_nxt'
+    )) {
+        $v = (Get-ItemProperty $key -ErrorAction SilentlyContinue).InstallDir
+        if ($v) { $candidates += $v }
+    }
+    $candidates += @(
+        'D:\Programs\BlueStacks_nxt_cn',
+        "$env:ProgramFiles\BlueStacks_nxt_cn", "$env:ProgramFiles\BlueStacks_nxt",
+        'C:\Program Files\BlueStacks_nxt_cn', 'C:\Program Files\BlueStacks_nxt'
     )
-    foreach ($root in $regRoots) {
-        $items = Get-ItemProperty $root -ErrorAction SilentlyContinue |
-            Where-Object { $_.DisplayName -match '雷电|LDPlayer' }
-        foreach ($item in $items) {
-            $candidates = @($item.InstallLocation)
-            if ($item.DisplayIcon) {
-                # DisplayIcon 形如 "C:\...\dnplayer.exe,0", 去掉末尾参数再取目录
-                $iconPath = $item.DisplayIcon -replace ',\d+\s*$', ''
-                $candidates += Split-Path $iconPath -Parent
-            }
-            foreach ($cand in $candidates) {
-                if ($cand -and ((Test-Path (Join-Path $cand 'ldconsole.exe')) -or (Test-Path (Join-Path $cand 'dnconsole.exe')))) {
-                    $script:LdDirCache = $cand.TrimEnd('\')
-                    return $script:LdDirCache
-                }
-            }
+    foreach ($cand in $candidates) {
+        if ($cand -and (Test-Path (Join-Path $cand 'HD-Player.exe'))) {
+            $script:BstDirCache = $cand.TrimEnd('\')
+            return $script:BstDirCache
         }
     }
-
-    # 2) 常见安装目录 (扫描各盘符)
-    foreach ($drive in (Get-PSDrive -PSProvider FileSystem).Root) {
-        foreach ($sub in @('LDPlayer\LDPlayer9', 'LDPlayer\LDPlayer4', 'leidian\LDPlayer9', 'leidian', 'ChangZhi\dnplayer2')) {
-            $cand = Join-Path $drive $sub
-            if ((Test-Path (Join-Path $cand 'ldconsole.exe')) -or (Test-Path (Join-Path $cand 'dnconsole.exe'))) {
-                $script:LdDirCache = $cand.TrimEnd('\')
-                return $script:LdDirCache
-            }
-        }
-    }
-
     return $null
 }
 
-# 返回雷电控制台程序路径: 优先 ldconsole.exe (无需管理员权限), 退回旧版 dnconsole.exe
-function Get-LdConsole {
-    param([Parameter(Mandatory = $true)][string] $LdDir)
-    $ld = Join-Path $LdDir 'ldconsole.exe'
-    if (Test-Path $ld) { return $ld }
-    $dn = Join-Path $LdDir 'dnconsole.exe'
-    if (Test-Path $dn) { return $dn }
+# BlueStacks 数据目录 (含 bluestacks.conf 与 Engine\<实例>\ 磁盘文件)。
+# CN 版注册表: UserDefinedDir=数据根目录, DataDir=<根>\Engine; 国际版为 UserDir。
+# 依次尝试, 全部缺失退回 ProgramData 常见位置。
+function Get-BstDataDir {
+    foreach ($key in @(
+        'HKLM:\SOFTWARE\BlueStacks_nxt_cn', 'HKLM:\SOFTWARE\BlueStacks_nxt',
+        'HKLM:\SOFTWARE\WOW6432Node\BlueStacks_nxt_cn', 'HKLM:\SOFTWARE\WOW6432Node\BlueStacks_nxt'
+    )) {
+        $p = Get-ItemProperty $key -ErrorAction SilentlyContinue
+        if (-not $p) { continue }
+        foreach ($v in @($p.UserDefinedDir, $p.UserDir)) {
+            if ($v -and (Test-Path $v)) { return $v.TrimEnd('\') }
+        }
+        if ($p.DataDir) {
+            $dd = $p.DataDir.TrimEnd('\')
+            $root = if ((Split-Path $dd -Leaf) -eq 'Engine') { Split-Path $dd -Parent } else { $dd }
+            if (Test-Path $root) { return $root }
+        }
+    }
+    foreach ($cand in @('C:\ProgramData\BlueStacks_nxt_cn', 'C:\ProgramData\BlueStacks_nxt')) {
+        if (Test-Path $cand) { return $cand }
+    }
     return $null
 }
 
-# 列出雷电多开实例。控制台 list2 每行 (字段数随版本不同):
-#   索引,标题,顶层窗口句柄,绑定窗口句柄,运行状态(1=运行中 0=已停止),PID,...
-function Get-LdPlayerInstances {
-    param([Parameter(Mandatory = $true)][string] $LdDir)
+# 解析 bluestacks.conf, 返回全部实例名。
+# conf 每行形如 bst.instance.<名>.<键>=<值> (另有 status.* 运行时子组, 需排除);
+# 顶层键均为扁平形态, 用贪婪匹配取最后一个点之前的部分作实例名。
+function Get-BstInstanceNames {
+    param([Parameter(Mandatory = $true)][string] $ConfPath)
 
-    $console = Get-LdConsole -LdDir $LdDir
-    if (-not $console) { return }
+    $names = [ordered] @{}
+    foreach ($line in (Get-Content $ConfPath -ErrorAction SilentlyContinue)) {
+        if ($line -notmatch '^bst\.instance\.') { continue }
+        if ($line -match '^bst\.instance\.[^.]+\.status\.') { continue }
+        if ($line -match '^bst\.instance\.(.+)\.[A-Za-z_]+\s*=') { $names[$Matches[1]] = $true }
+    }
+    @($names.Keys)
+}
 
-    # 雷电控制台按系统 OEM 代码页输出 (中文 Windows=GBK/936),
-    # 脚本全局把 [Console]::OutputEncoding 设为 UTF-8, 直接捕获会导致标题乱码, 临时切回 OEM 代码页。
-    $prevEncoding = [Console]::OutputEncoding
-    try {
-        $oem = [System.Text.Encoding]::GetEncoding((Get-Culture).TextInfo.OEMCodePage)
-        [Console]::OutputEncoding = $oem
-        $rows = @(& $console list2 2>$null)
+# conf 中字符串键的值 (去引号); 不存在返回 $null
+function Get-BstConfValue {
+    param(
+        [Parameter(Mandatory = $true)][string] $ConfPath,
+        [Parameter(Mandatory = $true)][string] $Key
+    )
+    $line = (Get-Content $ConfPath -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match ('^' + [regex]::Escape($Key) + '\s*=') } |
+        Select-Object -First 1)
+    if ($line -match '=\s*"([^"]*)"') { return $Matches[1] }
+    return $null
+}
+
+# 实例的 adb 端口: conf 键 bst.instance.<名>.adb_port, 缺省 5555。
+# (BlueStacks 同时只跑一个实例时端口即 5555; 多开并发端口会变, 开发流程不涉及。)
+function Get-BstAdbPort {
+    param([string] $Name = '')
+
+    if (-not $Name) { return 5555 }
+    $dataDir = Get-BstDataDir
+    if (-not $dataDir) { return 5555 }
+    foreach ($conf in @((Join-Path $dataDir 'bluestacks.conf'), (Join-Path $dataDir "Engine\$Name\bluestacks.conf"))) {
+        if (-not (Test-Path $conf)) { continue }
+        $v = Get-BstConfValue -ConfPath $conf -Key "bst.instance.$Name.adb_port"
+        if ($v -match '^\d+$') { return [int] $v }
     }
-    finally {
-        [Console]::OutputEncoding = $prevEncoding
-    }
-    # 元素逐个流出, 调用方需要数组时用 @(...) 包裹 (避免一元逗号导致嵌套数组)
-    @(foreach ($row in $rows) {
-        $f = ($row -split ',')
-        if ($f.Count -ge 5 -and ($f[0].Trim() -match '^\d+$')) {
-            [pscustomobject]@{
-                Index   = [int] $f[0].Trim()
-                Title   = $f[1].Trim()
-                Running = ($f[4].Trim() -eq '1')
+    return 5555
+}
+
+# 列出实例及运行状态。运行判定: HD-Player.exe 进程命令行含 --instance <名>;
+# 无 --instance 参数的 HD-Player 进程视为默认实例在跑。
+# 实例来源: conf 键前缀; 刚安装尚无 conf 时退回 Engine 下含 <名>.bstk 的目录;
+# 仍无则返回一个空名条目, 用于直接启动 HD-Player.exe。
+function Get-BstInstances {
+    param([Parameter(Mandatory = $true)][string] $BstDir)
+
+    $names = @()
+    $dataDir = Get-BstDataDir
+    if ($dataDir) {
+        $conf = Join-Path $dataDir 'bluestacks.conf'
+        if (Test-Path $conf) { $names = @(Get-BstInstanceNames -ConfPath $conf) }
+        if ($names.Count -eq 0) {
+            $engine = Join-Path $dataDir 'Engine'
+            if (Test-Path $engine) {
+                $names = @(Get-ChildItem $engine -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { Test-Path (Join-Path $_.FullName "$($_.Name).bstk") } |
+                    ForEach-Object { $_.Name })
             }
         }
+    }
+    if ($names.Count -eq 0) { $names = @('') }
+
+    $conf2 = if ($dataDir) { Join-Path $dataDir 'bluestacks.conf' } else { $null }
+    $procNames = @{}
+    foreach ($p in (Get-CimInstance Win32_Process -Filter "Name = 'HD-Player.exe'" -ErrorAction SilentlyContinue)) {
+        if ($p.CommandLine -match '--instance\s+"?([^"\s]+)"?') { $procNames[$Matches[1]] = $true }
+        else { $procNames['__default__'] = $true }
+    }
+    @(foreach ($n in $names) {
+        $running = if ($n) { $procNames.ContainsKey($n) } else { $procNames.Count -gt 0 }
+        $display = if ($n -and $conf2 -and (Test-Path $conf2)) { Get-BstConfValue -ConfPath $conf2 -Key "bst.instance.$n.display_name" } else { $null }
+        [pscustomobject]@{ Name = $n; DisplayName = $display; Running = $running }
     })
 }
 
-# 雷电实例 i 的固定端口: 控制台 5554+i*2, adb 5555+i*2
-function Get-LdPorts {
-    param([Parameter(Mandatory = $true)][int] $Index)
-    return [pscustomobject]@{
-        Console = 5554 + $Index * 2
-        Adb     = 5555 + $Index * 2
-    }
+# 实例的显示名: 优先 conf 的 display_name, 空名实例 (尚无实例) 显示「默认实例」
+function Get-BstLabel {
+    param([AllowEmptyString()][string] $Name, [string] $DisplayName)
+    if ($DisplayName) { return $DisplayName }
+    if ($Name) { return $Name }
+    return '默认实例'
 }
 
 # ======================== 基础函数 ========================
@@ -304,13 +349,13 @@ function Write-Header {
     Write-Host '========================================='
     $online = Get-ConnectedDevice
     if ($online) {
-        $kind = if ($online -match '^emulator-') { '模拟器' } else { '实体设备' }
+        $kind = if ($online -match '^emulator-|^127\.0\.0\.1:') { '模拟器' } else { '实体设备' }
         Write-Host (" 当前设备: {0} ({1})" -f $online, $kind) -ForegroundColor Green
     }
     else {
         $avdCount = @(Get-AvdList).Count
-        $ldNote = if (Get-LdPlayerDir) { ' | 雷电模拟器: 已检测' } else { '' }
-        Write-Host " 当前设备: 无 (可用 AVD: $avdCount 个$ldNote)" -ForegroundColor Yellow
+        $bstNote = if (Get-BstDir) { ' | BlueStacks: 已检测' } else { '' }
+        Write-Host " 当前设备: 无 (可用 AVD: $avdCount 个$bstNote)" -ForegroundColor Yellow
     }
 }
 
@@ -443,47 +488,42 @@ function Start-Avd {
     return $null
 }
 
-# 启动 (或连接已在运行的) 雷电模拟器实例, 等待 boot_completed, 返回 adb 设备序列号。
-# 雷电实例通常被 SDK adb 自动发现为 emulator-5554; 未自动发现时用 adb connect 127.0.0.1:<port>。
-function Start-LdPlayerInstance {
+# 启动 (或连接已在运行的) BlueStacks 实例, 等待 boot_completed, 返回 adb 设备序列号。
+# BlueStacks 的 adb 是 TCP 端口 (默认 5555), 不会被 SDK adb 自动发现, 需 adb connect。
+# 前提: BlueStacks 设置 -> 高级 -> 「Android 调试桥」已开启。
+function Start-BstInstance {
     param(
-        [Parameter(Mandatory = $true)][int] $Index,
-        [Parameter(Mandatory = $true)][string] $LdDir
+        [Parameter(Mandatory = $true)][string] $BstDir,
+        [string] $Name = ''
     )
 
-    $ports = Get-LdPorts -Index $Index
-    $serialEmu = "emulator-$($ports.Console)"
-    $serialNet = "127.0.0.1:$($ports.Adb)"
+    $port = Get-BstAdbPort -Name $Name
+    $serial = "127.0.0.1:$port"
 
-    $inst = Get-LdPlayerInstances -LdDir $LdDir | Where-Object { $_.Index -eq $Index } | Select-Object -First 1
-    if (-not $inst -or -not $inst.Running) {
-        Write-Host "正在启动雷电模拟器 (实例 $Index) ..." -ForegroundColor Cyan
-        & (Get-LdConsole -LdDir $LdDir) launch --index $Index | Out-Null
+    $inst = Get-BstInstances -BstDir $BstDir | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
+    $title = Get-BstLabel -Name $Name -DisplayName $inst.DisplayName
+    if ($inst -and -not $inst.Running) {
+        Write-Host "正在启动 BlueStacks ($title) ..." -ForegroundColor Cyan
+        $launchArgs = if ($Name) { @('--instance', $Name) } else { @() }
+        Start-Process -FilePath (Join-Path $BstDir 'HD-Player.exe') -ArgumentList $launchArgs | Out-Null
     }
     else {
-        Write-Host "雷电实例 $Index 已在运行, 尝试通过 adb 连接 ..." -ForegroundColor Cyan
+        Write-Host "BlueStacks $title 已在运行, 尝试通过 adb 连接 ..." -ForegroundColor Cyan
     }
 
     $deadline = (Get-Date).AddSeconds($BootTimeoutSec)
 
-    # 1) 等待设备上线 (自动发现 或 adb connect)
+    # 1) adb connect 后等待设备上线
     $device = $null
     while ((Get-Date) -lt $deadline) {
-        $device = Get-AdbDeviceSerials |
-            Where-Object { $_ -eq $serialEmu -or $_ -eq $serialNet } |
-            Select-Object -First 1
-        if (-not $device) {
-            & $Adb connect $serialNet 2>$null | Out-Null
-            Start-Sleep -Seconds 2
-            $device = Get-AdbDeviceSerials |
-                Where-Object { $_ -eq $serialEmu -or $_ -eq $serialNet } |
-                Select-Object -First 1
-        }
+        & $Adb connect $serial 2>$null | Out-Null
+        $device = Get-AdbDeviceSerials | Where-Object { $_ -eq $serial } | Select-Object -First 1
         if ($device) { break }
         Start-Sleep -Seconds 2
     }
     if (-not $device) {
-        Write-Host "等待雷电模拟器上线超时 (${BootTimeoutSec}s)。" -ForegroundColor Red
+        Write-Host "等待 BlueStacks 上线超时 (${BootTimeoutSec}s)。" -ForegroundColor Red
+        Write-Host '请确认 BlueStacks 设置 -> 高级 -> 「Android 调试桥」已开启。' -ForegroundColor Yellow
         return $null
     }
     Write-Host "设备已上线: $device, 等待系统启动完成 ..." -ForegroundColor Cyan
@@ -492,15 +532,16 @@ function Start-LdPlayerInstance {
 
     # 2) 等待 boot_completed
     while ((Get-Date) -lt $deadline) {
+        # adb 输出为空/多行数组时直接 .Trim() 会报错, 先 -join '' 归一为字符串
         $booted = ((& $Adb -s $device shell getprop sys.boot_completed 2>$null) -join '').Trim()
         if ($booted -eq '1') {
-            Write-Host "雷电模拟器启动完成: $device" -ForegroundColor Green
+            Write-Host "BlueStacks 启动完成: $device" -ForegroundColor Green
             return $device
         }
         Start-Sleep -Seconds 2
     }
 
-    Write-Host "等待雷电模拟器开机完成超时 (${BootTimeoutSec}s)。" -ForegroundColor Red
+    Write-Host "等待 BlueStacks 开机完成超时 (${BootTimeoutSec}s)。" -ForegroundColor Red
     return $null
 }
 
@@ -514,7 +555,7 @@ function Get-RunningAvdName {
 
 # 交互式统一部署目标选择:
 #   已连接的 adb 设备 (USB 真机 / 网络设备 / 运行中的模拟器)
-#   雷电模拟器多开实例 (未运行则先拉起并等待开机)
+#   BlueStacks 多开实例 (未运行则先拉起并等待开机)
 #   Android AVD (未运行则先拉起并等待开机)
 # 返回选中/启动后的设备序列号; 取消或无可用目标返回 $null。
 function Select-Device {
@@ -536,23 +577,22 @@ function Select-Device {
         $items += [pscustomobject]@{ Kind = 'adb'; Label = $label; Device = $s }
     }
 
-    # 雷电控制台输出多开实例; 端口仅在启动等待时使用, 不用做去重
-    # (AVD 与雷电实例都可能占用 emulator-5554, 按端口无法区分身份)
-    $ldDir = Get-LdPlayerDir
-    if ($ldDir) {
-        foreach ($ld in Get-LdPlayerInstances -LdDir $ldDir) {
-            # -- 2) 雷电实例: 无论是否已在 adb 列表都列出 (多开实例的可靠入口) --
-            $state = if ($ld.Running) { '运行中, adb 连接后部署' } else { '未运行, 启动后部署' }
+    # BlueStacks 实例: 无论是否已在 adb 列表都列出 (实例可靠入口, 未 connect 的也可选)
+    $bstDir = Get-BstDir
+    if ($bstDir) {
+        foreach ($bst in Get-BstInstances -BstDir $bstDir) {
+            $state = if ($bst.Running) { '运行中, adb 连接后部署' } else { '未运行, 启动后部署' }
+            $labelName = Get-BstLabel -Name $bst.Name -DisplayName $bst.DisplayName
             $items += [pscustomobject]@{
-                Kind    = 'ld'
-                Label   = ("雷电模拟器 {0} [实例{1}] ({2})" -f $ld.Title, $ld.Index, $state)
-                LdIndex = $ld.Index
-                LdDir   = $ldDir
+                Kind    = 'bst'
+                Label   = ("BlueStacks {0} ({1})" -f $labelName, $state)
+                BstName = $bst.Name
+                BstDir  = $bstDir
             }
         }
     }
 
-    # -- 3) Android AVD (跳过已在运行的; 雷电不识别 emu avd name 时返回空, 无害) --
+    # -- 3) Android AVD (跳过已在运行的; BlueStacks 不识别 emu avd name 时返回空, 无害) --
     $runningAvds = @()
     foreach ($s in ($serials | Where-Object { $_ -match '^emulator-' })) {
         $n = Get-RunningAvdName -Device $s
@@ -564,7 +604,7 @@ function Select-Device {
     }
 
     if ($items.Count -eq 0) {
-        Write-Host '未找到任何可用目标: 请用 USB 连接手机并开启 USB 调试、启动/安装雷电模拟器, 或先创建 AVD。' -ForegroundColor Yellow
+        Write-Host '未找到任何可用目标: 请用 USB 连接手机并开启 USB 调试、启动/安装 BlueStacks, 或先创建 AVD。' -ForegroundColor Yellow
         return $null
     }
 
@@ -591,15 +631,15 @@ function Select-Device {
     $item = $items[$index - 1]
     switch ($item.Kind) {
         'adb' { return $item.Device }
-        'ld' { return Start-LdPlayerInstance -Index $item.LdIndex -LdDir $item.LdDir }
+        'bst' { return Start-BstInstance -BstDir $item.BstDir -Name $item.BstName }
         'avd' { return Start-Avd -AvdName $item.AvdName }
     }
     return $null
 }
 
 # 确保有可用设备并返回序列号:
-#   交互模式 (默认)   : 弹统一目标选择 (真机 / 雷电 / AVD), 启动任何模拟器前一律手动确认;
-#   非交互 -AutoStartAvd (如 dev 命令): 已连设备直接用, 否则自动启动第一个 AVD, 再退而求其次启动雷电实例。
+#   交互模式 (默认)   : 弹统一目标选择 (真机 / BlueStacks / AVD), 启动任何模拟器前一律手动确认;
+#   非交互 -AutoStartAvd (如 dev 命令): 已连设备直接用, 否则自动启动第一个 AVD, 再退而求其次启动 BlueStacks 实例。
 function Ensure-Device {
     param([switch] $AutoStartAvd)
 
@@ -614,17 +654,18 @@ function Ensure-Device {
         return Start-Avd -AvdName $avds[0]
     }
 
-    $ldDir = Get-LdPlayerDir
-    if ($ldDir) {
-        $lds = @(Get-LdPlayerInstances -LdDir $ldDir)
-        if ($lds.Count -gt 0) {
-            $first = $lds | Sort-Object Index | Select-Object -First 1
-            Write-Host "未检测到设备, 自动启动雷电模拟器实例 $($first.Index) ($($first.Title)) ..." -ForegroundColor Yellow
-            return Start-LdPlayerInstance -Index $first.Index -LdDir $ldDir
+    $bstDir = Get-BstDir
+    if ($bstDir) {
+        $bsts = @(Get-BstInstances -BstDir $bstDir)
+        if ($bsts.Count -gt 0) {
+            $first = $bsts[0]
+            $labelName = Get-BstLabel -Name $first.Name -DisplayName $first.DisplayName
+            Write-Host "未检测到设备, 自动启动 BlueStacks ($labelName) ..." -ForegroundColor Yellow
+            return Start-BstInstance -BstDir $bstDir -Name $first.Name
         }
     }
 
-    Write-Host '没有已连接的设备, 也没有找到 AVD 或雷电模拟器。请用 USB 连接手机 (开启 USB 调试)。' -ForegroundColor Yellow
+    Write-Host '没有已连接的设备, 也没有找到 AVD 或 BlueStacks。请用 USB 连接手机 (开启 USB 调试)。' -ForegroundColor Yellow
     return $null
 }
 
@@ -699,8 +740,9 @@ function Grant-DevicePermissions {
 
     Write-Host '授予运行时权限 (通知/相机/麦克风/联系人/定位 + 悬浮窗 + 所有文件访问)...' -ForegroundColor Cyan
 
+    # POST_NOTIFICATIONS 仅 API 33+ 存在; 低版本设备 (如 BlueStacks API 30) pm grant
+    # 会抛 Unknown permission, 不能让它进 $errors 中断后续 appops/无障碍授权。
     $runtimePermissions = @(
-        'android.permission.POST_NOTIFICATIONS',
         'android.permission.CAMERA',
         'android.permission.RECORD_AUDIO',
         'android.permission.READ_CONTACTS',
@@ -713,6 +755,13 @@ function Grant-DevicePermissions {
         $r = (& $Adb -s $Device shell pm grant $AppId $perm 2>&1) -join ''
         if ($r -and $r -notmatch 'already granted') { $errors += "$perm => $r" }
     }
+    $apiLevel = 0
+    [void] [int]::TryParse(((& $Adb -s $Device shell getprop ro.build.version.sdk 2>$null) -join '').Trim(), [ref]$apiLevel)
+    if ($apiLevel -ge 33) {
+        $r = (& $Adb -s $Device shell pm grant $AppId android.permission.POST_NOTIFICATIONS 2>&1) -join ''
+        if ($r -and $r -notmatch 'already granted') { $errors += "POST_NOTIFICATIONS => $r" }
+    }
+
     $r = (& $Adb -s $Device shell appops set $AppId SYSTEM_ALERT_WINDOW allow 2>&1) -join ''
     if ($r) { $errors += "SYSTEM_ALERT_WINDOW => $r" }
     $r = (& $Adb -s $Device shell appops set $AppId MANAGE_EXTERNAL_STORAGE allow 2>&1) -join ''
@@ -1051,17 +1100,18 @@ function Do-StartEmulator {
         return
     }
 
-    # 汇总可启动目标: 先雷电多开实例, 再 AVD
+    # 汇总可启动目标: 先 BlueStacks 多开实例, 再 AVD
     $targets = @()
-    $ldDir = Get-LdPlayerDir
-    if ($ldDir) {
-        foreach ($ld in Get-LdPlayerInstances -LdDir $ldDir) {
-            $state = if ($ld.Running) { ' (运行中, 仅连接)' } else { '' }
+    $bstDir = Get-BstDir
+    if ($bstDir) {
+        foreach ($bst in Get-BstInstances -BstDir $bstDir) {
+            $state = if ($bst.Running) { ' (运行中, 仅连接)' } else { '' }
+            $labelName = Get-BstLabel -Name $bst.Name -DisplayName $bst.DisplayName
             $targets += [pscustomobject]@{
-                Kind    = 'ld'
-                Label   = "雷电模拟器 $($ld.Title) [实例$($ld.Index)]$state"
-                LdIndex = $ld.Index
-                LdDir   = $ldDir
+                Kind    = 'bst'
+                Label   = "BlueStacks $labelName$state"
+                BstName = $bst.Name
+                BstDir  = $bstDir
             }
         }
     }
@@ -1070,12 +1120,12 @@ function Do-StartEmulator {
     }
 
     if ($targets.Count -eq 0) {
-        Write-Host "未找到任何 AVD 或雷电模拟器实例 (emulator: $Emulator)。" -ForegroundColor Yellow
+        Write-Host "未找到任何 AVD 或 BlueStacks 实例 (emulator: $Emulator)。" -ForegroundColor Yellow
         return
     }
     if ($targets.Count -eq 1) {
         $t = $targets[0]
-        if ($t.Kind -eq 'ld') { Start-LdPlayerInstance -Index $t.LdIndex -LdDir $t.LdDir | Out-Null }
+        if ($t.Kind -eq 'bst') { Start-BstInstance -BstDir $t.BstDir -Name $t.BstName | Out-Null }
         else { Start-Avd -AvdName $t.AvdName | Out-Null }
         return
     }
@@ -1087,7 +1137,7 @@ function Do-StartEmulator {
     $index = 0
     if ([int]::TryParse($sel, [ref]$index) -and $index -ge 1 -and $index -le $targets.Count) {
         $t = $targets[$index - 1]
-        if ($t.Kind -eq 'ld') { Start-LdPlayerInstance -Index $t.LdIndex -LdDir $t.LdDir | Out-Null }
+        if ($t.Kind -eq 'bst') { Start-BstInstance -BstDir $t.BstDir -Name $t.BstName | Out-Null }
         else { Start-Avd -AvdName $t.AvdName | Out-Null }
     }
     elseif ($sel -ne '0') {
@@ -1096,14 +1146,21 @@ function Do-StartEmulator {
 }
 
 function Do-KillEmulator {
-    $emulators = (& $Adb devices) -match '^emulator-\d+' | ForEach-Object { ($_ -split "`t")[0] }
-    if (-not $emulators) {
-        Write-Host '未发现运行中的模拟器。' -ForegroundColor Yellow
-        return
-    }
+    $emulators = @((& $Adb devices) -match "`tdevice`$" | ForEach-Object { ($_ -split "`t")[0] } |
+        Where-Object { $_ -match '^emulator-\d+|^127\.0\.0\.1:' })
     foreach ($emu in $emulators) {
-        & $Adb -s $emu emu kill
-        Write-Host "已关闭模拟器: $emu" -ForegroundColor Green
+        # BlueStacks (127.0.0.1:*) 不支持 emu 控制台, 命令静默失败即可, 由下方进程兜底
+        & $Adb -s $emu emu kill 2>$null | Out-Null
+        Write-Host "已请求关闭模拟器: $emu" -ForegroundColor Green
+    }
+    # BlueStacks 不响应 adb emu kill, 直接结束其进程兜底
+    $bstProcs = @(Get-Process 'HD-Player' -ErrorAction SilentlyContinue)
+    foreach ($p in $bstProcs) {
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        Write-Host '已关闭 BlueStacks (HD-Player)。' -ForegroundColor Green
+    }
+    if (-not $emulators -and $bstProcs.Count -eq 0) {
+        Write-Host '未发现运行中的模拟器。' -ForegroundColor Yellow
     }
 }
 
@@ -1124,7 +1181,7 @@ function Show-DeviceMenu {
         Write-Header
         Write-Host ' -- 设备 --' -ForegroundColor Cyan
         Write-Host ' 1) 建立 adb reverse 8080 (App 访问宿主机本机服务用)'
-        Write-Host ' 2) 启动模拟器 (雷电 / AVD, 可选择)'
+        Write-Host ' 2) 启动模拟器 (BlueStacks / AVD, 可选择)'
         Write-Host ' 3) 关闭模拟器'
         Write-Host ' 4) 停止 App'
         Write-Host ' 5) 清除 App 数据 (会清空 App 内 Agent/密钥配置, 并自动重新授予权限)'
@@ -1297,7 +1354,7 @@ function Show-Help {
 
 部署目标 (交互菜单选择 "一键运行" 时列出):
   真机       USB 连接并开启 USB 调试后自动出现
-  雷电模拟器 自动从注册表/常见目录发现, 多开实例逐个列出, 未运行自动启动
+  BlueStacks  自动从注册表/常见目录发现, 多开实例逐个列出, 未运行自动启动
   Android AVD 多个 AVD 全部列出供选择
 
 示例:
