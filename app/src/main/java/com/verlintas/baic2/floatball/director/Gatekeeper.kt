@@ -46,6 +46,20 @@ object GateReasons {
 
     /** c) 超长（超过长度上限）。 */
     const val TOO_LONG = "too_long"
+
+    // ── M3-a：自动档四类硬审（方案 §8.2，命中一律降级起草档而非丢弃） ──
+
+    /** 自动档：涉及钱（报价/转账/付款话题）。 */
+    const val AUTO_MONEY = "auto_money"
+
+    /** 自动档：替用户答应事项/约定期限等承诺。 */
+    const val AUTO_PROMISE = "auto_promise"
+
+    /** 自动档：敏感隐私（询问或透露）。 */
+    const val AUTO_PRIVACY = "auto_privacy"
+
+    /** 自动档：超阶段动作（见面/送礼/上门等）。 */
+    const val AUTO_OVERSTEP = "auto_overstep"
 }
 
 /**
@@ -146,6 +160,19 @@ object GateRules {
         draft: String,
         recentReplies: List<String>,
         maxChars: Int,
+    ): GateRejection? = deterministicReview(draft, recentReplies, maxChars, auto = false)
+
+    /**
+     * M3-a 自动档入口：在三查之后追加四类硬审词表（钱/承诺/敏感隐私/超阶段）。
+     * [auto]=false 时行为与旧签名完全一致（既有调用方零破坏）；[auto]=true 且
+     * 命中时 replacement=null（自动档拒绝 = 降级起草档，保留原稿交人肉档，
+     * 绝不截断改写——方案 §8.2「命中一律降级起草档」）。
+     */
+    fun deterministicReview(
+        draft: String,
+        recentReplies: List<String>,
+        maxChars: Int,
+        auto: Boolean,
     ): GateRejection? {
         val hit = findRedline(draft)
         if (hit != null) {
@@ -157,8 +184,67 @@ object GateRules {
         if (findRepetition(draft, recentReplies) != null) {
             return GateRejection(GateReasons.REPETITIVE, null)
         }
+        if (auto) {
+            val blocked = findAutoBlock(draft)
+            if (blocked != null) {
+                return GateRejection(blocked.first, null)
+            }
+        }
         return null
     }
+
+    // ── M3-a：自动档四类词表（方案 §8.2，纯函数 JVM 可单测） ─────────────
+
+    /**
+     * 自动档四类词表（类别码 → 正则）。口径与硬红线相反：自动档误报的代价只是
+     * 「降级起草档交人复核」，而漏报的代价是无人值守错发，因此**宁严勿松**——
+     * 钱话题零容忍（含正当销售话术里的「转账/报价」），与 [REDLINE_REGEXES]
+     * 的「误报零容忍」互补。命中一律降级，不试图改写。
+     */
+    internal val AUTO_REGEXES: List<Pair<String, Regex>> = listOf(
+        GateReasons.AUTO_MONEY to Regex(
+            "报价|报个价|多少钱|什么价|价格多少|怎么卖|转账|转给你|转给我|转过去|打款|付款|收款|" +
+                "发.?红包|收.?红包|定金|尾款|货款|佣金|返点|折扣价|优惠价|最低价",
+        ),
+        GateReasons.AUTO_PROMISE to Regex(
+            "我答应|答应你|答应您|我保证|向你保证|向您保证|我承诺|说定了|就这么定|说好了|" +
+                "包在我身上|一定给你办|一定给您办|我替你|我帮您搞定|帮你搞定|" +
+                "明天[之]?前(给你|给您|完成|办好|搞定)|周[一二三四五六日天][之]?前(给你|给您|交付|完成|办好)",
+        ),
+        GateReasons.AUTO_PRIVACY to Regex(
+            "你家住哪|住址在哪|家庭住址|身份证号|工资多少|月薪多少|收入多少|存款多少|" +
+                "身高体重|你多大了|今年多大|属什么的|离婚了吗|结婚了吗|单身吗",
+        ),
+        GateReasons.AUTO_OVERSTEP to Regex(
+            "约你出来|约您出来|见一面|见个面|见面吧|见面聊|请你吃饭|请你喝茶|请你喝|" +
+                "送你礼物|送你一份|给你买|带你去|去看电影|去你家|来我家|来找你玩|一起旅游",
+        ),
+    )
+
+    /** 自动档四类命中：返回（类别码, 命中片段），无命中返回 null。 */
+    fun findAutoBlock(draft: String): Pair<String, String>? =
+        AUTO_REGEXES.firstNotNullOfOrNull { (reason, regex) ->
+            regex.find(draft)?.value?.let { reason to it }
+        }
+
+    /**
+     * 自动档生成端规约追加段（方案 §8.2「红线继承：forbidden 追加」）：总闸开启
+     * 且联系人在白名单内时，由调用方拼进系统提示词，让模型从源头少产高危内容；
+     * 与 [deterministicReview] 的四类硬审形成「事前约束 + 事后拦截」双保险。
+     */
+    fun autoForbiddenSection(): String =
+        "【自动档红线】本条草稿将由系统自动发送、无人逐字复核，因此额外约束：" +
+            "不报价、不谈转账/付款/钱数话题；不替用户答应任何事项、不承诺具体时间或期限；" +
+            "不询问、不透露敏感隐私（住址、证件、收入、年龄、婚恋状况等）；" +
+            "不提出见面、约会、送礼、上门等超阶段动作。" +
+            "只写自然、轻松、低风险的日常回应。"
+
+    /** 自动档 forbidden 台账追加项（落 talk_missions.forbiddenJson 前合并，供分屏红线展示）。 */
+    val AUTO_FORBIDDEN_ITEMS: List<String> = listOf(
+        "不报价、不谈转账与付款话题",
+        "不代用户做决定",
+        "不替用户答应任何事项",
+    )
 
     /** 轻 LLM 审输出的宽松解析：去 ```json 围栏并截取首个 {…}；畸形输出返回 null（放行）。 */
     internal fun parseReview(raw: String): LlmGateVerdict? {
@@ -217,12 +303,14 @@ class Gatekeeper @Inject constructor(
     private val auxiliaryTasks: AuxiliaryTasks,
 ) {
 
-    /** 第一道：确定性审（转发纯函数；调用方选线程，本方法不做 IO）。 */
+    /** 第一道：确定性审（转发纯函数；调用方选线程，本方法不做 IO）。
+     * [auto]=true 时追加四类自动档硬审（钱/承诺/敏感隐私/超阶段，M3-a）。 */
     fun deterministicReview(
         draft: String,
         recentReplies: List<String>,
         maxChars: Int,
-    ): GateRejection? = GateRules.deterministicReview(draft, recentReplies, maxChars)
+        auto: Boolean = false,
+    ): GateRejection? = GateRules.deterministicReview(draft, recentReplies, maxChars, auto)
 
     /**
      * 第二道：轻 LLM 审。返回 null = 放行（含一切失败路径）。

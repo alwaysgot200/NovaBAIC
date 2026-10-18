@@ -76,6 +76,7 @@ import com.verlintas.baic2.floatball.director.DirectorInput
 import com.verlintas.baic2.floatball.director.DirectorTrigger
 import com.verlintas.baic2.floatball.director.GateReasons
 import com.verlintas.baic2.floatball.director.GateRejection
+import com.verlintas.baic2.floatball.director.GateRules
 import com.verlintas.baic2.floatball.director.Gatekeeper
 import com.verlintas.baic2.floatball.director.TopicEngine
 import com.verlintas.baic2.floatball.director.TopicEngineStore
@@ -466,7 +467,7 @@ class ScreenAdvisor @Inject constructor(
                         goalId = snapshot.context.activeL1?.id ?: snapshot.context.activeL2?.id,
                         mission = plan.mission,
                         actionsJson = strategyJson.encodeToString(plan.actions),
-                        forbiddenJson = strategyJson.encodeToString(plan.forbidden),
+                        forbiddenJson = strategyJson.encodeToString(autoForbiddenMerged(plan.forbidden)),
                         signalsJson = strategyJson.encodeToString(plan.signalsToWatch),
                         planBlockJson = planRaw,
                         createdAt = System.currentTimeMillis(),
@@ -1564,6 +1565,8 @@ class ScreenAdvisor @Inject constructor(
         // custom 拼在最前，总纲因此先于上游一切基线条目。
         val customSystemPrompt = listOfNotNull(
             PREAMBLE_SECTION,
+            // M3-a：自动档激活（总闸开+联系人白名单内）时追加生成端红线段。
+            autoDirectiveSection(),
             styleWithLength,
             strategySection,
             // 保温闲聊段紧跟策略段（KPI 覆盖：自然度优先于任务推进，见 WarmChatPrompt）。
@@ -2336,6 +2339,10 @@ class ScreenAdvisor @Inject constructor(
                 GateReasons.BLACKLIST -> R.string.float_gate_reason_blacklist
                 GateReasons.TOO_LONG -> R.string.float_gate_reason_too_long
                 GateReasons.REPETITIVE -> R.string.float_gate_reason_repetitive
+                GateReasons.AUTO_MONEY -> R.string.float_gate_reason_auto_money
+                GateReasons.AUTO_PROMISE -> R.string.float_gate_reason_auto_promise
+                GateReasons.AUTO_PRIVACY -> R.string.float_gate_reason_auto_privacy
+                GateReasons.AUTO_OVERSTEP -> R.string.float_gate_reason_auto_overstep
                 else -> R.string.float_gate_reason_ai_tone
             },
         )
@@ -2362,6 +2369,30 @@ class ScreenAdvisor @Inject constructor(
             snapshot[message.id]?.let { message.copy(content = it) } ?: message
         }
     }
+
+    // ── M3-a：自动档条件注入（总闸开 + 联系人在白名单内才生效） ────────────
+
+    /**
+     * 自动档激活判定（与 ActionDispatcher 的 DispatchGate 同口径）：总闸开启且
+     * 当前回合联系人在白名单内。未激活返回 null（提示词/台账零改动）。
+     */
+    private fun autoModeActive(): Boolean {
+        val settings = prefs.state.value
+        val contactId = _activeContact.value?.contactId ?: return false
+        return settings.autoModeEnabled && contactId in settings.autoWhitelistIds
+    }
+
+    /** 生成端红线段（规约总纲之后条件拼接，见 GateRules.autoForbiddenSection）。 */
+    private fun autoDirectiveSection(): String? =
+        if (autoModeActive()) GateRules.autoForbiddenSection() else null
+
+    /** 任务令 forbidden 台账合并：自动档激活时追加三条固定红线（distinct 去重）。 */
+    private fun autoForbiddenMerged(planForbidden: List<String>): List<String> =
+        if (autoModeActive()) {
+            (planForbidden + GateRules.AUTO_FORBIDDEN_ITEMS).distinct()
+        } else {
+            planForbidden
+        }
 
     // ── P3 §九：行内纠偏（采纳 / 长按三档重写 / 记错了） ─────────────────
 

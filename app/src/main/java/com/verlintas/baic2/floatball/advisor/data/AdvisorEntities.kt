@@ -428,6 +428,9 @@ const val TRIGGER_PROACTIVE = "proactive"
 const val TRIGGER_SCHEDULED = "scheduled"
 const val TRIGGER_MANUAL = "manual"
 
+/** M3-a 自动档发送事件（ActionDispatcher 落 director_logs 用，追加式常量）。 */
+const val TRIGGER_AUTO = "auto"
+
 /**
  * director_logs.route：reply=现有主链路；smalltalk=保温闲聊；replan_hint/action_hint=建议条；
  * brief=简报；noop=不动。guide 已按 v2 方案 D6 移出路由表（推进意图 T2 后才产生，

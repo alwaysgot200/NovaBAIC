@@ -71,9 +71,11 @@ import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
+import com.verlintas.baic2.floatball.advisor.ContactRepository
 import com.verlintas.baic2.floatball.advisor.StrategyCardRepository
 import com.verlintas.baic2.floatball.advisor.data.CARD_CONFIRMED
 import com.verlintas.baic2.floatball.advisor.data.CARD_DRAFT
+import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
@@ -107,6 +109,10 @@ class FloatSettingsActivity : ComponentActivity() {
 
     @Inject
     lateinit var proactiveCheckpoint: com.verlintas.baic2.floatball.director.ProactiveCheckpoint
+
+    /** M3-b 自动档白名单管理：联系人档案数据源（仅读，写入走 AdvisorPrefs）。 */
+    @Inject
+    lateinit var contactRepository: ContactRepository
 
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
@@ -144,6 +150,7 @@ class FloatSettingsActivity : ComponentActivity() {
                     runtime = strategyRuntime,
                     strategyCards = strategyCards,
                     proactiveCheckpoint = proactiveCheckpoint,
+                    contactRepository = contactRepository,
                     onClose = { finish() },
                 )
             }
@@ -159,6 +166,7 @@ private fun AdvisorSettingsScreen(
     runtime: StrategyRuntime,
     strategyCards: StrategyCardRepository,
     proactiveCheckpoint: com.verlintas.baic2.floatball.director.ProactiveCheckpoint,
+    contactRepository: ContactRepository,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
@@ -434,6 +442,12 @@ private fun AdvisorSettingsScreen(
                         },
                     )
                 }
+                // M3-b 自动参谋：总闸（风险告知+二次确认）+ 白名单管理 + 单窗口上限。
+                AutoAdvisorSection(
+                    settings = settings,
+                    prefs = prefs,
+                    contactRepository = contactRepository,
+                )
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = scheme.surfaceContainer,
@@ -708,6 +722,176 @@ private fun SectionLabel(text: String) {
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier.padding(top = 24.dp, bottom = 8.dp),
     )
+}
+
+/**
+ * M3-b 自动参谋设置面（方案 §8.3 风险表）：总闸开启前弹显著风险告知并要求
+ * 二次确认；白名单 ≤5 人增删（数据源=联系人档案）；单窗口自动发送上限。
+ * 文案强调「默认关闭、随时可关、全部本地执行」。
+ */
+@Composable
+private fun AutoAdvisorSection(
+    settings: AdvisorPrefs.Settings,
+    prefs: AdvisorPrefs,
+    contactRepository: ContactRepository,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    SectionLabel(stringResource(R.string.float_settings_auto_section))
+    var riskArmed by remember { mutableStateOf(false) }
+    ToggleRow(
+        title = stringResource(R.string.float_settings_auto),
+        hint = stringResource(R.string.float_settings_auto_hint),
+        checked = settings.autoModeEnabled,
+    ) { on ->
+        if (on) riskArmed = true else prefs.setAutoModeEnabled(false)
+    }
+    if (riskArmed) {
+        AlertDialog(
+            onDismissRequest = { riskArmed = false },
+            title = { Text(stringResource(R.string.float_companion_risk_title)) },
+            text = {
+                Text(
+                    text = stringResource(
+                        R.string.float_companion_risk_text,
+                        settings.companionMaxSends,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        riskArmed = false
+                        prefs.setAutoModeEnabled(true)
+                    },
+                ) { Text(stringResource(R.string.float_companion_risk_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { riskArmed = false }) {
+                    Text(stringResource(R.string.float_companion_risk_cancel))
+                }
+            },
+        )
+    }
+
+    Text(
+        text = stringResource(R.string.float_settings_auto_max_sends),
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 12.dp),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AdvisorPrefs.COMPANION_SEND_OPTIONS.sorted().forEach { value ->
+            FilterChip(
+                selected = value == settings.companionMaxSends,
+                onClick = { prefs.setCompanionMaxSends(value) },
+                label = {
+                    Text(
+                        if (value == 0) {
+                            stringResource(R.string.float_settings_max_sends_unlimited)
+                        } else {
+                            stringResource(R.string.float_settings_max_sends_value, value)
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    var whitelistDialog by remember { mutableStateOf(false) }
+    var contacts by remember { mutableStateOf<List<ContactProfileEntity>>(emptyList()) }
+    androidx.compose.runtime.LaunchedEffect(whitelistDialog) {
+        if (whitelistDialog) contacts = contactRepository.listAlive()
+    }
+    val selectedIds = settings.autoWhitelistIds
+    val selectedNames = selectedIds.mapNotNull { id ->
+        contacts.firstOrNull { it.id == id }?.displayName
+    }
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = scheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable { whitelistDialog = true },
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                text = stringResource(R.string.float_settings_auto_whitelist),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = if (selectedNames.isEmpty()) {
+                    stringResource(R.string.float_settings_auto_whitelist_empty)
+                } else {
+                    stringResource(
+                        R.string.float_settings_auto_whitelist_value,
+                        selectedIds.size,
+                        selectedNames.joinToString("、"),
+                    )
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (whitelistDialog) {
+        AlertDialog(
+            onDismissRequest = { whitelistDialog = false },
+            title = { Text(stringResource(R.string.float_settings_auto_whitelist)) },
+            text = {
+                if (contacts.isEmpty()) {
+                    Text(stringResource(R.string.float_settings_auto_whitelist_none))
+                } else {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        contacts.forEach { contact ->
+                            val inList = contact.id in selectedIds
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    text = contact.displayName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = stringResource(
+                                        if (inList) {
+                                            R.string.float_settings_auto_whitelist_remove
+                                        } else {
+                                            R.string.float_settings_auto_whitelist_add
+                                        },
+                                    ),
+                                    color = if (inList) scheme.error else scheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier
+                                        .clickable {
+                                            if (inList) {
+                                                prefs.removeAutoWhitelistContact(contact.id)
+                                            } else if (!prefs.addAutoWhitelistContact(contact.id)) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    R.string.float_settings_auto_whitelist_full,
+                                                    android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            }
+                                        }
+                                        .padding(6.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { whitelistDialog = false }) {
+                    Text(stringResource(R.string.float_ask_close))
+                }
+            },
+            dismissButton = {},
+        )
+    }
 }
 
 private data class LabeledOption<T>(val value: T, val labelRes: Int)

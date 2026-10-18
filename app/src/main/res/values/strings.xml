@@ -150,6 +150,10 @@
     <string name="float_gate_reason_too_long">草稿超出长度上限，已自动截断</string>
     <string name="float_gate_reason_repetitive">草稿与近期回复高度雷同，建议长按气泡换个写法</string>
     <string name="float_gate_reason_ai_tone">草稿 AI 腔偏重，以下为改写建议</string>
+    <string name="float_gate_reason_auto_money">自动档硬审：草稿涉及报价/转账/付款等钱财话题，已降级为草稿，请人工确认后再发</string>
+    <string name="float_gate_reason_auto_promise">自动档硬审：草稿替你答应了事项或承诺了期限，已降级为草稿，请人工确认后再发</string>
+    <string name="float_gate_reason_auto_privacy">自动档硬审：草稿涉及敏感隐私（住址/证件/收入/年龄等），已降级为草稿，请人工确认后再发</string>
+    <string name="float_gate_reason_auto_overstep">自动档硬审：草稿提出见面/送礼等超阶段动作，已降级为草稿，请人工确认后再发</string>
     <string name="float_gate_blocked_empty">截断后已无可保留内容，原稿整体拦截，请长按气泡重新生成</string>
     <string name="float_dir_chip">方向 ▾</string>
     <string name="float_dir_set">方向：%1$s ▾</string>
@@ -597,6 +601,33 @@
     <string name="float_proactive_draft_notif_title">老参谋想主动聊聊【%1$s】</string>
     <string name="float_proactive_weekly_notif_title">参谋周报已生成</string>
     <string name="float_proactive_weekly_notif_text">%1$s 的周报已更新；近 7 天决策分布：%2$s</string>
+
+    <!-- M3-b 自动档陪伴窗口：设置面（风险告知/白名单）+ 窗口收尾汇总 -->
+    <string name="float_settings_auto_section">自动参谋（陪伴窗口，高风险）</string>
+    <string name="float_settings_auto">自动档总闸</string>
+    <string name="float_settings_auto_hint">开启后仅对白名单联系人（≤5 人）生效：陪伴窗口内通过硬审的草稿将自动发送。默认关闭、随时可关、全部本地执行</string>
+    <string name="float_companion_risk_title">开启自动档前必读</string>
+    <string name="float_companion_risk_text">开启即代表你了解并接受以下风险：\n\n① 平台风控风险：微信等 IM 服务条款禁止自动化操作，存在限制或封号可能；\n② 错发风险：无人值守时 AI 代写内容将直接发出，涉钱、承诺、敏感隐私、超阶段的内容会被硬审拦截降级，但拦截非百分之百；\n③ 生效范围：仅白名单内（≤5 人）联系人；发送前随机延迟 8~90 秒，单窗口最多 %1$d 条，夜间静默时段只出草稿不发送；\n④ 全部执行在本地完成，无云端参与；总闸随时可关，关闭即停止一切自动发送。\n\n请仅在合法合规、对方知情的关系场景中使用。</string>
+    <string name="float_companion_risk_confirm">我已了解风险，开启</string>
+    <string name="float_companion_risk_cancel">暂不开启</string>
+    <string name="float_settings_auto_whitelist">白名单联系人（≤5 人）</string>
+    <string name="float_settings_auto_whitelist_value">已选 %1$d / 5 人：%2$s</string>
+    <string name="float_settings_auto_whitelist_empty">未选择（点此从联系人档案添加）</string>
+    <string name="float_settings_auto_whitelist_full">白名单已满（≤5 人），先移除一位再添加</string>
+    <string name="float_settings_auto_whitelist_add">添加</string>
+    <string name="float_settings_auto_whitelist_remove">移除</string>
+    <string name="float_settings_auto_whitelist_none">暂无联系人档案：先在某聊天页发起一次参谋，自动建档后再来选择</string>
+    <string name="float_settings_auto_max_sends">单窗口自动发送上限</string>
+    <string name="float_settings_max_sends_value">%1$d 条</string>
+    <string name="float_settings_max_sends_unlimited">不限</string>
+    <string name="float_companion_need_contact">先在聊天页绑定联系人，再开启陪伴窗口</string>
+    <string name="float_companion_disabled">自动档总闸未开启，请先在设置中确认风险并开启</string>
+    <string name="float_companion_not_whitelisted">该联系人不在自动档白名单内</string>
+    <string name="float_companion_gear_conflict">已有参谋档在途（单次/连续/陪伴窗口/起草互斥）</string>
+    <string name="float_companion_started">陪伴窗口已开启：30 分钟内自动参谋本联系人</string>
+    <string name="float_companion_end_notif_title">陪伴窗口已结束</string>
+    <string name="float_companion_end_notif_text">本次参谋草稿 %1$d 条，自动发送 %2$d 条，硬审拦截 %3$d 条。是否续 30 分钟？</string>
+    <string name="float_companion_end_renew">续 30 分钟</string>
 
     <!-- 品牌统一为「老参谋」：以下键覆盖上游库（device:impl / feature:settings）
          的同名资源。Android 资源合并中 app 优先级高于依赖库，无需改动上游文件；

@@ -63,6 +63,8 @@ import com.verlintas.baic2.EXTRA_FROM_FLOAT
 import com.verlintas.baic2.MainActivity
 import com.verlintas.baic2.R
 import com.verlintas.baic2.floatball.director.AdvisorNotificationListener
+import com.verlintas.baic2.floatball.auto.CompanionWindowController
+import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.keepalive.KeepAliveManager
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -103,9 +105,16 @@ class FloatBallService : Service() {
     @Inject
     lateinit var proactiveCheckpoint: com.verlintas.baic2.floatball.director.ProactiveCheckpoint
 
+    /** M3-b 陪伴窗口：自动档的窗口治理面（互斥/硬审/拟人节奏/收尾汇总）。 */
+    @Inject
+    lateinit var companionController: CompanionWindowController
+
     private enum class Mode { IDLE, ONESHOT, RECORDING }
 
     private var mode = Mode.IDLE
+
+    /** M3-b：RECORDING 态的子语义——true=自动陪伴窗口（收尾走窗口汇总通知）。 */
+    private var companionWindow = false
 
     private lateinit var windowManager: WindowManager
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -315,6 +324,8 @@ class FloatBallService : Service() {
             // 免双击入口（通知栏自动化/测试）：与双击同一状态机路径。
             ACTION_START_RECORDING -> if (mode == Mode.IDLE && ball != null) startRecording()
             ACTION_STOP_RECORDING -> if (mode == Mode.RECORDING) stopRecording()
+            // M3-b 陪伴窗口收尾通知「续 30 分钟」：同一状态机入口重启窗口。
+            CompanionWindowController.ACTION_RENEW_WINDOW -> onCompanionRenew(intent)
             // M2-a 起草通知点开：分屏预览代拟稿，一键发送/改后发送（§8.1 N4）。
             AdvisorNotificationListener.ACTION_SHOW_DRAFT -> handleShowDraft(intent)
         }
@@ -336,6 +347,8 @@ class FloatBallService : Service() {
         unregisterReceiver(screenOffReceiver)
         mainHandler.removeCallbacksAndMessages(null)
         askJob?.cancel()
+        // 陪伴窗口静默清理：服务都要销毁了，不发作何收尾通知。
+        companionController.cancelAllSilently()
         diffEngine.destroy()
         screenAdvisor.advisorScopeCancel()
         scope.cancel()
@@ -515,8 +528,14 @@ class FloatBallService : Service() {
 
     // ----------------------------------------------------- recording
 
-    private fun startRecording() {
+    private fun startRecording(forCompanion: Boolean = false) {
         if (mode != Mode.IDLE) return
+        // 三档互斥（方案 v2 §13.2，M3 验收项）：自动陪伴窗口在途时禁止再开
+        // 手动连续；窗口自身的启动路径（forCompanion=true）不受此限。
+        if (!forCompanion && companionController.windowActive()) {
+            toast(R.string.float_companion_gear_conflict)
+            return
+        }
         mode = Mode.RECORDING
         completionCount = 0
         // 新的录制会话：清零会话级 token 计数（累计总量不受影响）。
@@ -570,14 +589,19 @@ class FloatBallService : Service() {
     private fun stopRecording() {
         diffEngine.stop()
         screenAdvisor.releaseProjection()
+        // 陪伴窗口收尾：静默结束——不发「已停止」toast，汇总/续期由控制器通知。
+        val wasCompanion = companionWindow
+        companionWindow = false
+        if (wasCompanion) companionController.finish("service_stop")
         abortRecording()
-        toast(R.string.float_recording_stopped)
+        if (!wasCompanion) toast(R.string.float_recording_stopped)
     }
 
     /** 录制态回退到 Idle：球已存在时也要恢复外观（不重建窗口）。 */
     private fun abortRecording() {
         mode = Mode.IDLE
         completionCount = 0
+        companionWindow = false
         ball?.setMode(FloatUi.BallMode.NORMAL, this)
         ball?.setBadge(0)
         restoreBall()
@@ -589,6 +613,61 @@ class FloatBallService : Service() {
             closeSplit(keepBall = true)
         } else {
             ensureSplit()
+        }
+    }
+
+    // ------------------------------------------------- companion window
+
+    /**
+     * 陪伴窗口入口（M3-b，方案 §8.1 W1）：扇形菜单「自动」子球 / 分屏「自动」
+     * 键，对当前绑定联系人开启。三档互斥、总闸、白名单的判定全在
+     * [CompanionWindowController.start]，服务层只映射结果为用户提示。
+     */
+    private fun startCompanionWindow() {
+        beginCompanion(screenAdvisor.activeContact.value)
+    }
+
+    /** 收尾通知「续 30 分钟」按钮：按联系人 id 重建引用后走同一开启路径。 */
+    private fun onCompanionRenew(intent: Intent?) {
+        val contactId = intent?.getLongExtra(CompanionWindowController.EXTRA_CONTACT_ID, -1L)
+            ?: -1L
+        if (contactId <= 0L) return
+        scope.launch { beginCompanion(companionController.contactRefFor(contactId)) }
+    }
+
+    private fun beginCompanion(contact: ContactRef?) {
+        if (contact == null) {
+            toast(R.string.float_companion_need_contact)
+            return
+        }
+        if (companionWindow) {
+            toast(R.string.float_companion_gear_conflict)
+            return
+        }
+        scope.launch {
+            val result = companionController.start(
+                contact,
+                manualContinuousActive = mode == Mode.RECORDING,
+            )
+            handleCompanionStart(result)
+        }
+    }
+
+    private fun handleCompanionStart(result: CompanionWindowController.StartResult) {
+        when (result) {
+            CompanionWindowController.StartResult.STARTED -> {
+                companionWindow = true
+                toast(R.string.float_companion_started)
+                if (mode == Mode.IDLE) startRecording(forCompanion = true)
+            }
+            CompanionWindowController.StartResult.REASON_AUTO_DISABLED ->
+                toast(R.string.float_companion_disabled)
+            CompanionWindowController.StartResult.REASON_NOT_WHITELISTED ->
+                toast(R.string.float_companion_not_whitelisted)
+            CompanionWindowController.StartResult.REASON_GEAR_CONFLICT ->
+                toast(R.string.float_companion_gear_conflict)
+            CompanionWindowController.StartResult.REASON_NO_CONTACT ->
+                toast(R.string.float_companion_need_contact)
         }
     }
 
@@ -714,7 +793,7 @@ class FloatBallService : Service() {
             this,
             onClose = { closeSplit(keepBall = false) },
             onDirection = { showDirectionMenu() },
-            onAuto = { toast(R.string.float_split_auto_soon) },
+            onAuto = { startCompanionWindow() },
             onSmalltalk = { screenAdvisor.requestSmalltalk() },
             inputCallbacks = inputCallbacks,
             draftCallbacks = draftCallbacks,
@@ -1371,11 +1450,10 @@ class FloatBallService : Service() {
                 FloatUi.FanItem(R.string.float_fan_ask) { startOneShot() },
                 FloatUi.FanItem(R.string.float_fan_main) { showMainUi() },
                 FloatUi.FanItem(R.string.float_fan_settings) { openFloatSettings() },
-                // 「自动」= AI 自动接管聊天与屏幕，本期只占位，不实现；
+                // 「自动」= M3-b 陪伴窗口：对当前绑定联系人开启 30 分钟自动参谋
+                // （白名单+硬审+拟人节奏，见 CompanionWindowController）；
                 // 悬浮球常驻，不再提供手动隐藏（不想显示请走「退出」）。
-                FloatUi.FanItem(R.string.float_split_auto) {
-                    toast(R.string.float_split_auto_soon)
-                },
+                FloatUi.FanItem(R.string.float_split_auto) { startCompanionWindow() },
                 FloatUi.FanItem(R.string.float_fan_about) { showAboutDialog() },
                 FloatUi.FanItem(R.string.float_fan_exit) { exitApp() },
             ),

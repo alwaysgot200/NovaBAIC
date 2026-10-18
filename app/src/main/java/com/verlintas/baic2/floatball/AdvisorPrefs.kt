@@ -97,7 +97,26 @@ class AdvisorPrefs @Inject constructor(
         val proactiveEnabled: Boolean = false,
         /** 周期检点间隔（小时），固定档位见 [PROACTIVE_INTERVAL_OPTIONS]。 */
         val proactiveIntervalHours: Int = PROACTIVE_DEFAULT_INTERVAL,
+        /**
+         * M3 自动档总闸（方案 §8.3）：开启后对白名单联系人允许 Gatekeeper 硬审
+         * 通过即自动发送。默认关闭（平台风控/无人值守错发双高风险，须显式开启）。
+         */
+        val autoModeEnabled: Boolean = false,
+        /**
+         * M3 自动档联系人白名单（contactId 字符串集合，上限 [MAX_AUTO_WHITELIST]）。
+         * 数据层只做容量约束；设置 UI 与风险告知确认由 M3-b 落地。
+         */
+        val autoWhitelist: Set<String> = emptySet(),
+        /**
+         * M3-b 陪伴窗口单窗口自动发送上限（条），0=不限（不建议）。达上限后
+         * 窗口继续感知、草稿一律降级起草通知。
+         */
+        val companionMaxSends: Int = DEFAULT_COMPANION_MAX_SENDS,
     ) {
+        /** 白名单的 Long 视图（非法项静默忽略；与 [addAutoWhitelistContact] 同口径）。 */
+        val autoWhitelistIds: Set<Long>
+            get() = autoWhitelist.mapNotNull { it.toLongOrNull() }.toSet()
+
         /** OCR 层文本相似度阈值（FrameDiffEngine 用）：越严格阈值越高，越少发问。 */
         val ocrDedupSimilarity: Float
             get() = when (dedupLevel) {
@@ -191,6 +210,11 @@ class AdvisorPrefs @Inject constructor(
             proactiveEnabled = prefs.getBoolean(KEY_PROACTIVE_ENABLED, false),
             proactiveIntervalHours = prefs.getInt(KEY_PROACTIVE_INTERVAL, PROACTIVE_DEFAULT_INTERVAL)
                 .let { if (it in PROACTIVE_INTERVAL_OPTIONS) it else PROACTIVE_DEFAULT_INTERVAL },
+            autoModeEnabled = prefs.getBoolean(KEY_AUTO_ENABLED, false),
+            autoWhitelist = prefs.getStringSet(KEY_AUTO_WHITELIST, emptySet())
+                ?.filter { it.isNotBlank() }?.take(MAX_AUTO_WHITELIST)?.toSet().orEmpty(),
+            companionMaxSends = prefs.getInt(KEY_COMPANION_MAX_SENDS, DEFAULT_COMPANION_MAX_SENDS)
+                .let { if (it in COMPANION_SEND_OPTIONS) it else DEFAULT_COMPANION_MAX_SENDS },
         )
 
     private val _tokenStats = MutableStateFlow(loadTokenStats())
@@ -322,6 +346,42 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(proactiveIntervalHours = value) }
     }
 
+    // ── M3-a：自动档总闸 + 白名单（数据层；设置 UI 与风险告知由 M3-b 落地） ──
+
+    /** M3 自动档总闸（默认关；关闭时 dispatcher 拒绝一切派发）。 */
+    fun setAutoModeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_ENABLED, enabled).apply()
+        _state.update { it.copy(autoModeEnabled = enabled) }
+    }
+
+    /**
+     * 白名单添加联系人：上限 [MAX_AUTO_WHITELIST] 个，超出拒绝添加并返回 false
+     * （调用方据返回值提示；已存在的 id 幂等返回 true）。
+     */
+    fun addAutoWhitelistContact(contactId: Long): Boolean {
+        if (contactId <= 0L) return false
+        val current = _state.value.autoWhitelist
+        val next = current + contactId.toString()
+        if (next.size > MAX_AUTO_WHITELIST) return false
+        prefs.edit().putStringSet(KEY_AUTO_WHITELIST, next).apply()
+        _state.update { it.copy(autoWhitelist = next) }
+        return true
+    }
+
+    /** 白名单移除联系人（不存在时静默）。 */
+    fun removeAutoWhitelistContact(contactId: Long) {
+        val next = _state.value.autoWhitelist - contactId.toString()
+        prefs.edit().putStringSet(KEY_AUTO_WHITELIST, next).apply()
+        _state.update { it.copy(autoWhitelist = next) }
+    }
+
+    /** M3-b 陪伴窗口单窗口自动发送上限（固定档位，下一窗口生效）。 */
+    fun setCompanionMaxSends(sends: Int) {
+        val value = sends.takeIf { it in COMPANION_SEND_OPTIONS } ?: DEFAULT_COMPANION_MAX_SENDS
+        prefs.edit().putInt(KEY_COMPANION_MAX_SENDS, value).apply()
+        _state.update { it.copy(companionMaxSends = value) }
+    }
+
     /** 记录一个主参谋回合的实际用量（模型 Usage 事件；缺测按 0 计），累计持久化。 */
     fun recordTurnUsage(inputTokens: Long, outputTokens: Long) {
         val current = _tokenStats.value
@@ -416,6 +476,16 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_DRAFT_ENABLED = "draft_reply_enabled"
         const val KEY_PROACTIVE_ENABLED = "proactive_enabled"
         const val KEY_PROACTIVE_INTERVAL = "proactive_interval_hours"
+        const val KEY_AUTO_ENABLED = "auto_mode_enabled"
+        const val KEY_AUTO_WHITELIST = "auto_whitelist_contacts"
+        const val KEY_COMPANION_MAX_SENDS = "companion_max_sends"
+
+        /** M3 自动档白名单上限（方案 §8.3：白名单联系人 ≤5）。 */
+        const val MAX_AUTO_WHITELIST = 5
+
+        /** M3-b 陪伴窗口单窗口发送上限档（0=不限）与默认值（方案 §8.2：建议 6 条）。 */
+        val COMPANION_SEND_OPTIONS = setOf(0, 3, 6, 10)
+        const val DEFAULT_COMPANION_MAX_SENDS = 6
         const val KEY_TOTAL_INPUT = "usage_total_input"
         const val KEY_TOTAL_OUTPUT = "usage_total_output"
         const val KEY_TOTAL_TURNS = "usage_total_turns"
