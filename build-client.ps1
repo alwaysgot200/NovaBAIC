@@ -19,6 +19,7 @@
     .\build-client.ps1                  # 交互菜单 (直接回车 = 编译安装并启动)
     .\build-client.ps1 dev              # 非交互: 增量安装 + 启动 + 全量日志
     .\build-client.ps1 dev -NoLog       # 安装启动, 不附着日志
+    .\build-client.ps1 dev -Device 449c98301422   # 多设备并存时显式指定真机
     .\build-client.ps1 log              # 仅看 App 日志
     .\build-client.ps1 build            # 仅构建 Debug APK
     .\build-client.ps1 test             # 单元测试
@@ -39,6 +40,10 @@ param(
         'apk'
     )]
     [string] $Command = 'menu',
+
+    # 显式指定部署目标序列号 (adb devices 中的 serial)。多设备并存
+    # (真机+模拟器/多开) 时优先于自动选择; 单设备可省略 (自动优先真机)。
+    [string] $Device = '',
 
     # 部署后不附着 logcat
     [switch] $NoLog
@@ -350,7 +355,10 @@ function Write-Header {
     $online = Get-ConnectedDevice
     if ($online) {
         $kind = if ($online -match '^emulator-|^127\.0\.0\.1:') { '模拟器' } else { '实体设备' }
-        Write-Host (" 当前设备: {0} ({1})" -f $online, $kind) -ForegroundColor Green
+        $model = ((& $Adb -s $online shell getprop ro.product.model 2>$null) -join '').Trim()
+        $rel = ((& $Adb -s $online shell getprop ro.build.version.release 2>$null) -join '').Trim()
+        $label = if ($model) { "$model (Android $rel)" } else { '' }
+        Write-Host (" 当前设备: {0} ({1}) {2}" -f $online, $kind, $label) -ForegroundColor Green
     }
     else {
         $avdCount = @(Get-AvdList).Count
@@ -643,6 +651,15 @@ function Select-Device {
 function Ensure-Device {
     param([switch] $AutoStartAvd)
 
+    # 显式指定优先: -Device 序列号必须真实在线 (授权缺失/离线直接报错, 不静默换机)
+    if ($Device) {
+        $serials = @(Get-AdbDeviceSerials)
+        if ($serials -contains $Device) { return $Device }
+        Write-Host "指定的设备 '$Device' 不在 adb devices 在线列表中 (可能未授权/离线):" -ForegroundColor Red
+        & $Adb devices | Write-Host
+        return $null
+    }
+
     if (-not $AutoStartAvd) { return Select-Device }
 
     $device = Get-ConnectedDevice
@@ -705,6 +722,10 @@ function Install-DebugApp {
                 return $true
             }
             Write-Host 'Gradle 报告成功但设备上未发现该包 (模拟器可能刚开机, PMS 未就绪)。' -ForegroundColor Yellow
+        }
+        elseif ($Device -notmatch '^emulator-|^127\.0\.0\.1:') {
+            Write-Host '真机安装失败 (如 INSTALL_FAILED_USER_RESTRICTED): 请看手机屏幕是否弹「USB 安装」确认框, 点允许;' -ForegroundColor Yellow
+            Write-Host '或 MIUI 开发者选项里开启「USB 安装」后重试。' -ForegroundColor Yellow
         }
         if ($attempt -lt $MaxAttempts) {
             Write-Host '10 秒后重试 ...' -ForegroundColor DarkGray
@@ -1061,6 +1082,18 @@ function Do-AdvisorRecord {
 
 # ======================== 工作流 ========================
 
+# 国产 ROM 额外权限提醒: 自启动/后台弹出/锁屏显示等 adb 授不了,
+# 必须用户在系统设置手动开启 (见 AGENTS.md §6.1 KeepAliveUtils 口径)。
+function Show-VendorPermissionHint {
+    param([Parameter(Mandatory = $true)][string] $Device)
+    $miui = ((& $Adb -s $Device shell getprop ro.miui.ui.version.name 2>$null) -join '').Trim()
+    if ($miui) {
+        Write-Host "检测到 MIUI ($miui): 以下权限 adb 无法授予, 请在 设置→应用设置→BetterAIChat2 手动开启:" -ForegroundColor Yellow
+        Write-Host '  · 自启动  · 后台弹出界面  · 锁屏显示  · 显示悬浮窗  · 省电策略=无限制' -ForegroundColor Yellow
+        Write-Host '  (老参谋保活与投影恢复依赖这些; 不开也能用, 但后台可能被杀)' -ForegroundColor DarkGray
+    }
+}
+
 # 一键运行 (等价 Android Studio Run): 增量编译安装(带校验/重试) -> 授权 -> 启动 -> (可选)日志
 # DeepSeek 开发密钥由 DevAgentSeeder 在 App 首启自动预置, 脚本不介入 App 内配置。
 function Invoke-RunWorkflow {
@@ -1078,6 +1111,7 @@ function Invoke-RunWorkflow {
     Start-App $Device
     Write-Host "$AppId 已安装并启动。" -ForegroundColor Green
     Write-Host 'DeepSeek 开发密钥已在 App 首启自动预置 (debug 构建); 其他 Agent 可在 App 内配置。' -ForegroundColor DarkGray
+    Show-VendorPermissionHint -Device $Device
 
     if ($AttachLog) { Invoke-AppLogcat -Device $Device }
     return $true
