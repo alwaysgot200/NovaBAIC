@@ -19,7 +19,6 @@
 
 package com.verlintas.baic2.device.impl.di
 
-import com.verlintas.baic2.device.api.AccessibilityBridge
 import com.verlintas.baic2.device.api.ReminderScheduler
 import com.verlintas.baic2.device.api.OcrProvider
 import com.verlintas.baic2.device.api.PdfTextExtractor
@@ -31,9 +30,9 @@ import com.verlintas.baic2.device.api.SpeechInputBridge
 import com.verlintas.baic2.device.api.SpeechOutput
 import com.verlintas.baic2.device.impl.AndroidPdfTextExtractor
 import com.verlintas.baic2.device.impl.AndroidSpeechOutput
-import com.verlintas.baic2.device.impl.a11y.AndroidAccessibilityBridge
 import com.verlintas.baic2.device.impl.ocr.MlKitOcrProvider
 import com.verlintas.baic2.device.impl.projection.AndroidScreenshotProvider
+import com.verlintas.baic2.device.impl.projection.PreferA11yScreenshotProvider
 import com.verlintas.baic2.device.impl.recorder.AndroidScreenRecorder
 import com.verlintas.baic2.device.impl.speech.AndroidSpeechInput
 import com.verlintas.baic2.device.impl.reminder.AndroidReminderScheduler
@@ -53,9 +52,10 @@ abstract class DeviceImplModule {
     @Singleton
     abstract fun bindSpeechOutput(impl: AndroidSpeechOutput): SpeechOutput
 
+    // F4（RPA §5）：截图阶梯 = a11y 免授权截图优先（API 30+），失败/低版本落投影
     @Binds
     @Singleton
-    abstract fun bindScreenshotProvider(impl: AndroidScreenshotProvider): ScreenshotProvider
+    abstract fun bindScreenshotProvider(impl: PreferA11yScreenshotProvider): ScreenshotProvider
 
     @Binds
     @Singleton
@@ -77,9 +77,8 @@ abstract class DeviceImplModule {
     @Singleton
     abstract fun bindSpeechInput(impl: AndroidSpeechInput): SpeechInputBridge
 
-    @Binds
-    @Singleton
-    abstract fun bindAccessibilityBridge(impl: AndroidAccessibilityBridge): AccessibilityBridge
+    // AccessibilityBridge 绑定已迁至 app 层 AssistsBridgeModule（R1 §17.1：
+    // AssistsA11yBridge 位于 app/floatball/auto，device/impl 不依赖 app 模块）
 
     @Binds
     @Singleton
