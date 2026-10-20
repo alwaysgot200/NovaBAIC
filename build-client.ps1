@@ -974,16 +974,29 @@ function Wait-A11yBound {
     return $false
 }
 
-# 自动完成系统的「共享屏幕」投影授权框 (下拉选整个屏幕 -> 下一步)。
+# 自动完成系统的「共享屏幕」投影授权框 (Android 16: 下一步 -> 选前台应用卡)。
 function Complete-ProjectionConsent {
     param([Parameter(Mandatory = $true)][string] $Device)
 
-    & $Adb -s $Device shell input tap 360 580
-    Start-Sleep -Milliseconds 800
-    & $Adb -s $Device shell input tap 237 730
-    Start-Sleep -Milliseconds 800
-    & $Adb -s $Device shell input tap 563 974
-    Start-Sleep -Seconds 2
+    # Android 16 (API 36) 模拟器实测流程: 授权框(默认「共享一个应用」) →
+    # 「下一步」(右下, ~563,962) → 应用选择器(两个预览卡, 左卡=当前前台应用,
+    # ~160,537) → 点左卡即开始投影。旧版 (API 33-35) 的「下拉选整个屏幕」
+    # 流程已不存在; 若在旧设备上跑冒烟, 仍回退旧坐标。
+    $sdk = ((& $Adb -s $Device shell getprop ro.build.version.sdk 2>$null) -join '').Trim()
+    if ($sdk -ge '36') {
+        & $Adb -s $Device shell input tap 563 962
+        Start-Sleep -Milliseconds 1200
+        & $Adb -s $Device shell input tap 160 537
+        Start-Sleep -Seconds 2
+    }
+    else {
+        & $Adb -s $Device shell input tap 360 580
+        Start-Sleep -Milliseconds 800
+        & $Adb -s $Device shell input tap 237 730
+        Start-Sleep -Milliseconds 800
+        & $Adb -s $Device shell input tap 563 974
+        Start-Sleep -Seconds 2
+    }
 }
 
 # 老参谋冒烟: 冷启动 -> 授权 -> 等悬浮球 -> 单击验证扇形菜单 -> 收起 ->
@@ -1023,9 +1036,10 @@ function Do-AdvisorSmoke {
     else {
         Write-Host '警告: 单击后未见扇形菜单窗口 (继续长按流程)。' -ForegroundColor Yellow
     }
-    # 再点球心(扇形顶点空白区=窗口空白)收起菜单, 等收回动画走完。
+    # 再点球心(扇形顶点空白区=窗口空白)收起菜单, 等收回动画走完并留出
+    # 冷启动下 a11y 绑定预热时间(过短的长按会因感知链未就绪而空转)。
     & $Adb -s $Device shell input tap $ball.X $ball.Y
-    Start-Sleep -Seconds 1
+    Start-Sleep -Seconds 2
 
     # 2) 长按 = 单次参谋。adb 注入模拟不了真双击, 长按用原位 swipe 持按 600ms。
     Write-Host ("长按 ({0},{1}) 600ms 触发屏幕问答 ..." -f $ball.X, $ball.Y) -ForegroundColor Cyan
@@ -1428,7 +1442,10 @@ function Invoke-CommandLine {
 
     # 以下命令需要设备
     $needsDevice = @('dev', 'deploy', 'quick', 'log', 'reverse', 'stop', 'clear-data', 'grant', 'smoke', 'record', 'record-stop', 'start-emu')
-    $device = $null
+    # 注意: $device 与脚本参数 $Device 是同一变量 (PowerShell 变量名不分大小写)。
+    # 不能在这里先赋 $null —— 会把用户显式传入的 -Device 序列号抹掉, 导致
+    # Ensure-Device 永远走自动选择 (多设备时静默切到真机)。未指定 -Device 时
+    # 其值本就是 '', 无需清空。
     if ($needsDevice -contains $Command) {
         $device = Ensure-Device -AutoStartAvd
         if (-not $device) { exit 1 }
