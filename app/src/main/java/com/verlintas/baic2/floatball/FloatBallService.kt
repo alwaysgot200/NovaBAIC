@@ -923,6 +923,8 @@ class FloatBallService : Service() {
         excludeSystemGestures(panel.handle)
 
         // 正文区挂载轻量转录视图：与主界面同一个「老参谋」会话的数据流。
+        // （WebView 替换方案已验证放弃：overlay 窗口内 Chromium 长按选择
+        // 完全不生效——连过渡高亮都没有；整段复制走气泡底部复制图标。）
         val transcript = TranscriptView(this)
         transcriptView = transcript
         // P3 §九：行内「✓采纳 / 长按三档重写 / 记错了」接线（复制已在视图内完成）。

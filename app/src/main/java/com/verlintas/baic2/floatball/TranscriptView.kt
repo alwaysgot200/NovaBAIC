@@ -31,9 +31,11 @@ import android.text.TextUtils
 import android.text.method.LinkMovementMethod
 import android.text.style.ClickableSpan
 import android.text.style.ForegroundColorSpan
+import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -104,7 +106,7 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         }
         // 移除已消失的消息（清空会话）。
         val ids = visible.mapTo(HashSet()) { it.id }
-        bubbles.keys.filterNot { it == STATUS_KEY || ids.contains(it) }.toList().forEach { stale ->
+        bubbles.keys.filterNot { it == STATUS_KEY || it == USAGE_KEY || ids.contains(it) }.toList().forEach { stale ->
             bubbles.remove(stale)?.let { list.removeView(it.container) }
         }
         visible.forEach { message -> upsertBubble(message) }
@@ -126,6 +128,7 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         }
         renderStreaming(state.streaming)
         renderStatus(state)
+        renderUsage(state, lastAssistantId?.let { bubbles[it] }?.container)
         // 仅当原本就贴近底部时跟随流式滚动；用户翻阅历史时不打扰。
         scroll.post {
             val child = scroll.getChildAt(0)
@@ -293,7 +296,38 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
             }
         }
         basis.takeIf { it.isNotEmpty() }?.let { box.addView(buildBasisFooter(box, it)) }
+        box.addView(buildCopyFooter(message))
     }
+
+    /**
+     * 回复底部复制图标：一键复制该回复全文（overlay 窗口挂不上系统选择手柄
+     * 与复制菜单——Chromium/Editor 均验证失败，此为整段复制的出口）。
+     * 点按后图标闪 ✓ 1.2s 作反馈——Toast 会被面板自身遮挡（overlay 层级
+     * 高于 TYPE_TOAST），图标态变化是唯一可靠的可见反馈。
+     */
+    private fun buildCopyFooter(message: ChatMessage): View =
+        ImageView(context).apply {
+            setImageResource(R.drawable.fb_ic_copy)
+            contentDescription = context.getString(R.string.float_copy_desc)
+            alpha = 0.75f
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(0x22FFFFFF)
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = dp(4)
+                gravity = Gravity.END
+            }
+            setOnClickListener {
+                copyReply(message.content)
+                setImageResource(R.drawable.fb_ic_check)
+                postDelayed({ setImageResource(R.drawable.fb_ic_copy) }, 1200L)
+            }
+        }
 
     /** 单条编号建议：正文 + 行尾采纳/已采纳；长按弹三档纠偏条。 */
     private fun buildSuggestionView(
@@ -575,11 +609,61 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         holder.text.text = text
     }
 
+    /**
+     * 回合 token 用量小字（UiState.lastUsage）：流式结束且模型上报过用量时，
+     * 在最新回复下方渲染一行极简「↑输入 ↓输出」；新回合开始 lastUsage 清空
+     * 即自动摘除。锚定到最后一个参谋气泡之后（而非列表尾——新回合的用户
+     * 消息先落时用量行不至于排到它下面）。
+     */
+    private fun renderUsage(state: ScreenAdvisor.UiState, anchor: View?) {
+        val usage = state.lastUsage
+        if (usage == null || state.streaming != null) {
+            bubbles.remove(USAGE_KEY)?.let { list.removeView(it.container) }
+            return
+        }
+        val holder = bubbles[USAGE_KEY] ?: run {
+            val created = TextView(context).apply {
+                setTextColor(USAGE_COLOR)
+                textSize = 11f
+                setPadding(dp(10), 0, dp(10), dp(2))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { setMargins(dp(8), 0, dp(8), 0) }
+            }
+            bubbles[USAGE_KEY] = Bubble(created, created)
+            bubbles[USAGE_KEY]!!
+        }
+        list.removeView(holder.container)
+        if (anchor != null && anchor.parent === list) {
+            list.addView(holder.container, list.indexOfChild(anchor) + 1)
+        } else {
+            list.addView(holder.container)
+        }
+        holder.text.text = "↑" + compactTokens(usage.input) + "  ↓" + compactTokens(usage.output)
+    }
+
+    private fun compactTokens(n: Long): String = when {
+        n < 1_000 -> n.toString()
+        n < 1_000_000 -> {
+            val k = n / 1_000
+            val rem = (n % 1_000) / 100
+            if (rem == 0L) "${k}k" else "${k}.${rem}k"
+        }
+        else -> "${n / 1_000_000}M"
+    }
+
     private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
 
     private companion object {
         /** 状态行的伪 id（真实消息 id 是数据库自增正数）。 */
         const val STATUS_KEY = -1L
+
+        /** token 用量小字行的伪 id。 */
+        const val USAGE_KEY = -2L
+
+        /** 用量小字用色（弱于状态行，纯辅助信息）。 */
+        val USAGE_COLOR = 0x59FFFFFF.toInt()
 
         /** P3 §九：行内交互的视图 tag 与配色。 */
         const val TAG_CORRECTION_BAR = "p3_correction_bar"
