@@ -33,8 +33,10 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -78,6 +80,10 @@ import com.verlintas.baic2.floatball.advisor.data.CARD_CONFIRMED
 import com.verlintas.baic2.floatball.advisor.data.CARD_DRAFT
 import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime
+import com.verlintas.baic2.floatball.auto.InjectorSelector
+import com.verlintas.baic2.floatball.auto.ReadinessGate
+import com.verlintas.baic2.floatball.auto.ReadinessReport
+import com.ven.assists.mp.MPManager
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -119,6 +125,10 @@ class FloatSettingsActivity : ComponentActivity() {
     @Inject
     lateinit var contactRepository: ContactRepository
 
+    /** R1 模式 B 就绪校验门（§20.1 八项探针，执行通道选择时触发）。 */
+    @Inject
+    lateinit var readinessGate: com.verlintas.baic2.floatball.auto.ReadinessGate
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -156,6 +166,7 @@ class FloatSettingsActivity : ComponentActivity() {
                     strategyCards = strategyCards,
                     proactiveCheckpoint = proactiveCheckpoint,
                     contactRepository = contactRepository,
+                    readinessGate = readinessGate,
                     onClose = { finish() },
                 )
             }
@@ -172,6 +183,7 @@ private fun AdvisorSettingsScreen(
     strategyCards: StrategyCardRepository,
     proactiveCheckpoint: com.verlintas.baic2.floatball.director.ProactiveCheckpoint,
     contactRepository: ContactRepository,
+    readinessGate: ReadinessGate,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
@@ -446,6 +458,12 @@ private fun AdvisorSettingsScreen(
                     settings = settings,
                     prefs = prefs,
                     contactRepository = contactRepository,
+                )
+                // R1 §17.2/§20：三模执行通道选择 + 模式 B 八项就绪门红绿表。
+                AutoExecutorSection(
+                    settings = settings,
+                    prefs = prefs,
+                    readinessGate = readinessGate,
                 )
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -896,6 +914,171 @@ private fun AutoAdvisorSection(
         )
     }
 }
+
+/**
+ * R1 三模执行通道选择（§17.2：配置 > A > B > C）+ 模式 B 八项就绪门红绿表
+ * （§20.1，全绿才放行）。选 Shizuku 时先跑就绪探针：全绿才切通道，有红项则
+ * 保持原通道并逐一展示缺项与下一步操作（红行可点击的项给直达入口）。
+ */
+@Composable
+private fun AutoExecutorSection(
+    settings: AdvisorPrefs.Settings,
+    prefs: AdvisorPrefs,
+    readinessGate: ReadinessGate,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    SectionLabel(stringResource(R.string.float_settings_executor_section))
+    Text(
+        text = stringResource(R.string.float_settings_executor_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = scheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<ReadinessReport?>(null) }
+    fun runCheck() {
+        checking = true
+        scope.launch {
+            report = readinessGate.check(settings.autoWhitelistIds)
+            checking = false
+            if (report?.allGreen == true) {
+                prefs.setAutoExecutorChannel(InjectorSelector.CONFIG_SHIZUKU)
+            }
+        }
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = settings.autoExecutorChannel == InjectorSelector.CONFIG_AUTO,
+            onClick = { prefs.setAutoExecutorChannel(InjectorSelector.CONFIG_AUTO) },
+            label = { Text(stringResource(R.string.float_settings_executor_auto)) },
+        )
+        FilterChip(
+            selected = settings.autoExecutorChannel == InjectorSelector.CONFIG_A11Y,
+            onClick = { prefs.setAutoExecutorChannel(InjectorSelector.CONFIG_A11Y) },
+            label = { Text(stringResource(R.string.float_settings_executor_a11y)) },
+        )
+        FilterChip(
+            selected = settings.autoExecutorChannel == InjectorSelector.CONFIG_SHIZUKU,
+            onClick = { runCheck() },
+            label = { Text(stringResource(R.string.float_settings_executor_shizuku)) },
+        )
+    }
+
+    if (checking) {
+        Text(
+            text = stringResource(R.string.float_settings_readiness_checking),
+            style = MaterialTheme.typography.bodySmall,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+    report?.let { r ->
+        if (!r.allGreen) {
+            Text(
+                text = stringResource(R.string.float_settings_readiness_blocked),
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.error,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = scheme.surfaceContainer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                r.items.forEach { item ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                    ) {
+                        Text(
+                            text = if (item.ok) "✓" else "×",
+                            color = if (item.ok) scheme.primary else scheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = readinessLabel(item.id),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 10.dp),
+                        )
+                        if (!item.ok) {
+                            Text(
+                                text = readinessFixHint(item.id),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.primary,
+                                modifier = Modifier.clickable {
+                                    when (item.id) {
+                                        ReadinessGate.ID_SHIZUKU -> readinessGate.requestShizukuPermission()
+                                        ReadinessGate.ID_PROJECTION -> scope.launch {
+                                            runCatching { MPManager.request(autoAllow = false) }
+                                        }
+                                        ReadinessGate.ID_NOTIFY -> runCatching {
+                                            context.startActivity(
+                                                Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS),
+                                            )
+                                        }
+                                    }
+                                }
+                                .padding(6.dp),
+                            )
+                        }
+                    }
+                    if (!item.ok) {
+                        Text(
+                            text = item.detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 22.dp),
+                        )
+                    }
+                }
+            }
+        }
+        TextButton(onClick = { runCheck() }, modifier = Modifier.padding(top = 4.dp)) {
+            Text(stringResource(R.string.float_settings_readiness_rerun))
+        }
+    }
+}
+
+@Composable
+private fun readinessLabel(id: String): String = stringResource(
+    when (id) {
+        ReadinessGate.ID_SHIZUKU -> R.string.float_readiness_shizuku
+        ReadinessGate.ID_PROJECTION -> R.string.float_readiness_projection
+        ReadinessGate.ID_OCR -> R.string.float_readiness_ocr
+        ReadinessGate.ID_TEMPLATES -> R.string.float_readiness_templates
+        ReadinessGate.ID_INPUT -> R.string.float_readiness_input
+        ReadinessGate.ID_WHITELIST -> R.string.float_readiness_whitelist
+        ReadinessGate.ID_NOTIFY -> R.string.float_readiness_notify
+        else -> R.string.float_readiness_quiet
+    },
+)
+
+/** 红行的下一步操作入口文案（不可直达的项提示做法，可直达的项点击即触发）。 */
+@Composable
+private fun readinessFixHint(id: String): String = stringResource(
+    when (id) {
+        ReadinessGate.ID_SHIZUKU -> R.string.float_readiness_fix_shizuku
+        ReadinessGate.ID_PROJECTION -> R.string.float_readiness_fix_projection
+        ReadinessGate.ID_OCR -> R.string.float_readiness_fix_ocr
+        ReadinessGate.ID_TEMPLATES -> R.string.float_readiness_fix_templates
+        ReadinessGate.ID_INPUT -> R.string.float_readiness_fix_input
+        ReadinessGate.ID_WHITELIST -> R.string.float_readiness_fix_whitelist
+        ReadinessGate.ID_NOTIFY -> R.string.float_readiness_fix_notify
+        else -> R.string.float_readiness_fix_quiet
+    },
+)
 
 private data class LabeledOption<T>(val value: T, val labelRes: Int)
 
