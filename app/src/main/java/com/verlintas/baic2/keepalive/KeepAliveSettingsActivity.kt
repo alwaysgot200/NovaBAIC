@@ -48,7 +48,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -81,6 +80,7 @@ import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
+import com.verlintas.baic2.floatball.AdvisorPage
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -196,219 +196,220 @@ private fun KeepAliveScreen(
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Column(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        AdvisorPage(
+            title = stringResource(R.string.float_keepalive_title),
+            onBack = onClose,
+        ) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(innerPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Column(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
                     Text(
-                        text = stringResource(R.string.float_keepalive_title),
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.weight(1f),
+                        text = stringResource(R.string.float_keepalive_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
                     )
-                    OutlinedButton(onClick = onClose) {
-                        Text(text = stringResource(R.string.float_ask_close))
-                    }
-                }
-                Text(
-                    text = stringResource(R.string.float_keepalive_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
 
-                // ---- 体检卡 ----------------------------------------------------------
-                HealthCard(
-                    checks = checks,
-                    onFixAll = {
-                        // 逐项处理：通知走内联授权，其余跳对应系统页。
-                        val pending = checks.firstOrNull { !it.ready }
-                        if (pending != null) {
-                            if (pending.key == KeepAliveUtils.KEY_NOTIFICATION &&
-                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                            ) {
-                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            } else {
-                                safeStart(pending.intent)
+                    // ---- 体检卡 ----------------------------------------------------------
+                    HealthCard(
+                        checks = checks,
+                        onFixAll = {
+                            // 逐项处理：通知走内联授权，其余跳对应系统页。
+                            val pending = checks.firstOrNull { !it.ready }
+                            if (pending != null) {
+                                if (pending.key == KeepAliveUtils.KEY_NOTIFICATION &&
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                                ) {
+                                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    safeStart(pending.intent)
+                                }
                             }
-                        }
-                    },
-                )
-                val notificationReady = checks.firstOrNull {
-                    it.key == KeepAliveUtils.KEY_NOTIFICATION
-                }?.ready ?: true
-                if (!notificationReady) {
-                    Text(
-                        text = stringResource(R.string.float_keepalive_notification_banner),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = scheme.error,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
+                        },
                     )
-                }
+                    val notificationReady = checks.firstOrNull {
+                        it.key == KeepAliveUtils.KEY_NOTIFICATION
+                    }?.ready ?: true
+                    if (!notificationReady) {
+                        Text(
+                            text = stringResource(R.string.float_keepalive_notification_banner),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.error,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                        )
+                    }
 
-                // ---- 强度三档 --------------------------------------------------------
-                SectionLabel(stringResource(R.string.float_keepalive_section_strength))
-                ModeCard(
-                    selected = config.mode == KeepAlivePrefs.Mode.LOW,
-                    title = stringResource(R.string.float_keepalive_mode_low),
-                    desc = stringResource(R.string.float_keepalive_mode_low_desc),
-                    battery = stringResource(R.string.float_keepalive_battery_low),
-                ) {
-                    prefs.setMode(KeepAlivePrefs.Mode.LOW)
-                    prefs.setSilenceMusic(false)
-                    manager.applyMode(fromForeground = true)
-                }
-                ModeCard(
-                    selected = config.mode == KeepAlivePrefs.Mode.SMART,
-                    title = stringResource(R.string.float_keepalive_mode_smart),
-                    desc = stringResource(R.string.float_keepalive_mode_smart_desc),
-                    battery = stringResource(R.string.float_keepalive_battery_mid),
-                ) {
-                    prefs.setMode(KeepAlivePrefs.Mode.SMART)
-                    prefs.setSilenceMusic(false)
-                    manager.applyMode(fromForeground = true)
-                }
-                ModeCard(
-                    selected = config.mode == KeepAlivePrefs.Mode.PERMANENT,
-                    title = stringResource(R.string.float_keepalive_mode_permanent),
-                    desc = stringResource(R.string.float_keepalive_mode_permanent_desc),
-                    battery = stringResource(R.string.float_keepalive_battery_high),
-                ) {
-                    confirmPermanent = true
-                }
-                if (!batteryWhitelisted &&
-                    (config.mode == KeepAlivePrefs.Mode.SMART ||
-                        config.mode == KeepAlivePrefs.Mode.PERMANENT)
-                ) {
-                    Text(
-                        text = stringResource(R.string.float_keepalive_whitelist_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = scheme.error,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 6.dp),
-                    )
-                }
-                if (config.mode == KeepAlivePrefs.Mode.PERMANENT) {
-                    SwitchRow(
-                        title = stringResource(R.string.float_keepalive_music_toggle),
-                        subtitle = stringResource(R.string.float_keepalive_music_media_note),
-                        checked = config.silenceMusic,
-                    ) { enabled ->
-                        prefs.setSilenceMusic(enabled)
+                    // ---- 强度三档 --------------------------------------------------------
+                    SectionLabel(stringResource(R.string.float_keepalive_section_strength))
+                    ModeCard(
+                        selected = config.mode == KeepAlivePrefs.Mode.LOW,
+                        title = stringResource(R.string.float_keepalive_mode_low),
+                        desc = stringResource(R.string.float_keepalive_mode_low_desc),
+                        battery = stringResource(R.string.float_keepalive_battery_low),
+                    ) {
+                        prefs.setMode(KeepAlivePrefs.Mode.LOW)
+                        prefs.setSilenceMusic(false)
                         manager.applyMode(fromForeground = true)
                     }
-                }
-
-                // ---- 授权引导 --------------------------------------------------------
-                SectionLabel(stringResource(R.string.float_keepalive_section_auth))
-                val bootReady = checks.firstOrNull { it.key == KeepAliveUtils.KEY_BOOT }?.ready ?: true
-                SwitchRow(
-                    title = stringResource(R.string.float_keepalive_auth_boot),
-                    subtitle = stringResource(utils.autoStartHintRes()),
-                    checked = config.bootEnabled && bootReady,
-                ) { enabled ->
-                    prefs.setBootEnabled(enabled)
-                    manager.applyMode(fromForeground = true)
-                    if (enabled) safeStart(utils.autoStartIntent())
-                }
-                AuthRow(
-                    title = stringResource(R.string.float_keepalive_auth_battery),
-                    subtitle = stringResource(R.string.float_keepalive_auth_battery_hint),
-                    ready = batteryWhitelisted,
-                ) {
-                    // 部分 ROM 屏蔽直弹授权框：失败则降级到电池优化列表页。
-                    val opened = if (batteryWhitelisted) {
-                        safeStart(utils.batteryOptimizationSettings())
-                    } else {
-                        safeStart(utils.batteryOptimizationRequest()) ||
-                            safeStart(utils.batteryOptimizationSettings())
-                    }
-                    if (!opened) refreshTick++
-                }
-                if (config.mode == KeepAlivePrefs.Mode.PERMANENT) {
-                    val exactReady = remember(refreshTick) { utils.canScheduleExactAlarms() }
-                    AuthRow(
-                        title = stringResource(R.string.float_keepalive_auth_exact_alarm),
-                        subtitle = stringResource(R.string.float_keepalive_auth_exact_alarm_hint),
-                        ready = exactReady,
+                    ModeCard(
+                        selected = config.mode == KeepAlivePrefs.Mode.SMART,
+                        title = stringResource(R.string.float_keepalive_mode_smart),
+                        desc = stringResource(R.string.float_keepalive_mode_smart_desc),
+                        battery = stringResource(R.string.float_keepalive_battery_mid),
                     ) {
-                        safeStart(utils.exactAlarmSettings())
+                        prefs.setMode(KeepAlivePrefs.Mode.SMART)
+                        prefs.setSilenceMusic(false)
+                        manager.applyMode(fromForeground = true)
                     }
-                }
-                SwitchRow(
-                    title = stringResource(R.string.float_keepalive_auth_recents),
-                    subtitle = stringResource(R.string.float_keepalive_auth_recents_hint),
-                    checked = config.excludeRecents,
-                ) { enabled ->
-                    prefs.setExcludeRecents(enabled)
-                    manager.applyRecentsExclusion(enabled)
-                }
-
-                // ---- 请求重试 --------------------------------------------------------
-                SectionLabel(stringResource(R.string.float_keepalive_section_retry))
-                RetrySlider(
-                    label = stringResource(R.string.float_keepalive_retry_times_label),
-                    value = config.retryTimes.toFloat(),
-                    valueRange = 0f..10f,
-                    steps = 9,
-                    valueText = stringResource(R.string.float_keepalive_retry_times_value, config.retryTimes),
-                ) { prefs.setRetryTimes(it.roundToInt()) }
-                RetrySlider(
-                    label = stringResource(R.string.float_keepalive_retry_delay_label),
-                    value = config.retryDelaySec.toFloat(),
-                    valueRange = 1f..60f,
-                    steps = 58,
-                    valueText = stringResource(R.string.float_keepalive_retry_seconds_value, config.retryDelaySec),
-                ) { prefs.setRetryDelaySec(it.roundToInt()) }
-                RetrySlider(
-                    label = stringResource(R.string.float_keepalive_retry_timeout_label),
-                    value = config.retryTimeoutSec.toFloat(),
-                    valueRange = 5f..120f,
-                    steps = 114,
-                    valueText = stringResource(R.string.float_keepalive_retry_seconds_value, config.retryTimeoutSec),
-                ) { prefs.setRetryTimeoutSec(it.roundToInt()) }
-                Text(
-                    text = stringResource(R.string.float_keepalive_retry_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-
-                // ---- 底部诚实说明 -----------------------------------------------------
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 20.dp),
-                    colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    ModeCard(
+                        selected = config.mode == KeepAlivePrefs.Mode.PERMANENT,
+                        title = stringResource(R.string.float_keepalive_mode_permanent),
+                        desc = stringResource(R.string.float_keepalive_mode_permanent_desc),
+                        battery = stringResource(R.string.float_keepalive_battery_high),
+                    ) {
+                        confirmPermanent = true
+                    }
+                    if (!batteryWhitelisted &&
+                        (config.mode == KeepAlivePrefs.Mode.SMART ||
+                            config.mode == KeepAlivePrefs.Mode.PERMANENT)
+                    ) {
                         Text(
-                            text = stringResource(R.string.float_keepalive_footer_force_stop),
+                            text = stringResource(R.string.float_keepalive_whitelist_warning),
                             style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = stringResource(R.string.float_keepalive_footer_vendor),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = stringResource(R.string.float_keepalive_footer_notification),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant,
+                            color = scheme.error,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 6.dp),
                         )
                     }
+                    if (config.mode == KeepAlivePrefs.Mode.PERMANENT) {
+                        SwitchRow(
+                            title = stringResource(R.string.float_keepalive_music_toggle),
+                            subtitle = stringResource(R.string.float_keepalive_music_media_note),
+                            checked = config.silenceMusic,
+                        ) { enabled ->
+                            prefs.setSilenceMusic(enabled)
+                            manager.applyMode(fromForeground = true)
+                        }
+                    }
+
+                    // ---- 授权引导 --------------------------------------------------------
+                    SectionLabel(stringResource(R.string.float_keepalive_section_auth))
+                    val bootReady = checks.firstOrNull { it.key == KeepAliveUtils.KEY_BOOT }?.ready ?: true
+                    SwitchRow(
+                        title = stringResource(R.string.float_keepalive_auth_boot),
+                        subtitle = stringResource(utils.autoStartHintRes()),
+                        checked = config.bootEnabled && bootReady,
+                    ) { enabled ->
+                        prefs.setBootEnabled(enabled)
+                        manager.applyMode(fromForeground = true)
+                        if (enabled) safeStart(utils.autoStartIntent())
+                    }
+                    AuthRow(
+                        title = stringResource(R.string.float_keepalive_auth_battery),
+                        subtitle = stringResource(R.string.float_keepalive_auth_battery_hint),
+                        ready = batteryWhitelisted,
+                    ) {
+                        // 部分 ROM 屏蔽直弹授权框：失败则降级到电池优化列表页。
+                        val opened = if (batteryWhitelisted) {
+                            safeStart(utils.batteryOptimizationSettings())
+                        } else {
+                            safeStart(utils.batteryOptimizationRequest()) ||
+                                safeStart(utils.batteryOptimizationSettings())
+                        }
+                        if (!opened) refreshTick++
+                    }
+                    if (config.mode == KeepAlivePrefs.Mode.PERMANENT) {
+                        val exactReady = remember(refreshTick) { utils.canScheduleExactAlarms() }
+                        AuthRow(
+                            title = stringResource(R.string.float_keepalive_auth_exact_alarm),
+                            subtitle = stringResource(R.string.float_keepalive_auth_exact_alarm_hint),
+                            ready = exactReady,
+                        ) {
+                            safeStart(utils.exactAlarmSettings())
+                        }
+                    }
+                    SwitchRow(
+                        title = stringResource(R.string.float_keepalive_auth_recents),
+                        subtitle = stringResource(R.string.float_keepalive_auth_recents_hint),
+                        checked = config.excludeRecents,
+                    ) { enabled ->
+                        prefs.setExcludeRecents(enabled)
+                        manager.applyRecentsExclusion(enabled)
+                    }
+
+                    // ---- 请求重试 --------------------------------------------------------
+                    SectionLabel(stringResource(R.string.float_keepalive_section_retry))
+                    RetrySlider(
+                        label = stringResource(R.string.float_keepalive_retry_times_label),
+                        value = config.retryTimes.toFloat(),
+                        valueRange = 0f..10f,
+                        steps = 9,
+                        valueText = stringResource(R.string.float_keepalive_retry_times_value, config.retryTimes),
+                    ) { prefs.setRetryTimes(it.roundToInt()) }
+                    RetrySlider(
+                        label = stringResource(R.string.float_keepalive_retry_delay_label),
+                        value = config.retryDelaySec.toFloat(),
+                        valueRange = 1f..60f,
+                        steps = 58,
+                        valueText = stringResource(R.string.float_keepalive_retry_seconds_value, config.retryDelaySec),
+                    ) { prefs.setRetryDelaySec(it.roundToInt()) }
+                    RetrySlider(
+                        label = stringResource(R.string.float_keepalive_retry_timeout_label),
+                        value = config.retryTimeoutSec.toFloat(),
+                        valueRange = 5f..120f,
+                        steps = 114,
+                        valueText = stringResource(R.string.float_keepalive_retry_seconds_value, config.retryTimeoutSec),
+                    ) { prefs.setRetryTimeoutSec(it.roundToInt()) }
+                    Text(
+                        text = stringResource(R.string.float_keepalive_retry_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+
+                    // ---- 底部诚实说明 -----------------------------------------------------
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 20.dp),
+                        colors = CardDefaults.cardColors(containerColor = scheme.surfaceContainer),
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = stringResource(R.string.float_keepalive_footer_force_stop),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = stringResource(R.string.float_keepalive_footer_vendor),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = stringResource(R.string.float_settings_keepalive_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = stringResource(R.string.float_keepalive_footer_notification),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(24.dp))
                 }
-                Spacer(Modifier.height(24.dp))
             }
         }
     }

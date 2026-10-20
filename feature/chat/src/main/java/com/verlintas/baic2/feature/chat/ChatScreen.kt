@@ -375,6 +375,18 @@ fun ChatScreen(
         }
     }
 
+    // Messages load async after composition: on entry the baseline above sees
+    // an empty list and stays 0L, so a conversation ending with an assistant
+    // reply looks like a "new reply" and the mic auto-opens (system speech
+    // prompt pops on devices whose recognizer is a web service). Re-baseline
+    // once the list first becomes non-empty; empty conversations are unaffected
+    // (a real first reply still arrives via a later list growth).
+    LaunchedEffect(handsFree, state.messages.size) {
+        if (handsFree && handsFreeHandledMessageId == 0L && state.messages.isNotEmpty()) {
+            handsFreeHandledMessageId = state.messages.lastOrNull()?.id
+        }
+    }
+
     // Hands-free loop: after every *new* assistant reply, reopen the mic and
     // auto-send what was said. Entering a conversation must not fire it, and
     // it stays quiet while a run is active or a dialog is already open.

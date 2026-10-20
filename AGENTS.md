@@ -155,6 +155,25 @@
   清理；需要长期保留的证据图也放该目录，文档引用统一写 `tests/tempImg/xxx.png`。
   `dev/` 只放可复用的开发脚本（如 mock server），不放任何二进制产物
 
+### 4.4 全屏界面一致性（铁律）
+
+「老参谋」的**所有全屏界面**（设置/画像/风格卡/策略卡/自我人设库/手册等，
+叠加小窗口如分屏浮层、扇形菜单除外）必须与主框架的界面、布局、风格保持
+一致，达到商业软件级的观感底线：
+
+1. **统一骨架**：全屏页面一律复用 `app/.../floatball/AdvisorPage.kt` 的
+   `AdvisorPage`——第一行永远是与状态栏相接的统一顶栏：**返回箭头
+   （`Icons.Outlined.ArrowBack`）+ 页面标题**（titleLarge 加粗，超长省略）。
+   顶栏避让公式必须与主界面左上角导航下拉框（Baic2App 的 `DockAnchor`）
+   同构：`windowInsetsPadding(WindowInsets.statusBars) + padding(Baic2Spacing.md)`，
+   顶栏内容紧贴系统状态栏正下方——不要用 M3 `TopAppBar`（64dp 高度会让
+   标题悬在状态栏下方过远，观感是「两张皮」）。
+   insets 由 Scaffold 统一下发（内容收 `PaddingValues` 自行消费），禁止各页
+   自绘标题行、禁止内容画进刘海/状态栏、禁止底部被导航条遮挡。
+2. **视觉对齐主框架内页**（参考 `feature/library` 的 `LibraryPageScaffold`）；
+   主题一律走 `Baic2Theme` 与 token，不硬编码颜色。
+3. 新增全屏页面从第一行代码就用该骨架，不留「回头统一」的债。
+
 ---
 
 ## 5. 代码规范

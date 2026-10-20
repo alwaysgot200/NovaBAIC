@@ -1424,30 +1424,19 @@ private fun PageScaffold(
     content: @Composable (androidx.compose.foundation.ScrollState?) -> Unit,
 ) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        AdvisorPage(
+            title = title,
+            onBack = onBack ?: onClose ?: {},
+        ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (tabBar == null) Modifier.verticalScroll(rememberScrollState()) else Modifier)
-                .padding(20.dp),
+                .padding(innerPadding)
+                .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    onBack?.let {
-                        OutlinedButton(onClick = it) {
-                            Text(stringResource(R.string.float_profile_back))
-                        }
-                    } ?: onClose?.let {
-                        OutlinedButton(onClick = it) {
-                            Text(stringResource(R.string.float_ask_close))
-                        }
-                    }
-                }
                 // 带 TabRow 时标签栏固定在顶部，仅各 Tab 内容独立滚动。
                 if (tabBar != null) {
                     tabBar()
@@ -1463,6 +1452,7 @@ private fun PageScaffold(
                     content(null)
                 }
             }
+        }
         }
     }
 }

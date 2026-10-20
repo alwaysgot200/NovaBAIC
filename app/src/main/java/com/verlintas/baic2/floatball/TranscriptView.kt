@@ -35,7 +35,6 @@ import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -51,11 +50,11 @@ import com.verlintas.baic2.floatball.advisor.strategy.ReplySuggestions
  * 服务窗口里 Compose 需要完整 SavedStateRegistry 宿主，得不偿失）。
  *
  * 自动发送的屏幕内容（带【屏幕内容】前缀）默认折叠为一行摘要，点按
- * 展开/收起——省面积；手动输入的消息恒展开。参谋回复（ASSISTANT）气泡
- * 右上角带复制按钮，复制**纯回复正文**（不带【参谋】前缀，粘进 IM 即可用）。
+ * 展开/收起——省面积；手动输入的消息恒展开。正文长按进入系统选择复制
+ * （手柄拖动调起止 +「复制/全选」工具条），与主界面聊天同构。
  * 观察 [ScreenAdvisor.transcript] 即可，无自有业务状态。
  */
-internal class TranscriptView(context: Context) : LinearLayout(context) {
+internal class TranscriptView(context: Context) : FrameLayout(context) {
 
     /**
      * 一条气泡的句柄：[container] 挂入列表，[text] 承载正文更新；
@@ -81,11 +80,11 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
     var onCorrectMemory: ((List<String>, String) -> Unit)? = null
 
     private val list = LinearLayout(context).apply {
-        orientation = VERTICAL
+        orientation = LinearLayout.VERTICAL
         setPadding(dp(4), dp(4), dp(4), dp(8))
     }
     private val scroll = ScrollView(context).apply {
-        layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, 1f)
+        layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         addView(list)
     }
 
@@ -97,7 +96,6 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
     private var streamingBubble: TextView? = null
 
     init {
-        orientation = VERTICAL
         addView(scroll)
     }
 
@@ -185,15 +183,30 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
 
     /**
      * 气泡构建：用户消息（含自动屏幕消息）是单 TextView；参谋回复是
-     * FrameLayout——正文 + 右上角复制小按钮。背景/内边距统一在容器上。
+     * FrameLayout——正文容器 + 行内建议/依据。背景/内边距统一在容器上。
      */
     private fun buildBubble(message: ChatMessage): Bubble {
         val isUser = message.role == ChatRole.USER
         val bubbleColor = if (isUser) 0x22FFFFFF.toInt() else 0x332E5FD0.toInt()
-        val body = TextView(context).apply {
+        val body = object : TextView(context) {
+            override fun onAttachedToWindow() {
+                super.onAttachedToWindow()
+                // bindAssistant 每次 removeAllViews+重挂正文，重挂后 Editor 的
+                // 选择控制器会失活——长按有焦点却无手柄/菜单（RecyclerView
+                // 同款坑，stackoverflow.com/a/38626276）：重挂瞬间 disable→
+                // enable 强制 Editor 重建选择控制器。
+                if (isTextSelectable && isEnabled) {
+                    isEnabled = false
+                    isEnabled = true
+                }
+            }
+        }.apply {
             setTextColor(Color.WHITE)
             textSize = if (isUser) 12f else 14f
             maxLines = Int.MAX_VALUE
+            // 长按走系统标准选择复制（手柄/复制菜单由系统提供，与主界面
+            // 聊天一致）；窗口可聚焦由宿主保证。
+            setTextIsSelectable(true)
         }
         if (isUser) {
             body.background = GradientDrawable().apply {
@@ -201,23 +214,23 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                 setColor(bubbleColor)
             }
             body.setPadding(dp(10), dp(8), dp(10), dp(8))
-            body.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            body.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 setMargins(dp(8), dp(6), dp(8), 0)
             }
             return Bubble(body, body)
         }
 
-        // 参谋回复：contentBox 承载正文 + 行内建议/依据，右侧给复制按钮留位。
+        // 参谋回复：contentBox 承载正文 + 行内建议/依据。
         val contentBox = LinearLayout(context).apply {
-            orientation = VERTICAL
-            setPadding(dp(10), dp(8), dp(34), dp(8))
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
         }
         val container = FrameLayout(context).apply {
             background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
                 setColor(bubbleColor)
             }
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 setMargins(dp(8), dp(6), dp(8), 0)
             }
             addView(
@@ -227,7 +240,6 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                 ),
             )
-            addView(buildCopyButton(message.content))
         }
         return Bubble(container, body, contentBox)
     }
@@ -292,8 +304,8 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
         regenUsed: Boolean,
     ): View {
         val itemBox = LinearLayout(context).apply {
-            orientation = VERTICAL
-            val lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            orientation = LinearLayout.VERTICAL
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             lp.topMargin = dp(4)
             layoutParams = lp
         }
@@ -344,9 +356,9 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
     private fun showCorrectionBar(itemBox: LinearLayout) {
         itemBox.findViewWithTag<View>(TAG_CORRECTION_BAR)?.let { itemBox.removeView(it) }
         val bar = LinearLayout(context).apply {
-            orientation = HORIZONTAL
+            orientation = LinearLayout.HORIZONTAL
             tag = TAG_CORRECTION_BAR
-            val lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             lp.topMargin = dp(4)
             layoutParams = lp
         }
@@ -365,7 +377,7 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                     cornerRadius = dp(10).toFloat()
                     setColor(0x33FFFFFF)
                 }
-                val lp = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
+                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 lp.marginEnd = dp(6)
                 layoutParams = lp
                 setOnClickListener {
@@ -409,8 +421,8 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
 
     private fun buildBasisEditor(box: LinearLayout, basis: List<String>, index: Int): View {
         val editor = LinearLayout(context).apply {
-            orientation = VERTICAL
-            val lp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            orientation = LinearLayout.VERTICAL
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             lp.topMargin = dp(2)
             layoutParams = lp
         }
@@ -439,7 +451,7 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                 box.addView(replacement)
             }
         }
-        val buttons = LinearLayout(context).apply { orientation = HORIZONTAL }
+        val buttons = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         buttons.addView(footerAction(context.getString(R.string.float_basis_correct_save)) {
             val correction = input.text.toString()
             if (correction.isBlank()) {
@@ -480,31 +492,6 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
         maxLines = Int.MAX_VALUE
     }
 
-    /** 参谋回复右上角的复制按钮：常态半透明白，按下全亮；复制纯回复正文。 */
-    private fun buildCopyButton(content: String): ImageView =
-        ImageView(context).apply {
-            setImageResource(R.drawable.fb_ic_copy)
-            alpha = 0.55f
-            contentDescription = context.getString(R.string.float_copy_desc)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-            layoutParams = FrameLayout.LayoutParams(dp(26), dp(26)).apply {
-                gravity = Gravity.TOP or Gravity.END
-                topMargin = dp(2)
-                marginEnd = dp(2)
-            }
-            setOnTouchListener { view, event ->
-                when (event.actionMasked) {
-                    android.view.MotionEvent.ACTION_DOWN -> view.alpha = 1f
-                    android.view.MotionEvent.ACTION_UP,
-                    android.view.MotionEvent.ACTION_CANCEL,
-                    -> view.alpha = 0.55f
-                }
-                false // 仍交给 click 处理
-            }
-            setOnClickListener { copyReply(content) }
-        }
-
     private fun copyReply(content: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         if (clipboard == null) return
@@ -538,7 +525,7 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                     cornerRadius = dp(12).toFloat()
                     setColor(0x332E5FD0.toInt())
                 }
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                     setMargins(dp(8), dp(6), dp(8), 0)
                 }
                 list.addView(this)
@@ -578,7 +565,7 @@ internal class TranscriptView(context: Context) : LinearLayout(context) {
                 setTextColor(0xCCFFFFFF.toInt())
                 textSize = 13f
                 setPadding(dp(10), dp(8), dp(10), dp(8))
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                     setMargins(dp(8), dp(6), dp(8), 0)
                 }
             }

@@ -19,6 +19,7 @@
 
 package com.verlintas.baic2
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
@@ -112,6 +113,7 @@ import com.verlintas.baic2.feature.library.LibraryScreen
 import com.verlintas.baic2.feature.settings.BuildInfo
 import com.verlintas.baic2.feature.settings.SettingsScreen
 import com.verlintas.baic2.feature.tasks.TasksScreen
+import com.verlintas.baic2.floatball.FloatSettingsActivity
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -139,8 +141,11 @@ fun Baic2App(
     onRunDeepLinkConsumed: () -> Unit = {},
     initialConversationId: Long? = null,
     onConversationDeepLinkConsumed: () -> Unit = {},
+    initialTab: String? = null,
+    onTabConsumed: () -> Unit = {},
 ) {
     var destination by rememberSaveable { mutableStateOf(Baic2Destination.Chats) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     var dockOpen by rememberSaveable { mutableStateOf(false) }
     var pendingConversationId by rememberSaveable { mutableStateOf<Long?>(null) }
     var pendingRetryConversationId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -170,6 +175,14 @@ fun Baic2App(
             pendingConversationId = initialConversationId
             destination = Baic2Destination.Chats
             onConversationDeepLinkConsumed()
+        }
+    }
+
+    // FloatBallService「设置」子球：直接落在主框架设置分区。
+    LaunchedEffect(initialTab) {
+        if (initialTab == TAB_SETTINGS) {
+            destination = Baic2Destination.Settings
+            onTabConsumed()
         }
     }
 
@@ -225,6 +238,11 @@ fun Baic2App(
                         buildType = BuildConfig.BUILD_TYPE,
                     ),
                     onInnerRouteChanged = { settingsInnerRoute = it },
+                    onOpenAdvisorSettings = {
+                        context.startActivity(
+                            Intent(context, FloatSettingsActivity::class.java),
+                        )
+                    },
                 )
             }
         }

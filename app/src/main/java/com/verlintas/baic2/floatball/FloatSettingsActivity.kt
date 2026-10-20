@@ -65,6 +65,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.verlintas.baic2.EXTRA_FROM_FLOAT
 import com.verlintas.baic2.R
 import com.verlintas.baic2.core.data.prefs.AppLocaleStore
 import com.verlintas.baic2.core.data.prefs.SettingsRepository
@@ -82,9 +83,13 @@ import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.launch
 
+/** 「在主界面打开」用的会话深链键（mirror MainActivity/RunService 的私有常量）。 */
+private const val EXTRA_OPEN_CONVERSATION_ID = "open_conversation_id"
+
 /**
- * 老参谋设置页（扇形菜单「设置」子球入口）。只管老参谋专属项与权限
- * 直达；主题/模型等全局设置仍在应用主设置里。实时生效，无需重启。
+ * 老参谋设置页。入口在主框架设置页的「老参谋」分区（设置入口全软件唯一）。
+ * 只管老参谋专属项与权限直达；主题/模型等全局设置仍在应用主设置里。
+ * 实时生效，无需重启。
  */
 @AndroidEntryPoint
 class FloatSettingsActivity : ComponentActivity() {
@@ -176,11 +181,16 @@ private fun AdvisorSettingsScreen(
     val scheme = MaterialTheme.colorScheme
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
+        AdvisorPage(
+            title = stringResource(R.string.float_settings_title),
+            onBack = onClose,
+        ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(20.dp),
+                .padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
@@ -188,17 +198,6 @@ private fun AdvisorSettingsScreen(
                     .widthIn(max = 560.dp)
                     .fillMaxWidth(),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = stringResource(R.string.float_settings_title),
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedButton(onClick = onClose) {
-                        Text(text = stringResource(R.string.float_ask_close))
-                    }
-                }
-
                 SectionLabel(stringResource(R.string.float_settings_continuous))
                 Text(
                     text = stringResource(R.string.float_settings_poll_hint),
@@ -564,10 +563,22 @@ private fun AdvisorSettingsScreen(
                 SectionLabel(stringResource(R.string.float_settings_session))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = {
-                        context.startActivity(
-                            Intent(context, com.verlintas.baic2.MainActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
+                        val intent = Intent(context, com.verlintas.baic2.MainActivity::class.java)
+                            // REORDER_TO_FRONT 把 task 中的主界面实例移到栈顶（设置页
+                            // 压在其下，back 可返回）；否则 NEW_TASK 只置前 task，
+                            // 栈顶仍是本页，视觉上「点了没反应」。
+                            .addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                            )
+                        // 悬浮球拉起语义：绕过 MainActivity 的冷启动自动隐藏。
+                        intent.putExtra(EXTRA_FROM_FLOAT, true)
+                        val convId = prefs.conversationId()
+                        if (convId > 0L) {
+                            intent.putExtra(EXTRA_OPEN_CONVERSATION_ID, convId)
+                        }
+                        context.startActivity(intent)
                     }) {
                         Text(text = stringResource(R.string.float_settings_open_session))
                     }
@@ -603,19 +614,11 @@ private fun AdvisorSettingsScreen(
                         )
                     }
                 }
-
-                SectionLabel(stringResource(R.string.float_about_title))
-                Text(
-                    text = stringResource(R.string.float_about_license) + "\n" +
-                        stringResource(R.string.float_settings_keepalive_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                )
             }
+        }
         }
     }
 }
-
 /** P2「我的聊天策略」：模式三档（增强档置灰）+ 默认策略卡入口与手动编译。 */
 @Composable
 private fun StrategySettingsSection(
@@ -961,34 +964,22 @@ private fun TokenUsageCard(
     androidx.compose.runtime.LaunchedEffect(Unit) {
         balance = balanceRepository.refresh()
     }
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = scheme.surfaceContainer,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 12.dp),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-            Text(
-                text = stringResource(R.string.float_settings_usage_title),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            Text(
-                text = stringResource(
-                    R.string.float_settings_usage_total,
-                    stats.totalInput,
-                    stats.totalOutput,
-                    stats.totalTurns,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = scheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            Text(
-                text = stringResource(R.string.float_settings_usage_session, stats.sessionTotal),
-                style = MaterialTheme.typography.bodySmall,
-                color = scheme.onSurfaceVariant,
-            )
+    SectionLabel(stringResource(R.string.float_settings_usage_title))
+    Text(
+        text = stringResource(
+            R.string.float_settings_usage_total,
+            stats.totalInput,
+            stats.totalOutput,
+            stats.totalTurns,
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = scheme.onSurfaceVariant,
+    )
+    Text(
+        text = stringResource(R.string.float_settings_usage_session, stats.sessionTotal),
+        style = MaterialTheme.typography.bodySmall,
+        color = scheme.onSurfaceVariant,
+    )
             val current = balance
             if (current != null && current.supported) {
                 Row(
@@ -1044,8 +1035,6 @@ private fun TokenUsageCard(
                     Text(text = stringResource(R.string.float_settings_usage_clear))
                 }
             }
-        }
-    }
 }
 
 @Composable

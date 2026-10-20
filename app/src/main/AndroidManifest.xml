@@ -125,6 +125,12 @@
             android:exported="false"
             android:label="@string/float_selfpersona_title" />
 
+        <!-- 使用帮助（扇形菜单「帮助」子球入口） -->
+        <activity
+            android:name=".floatball.AdvisorHelpActivity"
+            android:exported="false"
+            android:label="@string/float_help_title" />
+
         <!-- 老参谋保活：开机/更新自启（受保护广播，exported 必须 true） -->
         <receiver
             android:name=".keepalive.KeepAliveBootReceiver"

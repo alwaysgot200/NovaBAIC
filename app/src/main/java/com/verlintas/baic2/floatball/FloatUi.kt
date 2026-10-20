@@ -27,7 +27,9 @@ import android.text.InputType
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -36,6 +38,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.verlintas.baic2.R
+import kotlin.math.abs
 
 /**
  * 悬浮窗的全部视觉构建：悬浮球、单击扇形菜单、分屏问答面板。
@@ -220,6 +223,74 @@ internal object FloatUi {
     /** 扇形菜单的一个子球动作。 */
     class FanItem(val labelRes: Int, val action: () -> Unit)
 
+    /**
+     * 扇形菜单整体拖动回调（服务层接线）：菜单窗口展开后与主球一起移动，
+     * [onDragBy] 的位移是相对手指按下点的累计量，服务层据此平移主球窗口
+     * 并让扇形跟随（[FloatUi.FanMenu.place]）。
+     */
+    interface FanDragHandler {
+        fun onDragStart()
+        fun onDragBy(totalDx: Float, totalDy: Float)
+        fun onDragEnd()
+    }
+
+    /**
+     * 扇形菜单根容器：菜单窗口 z-order 在主球之上且矩形覆盖主球朝向侧，
+     * 若空白区域只靠 click 消费会把「按住主球拖动」的手势整个吃掉（时灵
+     * 时不灵的根源）。此处统一接管：子球上的移动超 slop 后拦截为整体拖动
+     * （子球收 CANCEL 不误触），空白处按下即进拖动判定；未发生拖动的
+     * 点按走正常 click（=点空白收起），拖过的 up 直接吞掉防止拖完收起。
+     */
+    private class FanDragLayout(context: Context) : FrameLayout(context) {
+        var handler: FanDragHandler? = null
+        private val slop = ViewConfiguration.get(context).scaledTouchSlop
+        private var downRawX = 0f
+        private var downRawY = 0f
+        private var dragging = false
+
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            if (ev.actionMasked == MotionEvent.ACTION_MOVE && !dragging) {
+                if (abs(ev.rawX - downRawX) > slop || abs(ev.rawY - downRawY) > slop) {
+                    dragging = true
+                    handler?.onDragStart()
+                }
+            }
+            return dragging
+        }
+
+        override fun onTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = ev.rawX
+                    downRawY = ev.rawY
+                    dragging = false
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    if (!dragging &&
+                        (abs(ev.rawX - downRawX) > slop || abs(ev.rawY - downRawY) > slop)
+                    ) {
+                        dragging = true
+                        handler?.onDragStart()
+                    }
+                    if (dragging) {
+                        handler?.onDragBy(ev.rawX - downRawX, ev.rawY - downRawY)
+                        return true
+                    }
+                }
+
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (dragging) {
+                        dragging = false
+                        handler?.onDragEnd()
+                        return true
+                    }
+                }
+            }
+            return super.onTouchEvent(ev)
+        }
+    }
+
     /** 扇形朝向：主球贴屏幕左缘向右展开、贴右缘向左展开（开口恒朝屏幕中央）。 */
     enum class FanFacing { RIGHT, LEFT }
 
@@ -257,7 +328,7 @@ internal object FloatUi {
         // 6 球在中轴 ±75° 内均匀分度（相邻 30°）。
         val offsets = listOf(-75.0, -45.0, -15.0, 15.0, 45.0, 75.0)
 
-        val root = FrameLayout(context).apply {
+        val root = FanDragLayout(context).apply {
             setOnClickListener { onDismiss() }
         }
 
@@ -326,6 +397,11 @@ internal object FloatUi {
             private set
         var windowY = 0
             private set
+
+        /** 接线整体拖动回调（服务层平移主球窗口+本菜单跟随）。 */
+        fun setDragHandler(handler: FanDragHandler?) {
+            (root as? FanDragLayout)?.handler = handler
+        }
 
         /**
          * 按主球当前屏坐标重算：倾角（纯水平优先、贴边保护）、窗口位置

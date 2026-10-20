@@ -50,11 +50,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -72,7 +68,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -531,9 +526,8 @@ fun AboutPage(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
-    val repoUrl = "https://github.com/Verlintas/NovaBAIC"
-    val siteUrl = "https://verlintas.github.io/NovaBAIC/"
     val tagline = stringResource(R.string.settings_about_tagline)
+    val brandName = stringResource(R.string.settings_brand_name)
     val shareChooser = stringResource(R.string.settings_about_share_chooser)
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
@@ -696,49 +690,6 @@ fun AboutPage(
             }
         }
 
-        item(key = "links") { SettingsSectionLabel(stringResource(R.string.settings_about_links)) }
-        item(key = "site") {
-            SettingsRow(
-                title = stringResource(R.string.settings_about_site),
-                summary = stringResource(R.string.settings_about_site_summary),
-                icon = Icons.Outlined.Home,
-                showChevron = true,
-                onClick = { openUrl(context, siteUrl) },
-            )
-        }
-        item(key = "repo") {
-            SettingsRow(
-                title = stringResource(R.string.settings_about_repo),
-                summary = repoUrl,
-                icon = Icons.Outlined.Star,
-                showChevron = true,
-                onClick = { openUrl(context, repoUrl) },
-            )
-        }
-        item(key = "releases") {
-            SettingsRow(
-                title = stringResource(R.string.settings_about_releases),
-                icon = Icons.Outlined.Refresh,
-                showChevron = true,
-                onClick = { openUrl(context, "$repoUrl/releases") },
-            )
-        }
-        item(key = "issues") {
-            SettingsRow(
-                title = stringResource(R.string.settings_about_issues),
-                icon = Icons.Outlined.Warning,
-                showChevron = true,
-                onClick = { openUrl(context, "$repoUrl/issues") },
-            )
-        }
-        item(key = "licenses") {
-            SettingsRow(
-                title = stringResource(R.string.settings_about_licenses),
-                icon = Icons.Outlined.Lock,
-                showChevron = true,
-                onClick = onOpenLicenses,
-            )
-        }
         item(key = "share") {
             SettingsRow(
                 title = stringResource(R.string.settings_about_share),
@@ -748,7 +699,7 @@ fun AboutPage(
                         type = "text/plain"
                         putExtra(
                             android.content.Intent.EXTRA_TEXT,
-                            "BetterAIChat2 — $tagline $siteUrl",
+                            "$brandName — $tagline",
                         )
                     }
                     runCatching {
@@ -760,78 +711,10 @@ fun AboutPage(
             )
         }
         item(key = "developer") { SettingsSectionLabel(stringResource(R.string.settings_developer_title)) }
-        item(key = "dev-card") {
-            SettingsCard {
-                Column(
-                    modifier = Modifier.padding(Baic2Spacing.lg),
-                    verticalArrangement = Arrangement.spacedBy(Baic2Spacing.md),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(52.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(
-                                            MaterialTheme.colorScheme.primary,
-                                            MaterialTheme.colorScheme.tertiary,
-                                        ),
-                                    ),
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "V",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimary,
-                            )
-                        }
-                        Spacer(Modifier.width(Baic2Spacing.md))
-                        Column {
-                            Text(
-                                text = "Verlintas",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Text(
-                                text = stringResource(R.string.settings_developer_role),
-                                style = Baic2Mono.label,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    Text(
-                        text = stringResource(R.string.settings_developer_bio),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.sm)) {
-                        DeveloperLink(stringResource(R.string.settings_developer_github)) {
-                            openUrl(context, "https://github.com/Verlintas")
-                        }
-                        DeveloperLink(stringResource(R.string.settings_about_site)) {
-                            openUrl(context, siteUrl)
-                        }
-                        DeveloperLink(stringResource(R.string.settings_developer_email)) {
-                            openUrl(context, "mailto:ulv777777@gmail.com")
-                        }
-                    }
-                }
-            }
-        }
         item(key = "dev-version") {
             SettingsRow(
                 title = stringResource(R.string.settings_developer_version),
                 summary = "${buildInfo.versionName} (${buildInfo.versionCode}) · ${buildInfo.buildType}",
-            )
-        }
-        item(key = "dev-app-id") {
-            SettingsRow(
-                title = stringResource(R.string.settings_developer_app_id),
-                summary = buildInfo.applicationId,
             )
         }
         item(key = "dev-runtime") {
@@ -861,7 +744,7 @@ fun AboutPage(
                     clipboard.setText(
                         AnnotatedString(
                             buildString {
-                                append("BetterAIChat2 diagnostics").append('\n')
+                                append("$brandName diagnostics").append('\n')
                                 append("version: ").append(buildInfo.versionName)
                                     .append(" (").append(buildInfo.versionCode).append(')')
                                     .append(' ').append(buildInfo.buildType).append('\n')
@@ -876,22 +759,6 @@ fun AboutPage(
                 },
             )
         }
-        item(key = "dev-changelog") {
-            SettingsRow(
-                title = stringResource(R.string.settings_developer_changelog),
-                summary = "github.com/Verlintas/NovaBAIC/releases",
-                showChevron = true,
-                onClick = { openUrl(context, "$repoUrl/releases") },
-            )
-        }
-        item(key = "legal") { SettingsSectionLabel(stringResource(R.string.settings_about_legal)) }
-        item(key = "license") {
-            SettingsRow(
-                title = "GPL-3.0-or-later",
-                summary = stringResource(R.string.settings_about_license_summary),
-                onClick = { openUrl(context, "$repoUrl/blob/main/LICENSE") },
-            )
-        }
         item(key = "copyright") {
             Text(
                 text = stringResource(R.string.settings_about_copyright),
@@ -903,20 +770,6 @@ fun AboutPage(
                 ),
             )
         }
-    }
-}
-
-@Composable
-private fun DeveloperLink(label: String, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    OutlinedButton(
-        onClick = onClick,
-        shape = RoundedCornerShape(10.dp),
-        contentPadding = PaddingValues(horizontal = Baic2Spacing.md, vertical = Baic2Spacing.xs),
-        interactionSource = interaction,
-        modifier = Modifier.pressScale(interaction),
-    ) {
-        Text(text = label, style = MaterialTheme.typography.labelMedium)
     }
 }
 

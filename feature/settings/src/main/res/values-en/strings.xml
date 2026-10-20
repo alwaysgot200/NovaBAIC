@@ -98,6 +98,10 @@
     <string name="settings_storage_confirm">This cannot be undone. Continue?</string>
     <string name="settings_storage_confirm_yes">Delete</string>
 
+    <string name="settings_advisor_section">Advisor</string>
+    <string name="settings_advisor_title">Advisor (floating ball)</string>
+    <string name="settings_advisor_summary">Floating ball · one-shot / continuous / auto advisor · profiles</string>
+
     <string name="settings_section_about">About</string>
     <string name="settings_about_summary">Version %1$s · licenses and updates</string>
     <string name="settings_about_links">Links</string>
@@ -113,7 +117,6 @@
     <string name="settings_licenses_hint">BetterAIChat2 is built on these open-source projects. Thanks to every author.</string>
     <string name="settings_developer_title">Developer</string>
     <string name="settings_developer_build">Build info</string>
-    <string name="settings_developer_app_id">Application ID</string>
     <string name="settings_developer_version">Version</string>
     <string name="settings_developer_role">Born 2010 | Full-stack &amp; AI Developer</string>
     <string name="settings_developer_bio">Building, breaking, learning, shipping — making anything just for fun.</string>

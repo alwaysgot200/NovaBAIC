@@ -187,29 +187,23 @@ private fun StrategyCardScreen(contactId: Long, onClose: () -> Unit) {
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        AdvisorPage(
+            title = if (isContact) {
+                stringResource(R.string.float_strategy_card_title_contact, contactName)
+            } else {
+                stringResource(R.string.float_strategy_card_title_default)
+            },
+            onBack = onClose,
+        ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(20.dp),
+                .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (isContact) {
-                            stringResource(R.string.float_strategy_card_title_contact, contactName)
-                        } else {
-                            stringResource(R.string.float_strategy_card_title_default)
-                        },
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedButton(onClick = onClose) {
-                        Text(stringResource(R.string.float_profile_back))
-                    }
-                }
-
                 val current = card
                 val edited = payload
                 if (current == null || edited == null) {
@@ -394,6 +388,7 @@ private fun StrategyCardScreen(contactId: Long, onClose: () -> Unit) {
                     }
                 }
             }
+        }
         }
     }
 }

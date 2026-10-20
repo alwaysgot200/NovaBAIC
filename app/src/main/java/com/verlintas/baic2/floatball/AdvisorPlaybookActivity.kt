@@ -151,25 +151,19 @@ private fun PlaybookScreen(onClose: () -> Unit) {
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        AdvisorPage(
+            title = stringResource(R.string.float_playbook_title),
+            onBack = onClose,
+        ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(20.dp),
+                .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = stringResource(R.string.float_playbook_title),
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedButton(onClick = onClose) {
-                        Text(stringResource(R.string.float_ask_close))
-                    }
-                }
-
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -207,6 +201,7 @@ private fun PlaybookScreen(onClose: () -> Unit) {
                     )
                 }
             }
+        }
         }
     }
 

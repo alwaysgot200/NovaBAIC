@@ -98,6 +98,10 @@
     <string name="settings_storage_confirm">此操作不可撤销，确定继续吗？</string>
     <string name="settings_storage_confirm_yes">确定清理</string>
 
+    <string name="settings_advisor_section">老参谋</string>
+    <string name="settings_advisor_title">老参谋（悬浮球参谋）</string>
+    <string name="settings_advisor_summary">悬浮球 · 单次/连续/自动参谋 · 画像与策略</string>
+
     <string name="settings_section_about">关于</string>
     <string name="settings_about_summary">版本 %1$s · 开源许可与更新</string>
     <string name="settings_about_links">链接</string>
@@ -113,7 +117,6 @@
     <string name="settings_licenses_hint">BetterAIChat2 基于以下开源项目构建，感谢所有作者。</string>
     <string name="settings_developer_title">开发者</string>
     <string name="settings_developer_build">构建信息</string>
-    <string name="settings_developer_app_id">应用 ID</string>
     <string name="settings_developer_version">版本</string>
     <string name="settings_developer_role">Born 2010 | Full-stack &amp; AI Developer</string>
     <string name="settings_developer_bio">Building, breaking, learning, shipping — making anything just for fun.</string>

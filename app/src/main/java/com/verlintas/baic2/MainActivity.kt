@@ -55,6 +55,12 @@ const val EXTRA_EXIT = "com.verlintas.baic2.extra.EXIT"
 /** FloatBallService「显示主界面」时带上：表示这次拉起来自悬浮球，不触发自动隐藏。 */
 const val EXTRA_FROM_FLOAT = "com.verlintas.baic2.extra.FROM_FLOAT"
 
+/** FloatBallService「设置」子球：打开主框架指定分区（目前仅设置页）。 */
+const val EXTRA_OPEN_TAB = "com.verlintas.baic2.extra.OPEN_TAB"
+
+/** [EXTRA_OPEN_TAB] 的取值：主框架「设置」分区。 */
+const val TAB_SETTINGS = "settings"
+
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
@@ -71,6 +77,7 @@ class MainActivity : ComponentActivity() {
 
     private val pendingRunId = androidx.compose.runtime.mutableStateOf<Long?>(null)
     private val pendingConversationId = androidx.compose.runtime.mutableStateOf<Long?>(null)
+    private val pendingTab = androidx.compose.runtime.mutableStateOf<String?>(null)
 
     // 冷启动时默认只留悬浮球：拿到悬浮窗权限后立刻退到后台。
     private var autoHideWhenReady = false
@@ -100,6 +107,11 @@ class MainActivity : ComponentActivity() {
         } else {
             null
         }
+        pendingTab.value = if (savedInstanceState == null) {
+            intent?.getStringExtra(EXTRA_OPEN_TAB)
+        } else {
+            null
+        }
         setContent {
             val themeMode by settingsRepository.themeMode
                 .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
@@ -124,6 +136,8 @@ class MainActivity : ComponentActivity() {
                         onRunDeepLinkConsumed = { pendingRunId.value = null },
                         initialConversationId = pendingConversationId.value,
                         onConversationDeepLinkConsumed = { pendingConversationId.value = null },
+                        initialTab = pendingTab.value,
+                        onTabConsumed = { pendingTab.value = null },
                     )
                 } else {
                     OverlayPermissionScreen(onGrant = { requestOverlayPermission() })
@@ -177,6 +191,7 @@ class MainActivity : ComponentActivity() {
         pendingRunId.value = intent.getLongExtra(EXTRA_OPEN_RUN_ID, -1L).takeIf { it >= 0L }
         pendingConversationId.value = intent.getLongExtra(EXTRA_OPEN_CONVERSATION_ID, -1L)
             .takeIf { it >= 0L }
+        pendingTab.value = intent.getStringExtra(EXTRA_OPEN_TAB)
     }
 
     private fun requestOverlayPermission() {

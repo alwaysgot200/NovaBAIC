@@ -91,6 +91,7 @@ fun SettingsScreen(
     buildInfo: BuildInfo,
     onInnerRouteChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onOpenAdvisorSettings: (() -> Unit)? = null,
 ) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -124,6 +125,7 @@ fun SettingsScreen(
                 onOpenLanguage = { navController.navigate(SettingsRoute.LANGUAGE) },
                 onOpenStorage = { navController.navigate(SettingsRoute.STORAGE) },
                 onOpenAbout = { navController.navigate(SettingsRoute.ABOUT) },
+                onOpenAdvisorSettings = onOpenAdvisorSettings,
             )
         }
         composable(SettingsRoute.AGENTS) {
@@ -177,6 +179,7 @@ private fun SettingsRoot(
     onOpenLanguage: () -> Unit,
     onOpenStorage: () -> Unit,
     onOpenAbout: () -> Unit,
+    onOpenAdvisorSettings: (() -> Unit)? = null,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -267,6 +270,21 @@ private fun SettingsRoot(
                 showChevron = true,
                 onClick = onOpenStorage,
             )
+        }
+
+        onOpenAdvisorSettings?.let { openAdvisor ->
+            item(key = "s-advisor") {
+                SettingsSectionLabel(stringResource(R.string.settings_advisor_section))
+            }
+            item(key = "advisor") {
+                SettingsRow(
+                    title = stringResource(R.string.settings_advisor_title),
+                    summary = stringResource(R.string.settings_advisor_summary),
+                    icon = Icons.Outlined.Build,
+                    showChevron = true,
+                    onClick = openAdvisor,
+                )
+            }
         }
 
         item(key = "s-about") { SettingsSectionLabel(stringResource(R.string.settings_section_about)) }
