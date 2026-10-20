@@ -2043,6 +2043,9 @@ class ScreenAdvisor @Inject constructor(
                                     role = ChatRole.ASSISTANT,
                                     content = outcome.partial,
                                     createdAt = System.currentTimeMillis(),
+                                    // 部分输出已实际消耗 token，逐条用量随消息落库。
+                                    usageInput = turnInput.takeIf { it > 0L },
+                                    usageOutput = turnOutput.takeIf { it > 0L },
                                 ),
                             )
                         }
