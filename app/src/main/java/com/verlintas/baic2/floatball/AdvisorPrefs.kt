@@ -20,6 +20,7 @@
 package com.verlintas.baic2.floatball
 
 import android.content.Context
+import com.verlintas.baic2.floatball.auto.InjectorSelector
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -119,6 +120,12 @@ class AdvisorPrefs @Inject constructor(
          * 新建）；调低更保守、调高更易分叉。
          */
         val reuseCliffSimilarity: Float = REUSE_CLIFF_DEFAULT,
+        /**
+         * 自动发送执行通道（R1 §17.2 三模执行面，[InjectorSelector.CONFIG_OPTIONS]）：
+         * auto=A→B→C 自动降级（默认）；a11y=强制模式 A；shizuku=强制模式 B。
+         * 显式通道不可用时不静默换道，直接降起草档。
+         */
+        val autoExecutorChannel: String = InjectorSelector.CONFIG_AUTO,
     ) {
         /** 白名单的 Long 视图（非法项静默忽略；与 [addAutoWhitelistContact] 同口径）。 */
         val autoWhitelistIds: Set<Long>
@@ -224,6 +231,8 @@ class AdvisorPrefs @Inject constructor(
                 .let { if (it in COMPANION_SEND_OPTIONS) it else DEFAULT_COMPANION_MAX_SENDS },
             reuseCliffSimilarity = prefs.getFloat(KEY_REUSE_CLIFF, REUSE_CLIFF_DEFAULT)
                 .coerceIn(0f, 1f),
+            autoExecutorChannel = prefs.getString(KEY_AUTO_EXECUTOR, InjectorSelector.CONFIG_AUTO)
+                ?.takeIf { it in InjectorSelector.CONFIG_OPTIONS } ?: InjectorSelector.CONFIG_AUTO,
         )
 
     private val _tokenStats = MutableStateFlow(loadTokenStats())
@@ -360,6 +369,14 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(companionMaxSends = value) }
     }
 
+    /** 自动发送执行通道（R1 §17.2；非法值回退 auto，下一回合派发生效）。 */
+    fun setAutoExecutorChannel(channel: String) {
+        val value = channel.takeIf { it in InjectorSelector.CONFIG_OPTIONS }
+            ?: InjectorSelector.CONFIG_AUTO
+        prefs.edit().putString(KEY_AUTO_EXECUTOR, value).apply()
+        _state.update { it.copy(autoExecutorChannel = value) }
+    }
+
     /** 记录一个主参谋回合的实际用量（模型 Usage 事件；缺测按 0 计），累计持久化。 */
     fun recordTurnUsage(inputTokens: Long, outputTokens: Long) {
         val current = _tokenStats.value
@@ -458,6 +475,7 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_AUTO_WHITELIST = "auto_whitelist_contacts"
         const val KEY_COMPANION_MAX_SENDS = "companion_max_sends"
         const val KEY_REUSE_CLIFF = "reuse_cliff_similarity"
+        const val KEY_AUTO_EXECUTOR = "auto_executor_channel"
 
         /** 断崖阈值默认值（V-B，方案 §3「默认保守」）：低于共享池续用线 0.45，日常聊天噪声不触发分叉。 */
         const val REUSE_CLIFF_DEFAULT = 0.25f

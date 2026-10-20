@@ -30,7 +30,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.verlintas.baic2.R
 import com.verlintas.baic2.device.api.AccessibilityBridge
-import com.verlintas.baic2.device.api.TextNode
 import com.verlintas.baic2.floatball.AdvisorPrefs
 import com.verlintas.baic2.floatball.FloatBallService
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
@@ -123,10 +122,13 @@ internal class AutoSendLedger(private val cap: Int = LEDGER_DEFAULT_CAP) {
 
 /**
  * 发送三步状态机（方案 §8.2：定位输入 → 注入文本 → 点击发送，每步存在性校验
- * 与一次重试）。**绝不盲点坐标**——一切触点都来自 [AccessibilityBridge.findText]
- * 的实际节点树定位或框架自身的焦点/可编辑节点定位；任何一步失败即放弃发送
- * （由调用方降级起草档），不做第二类尝试。纯编排、零 Android 依赖，
- * JVM 用 fake bridge 即可单测。
+ * 与一次重试）。**绝不盲点坐标**——一切触点都来自 [SendLocator] 定位结果；
+ * 任何一步失败即放弃发送（由调用方降级起草档），不做第二类尝试。
+ *
+ * R1 §17.2 定位/执行解耦：定位器产出坐标（模式 A=a11y 节点树
+ * [A11ySendLocator]；模式 B=录屏抽帧+OCR/找图 [OcrSendLocator]），
+ * 注入/点击由 [InputInjector] 双实现执行，三步底座两通道共用。
+ * 纯编排、零 Android 依赖，JVM 用 fake 注入器/定位器即可单测。
  */
 internal object SendSequence {
 
@@ -136,71 +138,68 @@ internal object SendSequence {
     const val REASON_SEND_NOT_FOUND = "send_button_not_found"
     const val REASON_SEND_TAP_FAILED = "send_tap_failed"
 
-    /**
-     * 发送按钮候选查询词（findText 为 text/contentDescription 包含匹配、大小写
-     * 不敏感）：中文 IM 主用「发送」，拉丁 UI 兜底 "send"（亦命中 "发送(S)" 等）。
-     */
-    private val SEND_QUERIES = listOf("发送", "send")
-
-    /** 执行完整序列：返回 null = 发送成功，否则为失败原因码。 */
-    suspend fun run(bridge: AccessibilityBridge, imPackage: String, draft: String): String? {
-        if (!bridge.connected.value) return REASON_A11Y_DISCONNECTED
+    /** 执行完整序列（解耦形态）：返回 null = 发送成功，否则为失败原因码。 */
+    suspend fun run(
+        injector: InputInjector,
+        locator: SendLocator,
+        foregroundPackage: String?,
+        imPackage: String,
+        draft: String,
+    ): String? {
+        if (!injector.available) return injector.unavailableReason
         // 前台包名校验：不在目标 IM 的会话界面绝不注入（防错发到别的 App）。
-        if (bridge.foregroundPackage() != imPackage) return REASON_WRONG_FOREGROUND
-        // 第 1 步：注入文本。typeText 由 a11y 实现定位输入焦点（缺省首个可编辑
-        // 节点）执行 ACTION_SET_TEXT；失败重试一次（界面可能尚未就绪）。
-        if (!injectWithRetry(bridge, draft)) return REASON_INPUT_FAILED
-        // 第 2 步：定位发送按钮（节点树实际存在才继续）。
-        val button = findSendWithRetry(bridge) ?: return REASON_SEND_NOT_FOUND
+        if (foregroundPackage != imPackage) return REASON_WRONG_FOREGROUND
+        // 第 1 步：注入文本（实现方自决 SET_TEXT / input text / 剪贴板+粘贴）；
+        // 失败重试一次（界面可能尚未就绪）。
+        if (!injectWithRetry(injector, draft)) return REASON_INPUT_FAILED
+        // 第 2 步：定位发送按钮（实际存在才继续）。
+        val target = locateRetry(locator) ?: return REASON_SEND_NOT_FOUND
         // 第 3 步：点击发送；点击未生效则重定位一次再点，仍失败降级。
-        if (!tap(bridge, button)) {
-            val relocated = findSend(bridge) ?: return REASON_SEND_NOT_FOUND
-            if (!tap(bridge, relocated)) {
+        if (!tap(injector, target)) {
+            val relocated = locator.locate()
+            if (relocated == null || !tap(injector, relocated)) {
                 // best effort 清空输入框残留，避免降级后人肉档面对半成品。
-                runCatching { bridge.typeText("") }
+                runCatching { injector.clearInput() }
                 return REASON_SEND_TAP_FAILED
             }
         }
         return null
     }
 
-    private suspend fun injectWithRetry(bridge: AccessibilityBridge, draft: String): Boolean {
-        if (bridge.typeText(draft).isSuccess) return true
+    /** 模式 A 便捷入口（a11y 节点定位 + a11y 执行），既有调用方与单测签名不变。 */
+    suspend fun run(bridge: AccessibilityBridge, imPackage: String, draft: String): String? = run(
+        injector = A11yInjector(bridge),
+        locator = A11ySendLocator(bridge),
+        foregroundPackage = bridge.foregroundPackage(),
+        imPackage = imPackage,
+        draft = draft,
+    )
+
+    private suspend fun injectWithRetry(injector: InputInjector, draft: String): Boolean {
+        if (injector.type(draft).isSuccess) return true
         delay(INJECT_RETRY_DELAY_MS)
-        return bridge.typeText(draft).isSuccess
+        return injector.type(draft).isSuccess
     }
 
-    private suspend fun findSendWithRetry(bridge: AccessibilityBridge): TextNode? {
-        findSend(bridge)?.let { return it }
+    private suspend fun locateRetry(locator: SendLocator): SendTarget? {
+        locator.locate()?.let { return it }
         delay(FIND_RETRY_DELAY_MS)
-        return findSend(bridge)
+        return locator.locate()
     }
 
-    /**
-     * 从节点树定位发送按钮：候选过滤掉高度/宽度异常的容器节点，取**最靠下、
-     * 其次最靠右**的一个（IM 发送按钮恒在底部输入栏右端）。
-     */
-    private fun findSend(bridge: AccessibilityBridge): TextNode? =
-        SEND_QUERIES.asSequence()
-            .flatMap { bridge.findText(it).asSequence() }
-            .filter { it.bottom - it.top <= MAX_SEND_NODE_HEIGHT }
-            .filter { it.right - it.left <= MAX_SEND_NODE_WIDTH }
-            .maxWithOrNull(compareBy({ it.bottom }, { it.right }))
-
-    private suspend fun tap(bridge: AccessibilityBridge, node: TextNode): Boolean {
+    private suspend fun tap(injector: InputInjector, target: SendTarget): Boolean {
         delay(TAP_DELAY_MS)
-        return bridge.tap(node.centerX, node.centerY).isSuccess
+        return injector.tap(target.centerX, target.centerY).isSuccess
     }
 
     private const val INJECT_RETRY_DELAY_MS = 600L
     private const val FIND_RETRY_DELAY_MS = 900L
     private const val TAP_DELAY_MS = 400L
-    private const val MAX_SEND_NODE_HEIGHT = 200
-    private const val MAX_SEND_NODE_WIDTH = 400
 }
 
 /**
- * 自动发送执行器（方案 §8.2 W5，M3-a）：编排 AccessibilityBridge 三步发送，
+ * 自动发送执行器（方案 §8.2 W5，M3-a；R1 §17.2 扩为三模执行面）：按
+ * [InjectorSelector]（配置 > A > B > C）选执行通道，编排三步发送，
  * 失败即降级 M2 起草通知（ACTION_SHOW_DRAFT 路径），绝不盲点坐标、绝不丢弃草稿。
  *
  * 职责边界：Gatekeeper 硬审在调用方（审过才调 [dispatch]）；拟人延迟/窗口上限/
@@ -211,6 +210,9 @@ internal object SendSequence {
 @Singleton
 class ActionDispatcher @Inject constructor(
     private val bridge: AccessibilityBridge,
+    private val a11yInjector: A11yInjector,
+    private val shizukuInjector: ShizukuInjector,
+    private val ocrSendLocator: OcrSendLocator,
     private val prefs: AdvisorPrefs,
     private val db: AdvisorDatabase,
     @ApplicationContext private val context: Context,
@@ -233,8 +235,31 @@ class ActionDispatcher @Inject constructor(
 
         val fingerprint = SendFingerprint.of(request.draft)
         val failure = withContext(Dispatchers.Default) {
-            runCatching { SendSequence.run(bridge, request.imPackage, request.draft) }
-                .getOrElse { REASON_DISPATCH_ERROR }
+            val channel = InjectorSelector.select(
+                configured = settings.autoExecutorChannel,
+                a11yReady = bridge.connected.value,
+                shizukuReady = shizukuInjector.available,
+            )
+            runCatching {
+                when (channel) {
+                    InjectorChannel.A11y -> SendSequence.run(
+                        injector = a11yInjector,
+                        locator = A11ySendLocator(bridge),
+                        foregroundPackage = bridge.foregroundPackage(),
+                        imPackage = request.imPackage,
+                        draft = request.draft,
+                    )
+                    InjectorChannel.Shizuku -> SendSequence.run(
+                        injector = shizukuInjector,
+                        locator = ocrSendLocator,
+                        foregroundPackage = shizukuInjector.foregroundPackage(),
+                        imPackage = request.imPackage,
+                        draft = request.draft,
+                    )
+                    // C（起草档）不算「托管」：无可用注入通道，直接挂起草通知。
+                    InjectorChannel.DraftFallback -> REASON_NO_EXECUTOR
+                }
+            }.getOrElse { REASON_DISPATCH_ERROR }
         }
         val reason = if (failure == null) "auto_sent:$fingerprint" else "$REASON_DISPATCH_FAILED:$failure:$fingerprint"
         logSend(request, reason)
@@ -346,5 +371,8 @@ class ActionDispatcher @Inject constructor(
         private const val REASON_DISPATCH_FAILED = "auto_dispatch_failed"
         private const val REASON_GATE_BLOCKED = "auto_gate_blocked"
         private const val REASON_DEGRADED = "auto_degraded"
+
+        /** 通道选择落到 C（A/B 均不可用或显式配置通道不可用）：无注入通道，挂起草。 */
+        private const val REASON_NO_EXECUTOR = "no_executor_channel"
     }
 }
