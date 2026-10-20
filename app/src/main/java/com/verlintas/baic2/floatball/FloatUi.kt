@@ -639,6 +639,7 @@ internal object FloatUi {
         }
 
         val inputBar = buildInputBar(context, inputCallbacks)
+        val pasteBar = buildPasteBar(context, inputCallbacks, (inputBar.tag as InputBarHandle).field)
         val strategyStrip = buildStrategyStrip(context)
         val draftStrip = buildDraftStrip(context, draftCallbacks)
 
@@ -660,6 +661,7 @@ internal object FloatUi {
             addView(strategyStrip.root)
             addView(transcriptContainer)
             addView(draftStrip.root)
+            addView(pasteBar)
             addView(inputBar)
         }
         return SplitPanel(
@@ -1212,6 +1214,13 @@ internal object FloatUi {
         /** 输入框焦点变化：true=获得（记录避让基准），false=失去（还原）。 */
         fun onInputFocus(focused: Boolean)
 
+        /**
+         * 输入框长按：读取剪贴板文本返回（null=不可读/为空），供粘贴条
+         * 决定按钮可用态。系统长按粘贴菜单在 overlay 窗口挂不上，由
+         * 面板内嵌「粘贴」条替代。
+         */
+        fun onInputLongPress(): String?
+
         /** 思考态查询：true=LLM 正在回答（发送键显示为停止）。 */
         fun isBusy(): Boolean
     }
@@ -1313,6 +1322,53 @@ internal object FloatUi {
             addView(sendStop)
             tag = InputBarHandle(field, ::refreshSendStop)
         }
+    }
+
+    /**
+     * 输入框长按弹出的「粘贴」条（插在代拟条与输入行之间）：overlay 窗口无
+     * Activity token，系统长按选择工具条（FloatingActionMode）挂不上而静默
+     * 失败，此处给明确的粘贴入口；剪贴板不可读/为空时按钮置灰禁用，不做
+     * 静默失败。粘贴写入光标处（有选中范围则整体替换）。
+     */
+    private fun buildPasteBar(
+        context: Context,
+        callbacks: InputBarCallbacks,
+        field: EditText,
+    ): LinearLayout {
+        val bar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(context, 12), dp(context, 2), dp(context, 12), dp(context, 2))
+            visibility = View.GONE
+        }
+        var pending: String? = null
+        val chip = TextView(context).apply {
+            text = context.getString(R.string.float_paste)
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            setPadding(dp(context, 16), dp(context, 5), dp(context, 16), dp(context, 5))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 15).toFloat()
+                setColor(DIRECTION_CHIP_ON)
+            }
+        }
+        field.setOnLongClickListener {
+            pending = callbacks.onInputLongPress()
+            chip.isEnabled = pending != null
+            chip.alpha = if (pending != null) 1f else 0.4f
+            bar.visibility = View.VISIBLE
+            true
+        }
+        chip.setOnClickListener {
+            val text = pending ?: return@setOnClickListener
+            val edit = field.text
+            val start = field.selectionStart.coerceIn(0, edit.length)
+            val end = field.selectionEnd.coerceIn(start, edit.length)
+            edit.replace(start, end, text)
+            bar.visibility = View.GONE
+        }
+        bar.addView(chip)
+        return bar
     }
 
     /** 输入行句柄：服务层刷新思考态/追加语音文本用。 */

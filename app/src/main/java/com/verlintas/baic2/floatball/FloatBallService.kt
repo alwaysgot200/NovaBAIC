@@ -1167,6 +1167,16 @@ class FloatBallService : Service() {
             setSplitImeActive(focused)
         }
 
+        override fun onInputLongPress(): String? = try {
+            getSystemService(ClipboardManager::class.java)?.primaryClip
+                ?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)?.text?.toString()
+                ?.takeIf { it.isNotBlank() }
+        } catch (error: Exception) {
+            // Android 10+ 剪贴板读取依赖窗口焦点，异常时按不可用处理（按钮置灰）。
+            null
+        }
+
         override fun onInputTouch() {
             // 窗口常驻可聚焦：直接聚焦输入框并呼出键盘（Android 12+ overlay
             // 不自动弹；立即调用会被 WindowManager 拒绝，稍候落定再显式呼出）。
