@@ -31,8 +31,13 @@ enum class DirectorTrigger { INCOMING, PROACTIVE, SCHEDULED, MANUAL }
  * 占位枚举，规则表放行前不会作为路由产出。GUIDE 已按 v2 方案 D6 移出路由
  * 表——推进意图在 T2 态势评估之后才产生，Director 前置拿不到（时序倒挂），
  * 它是既有意图系统行为，不占路由。
+ *
+ * HANDOFF（2026-10-20 接管通报方案 §5）：接管型来信——正确答案只有用户本人
+ * 持有（日程/资产/私人事实/决策），判定器为 HandoffRules+HandoffGate（调用方
+ * 判定后经 [DirectorInput.isHandoff] 传入），路由消费判定结论：本回合不自动
+ * 发送、转通报主人。
  */
-enum class DirectorRoute { REPLY, SMALL_TALK, REPLAN_HINT, ACTION_HINT, BRIEF, NOOP }
+enum class DirectorRoute { REPLY, SMALL_TALK, REPLAN_HINT, ACTION_HINT, BRIEF, NOOP, HANDOFF }
 
 /**
  * ProactivePolicy 的纯数据投影（M2-b）：路由表只吃快照，不碰 DAO/Room。
@@ -74,6 +79,12 @@ data class DirectorInput(
     val proactiveCountToday: Int = 0,
     /** M2-b：上次主动时间；从未主动过为 null（规则表必须容忍）。 */
     val lastProactiveAtMs: Long? = null,
+    /**
+     * 接管判定结论（2026-10-20 通报方案 §5）：仅对 INCOMING 生效。调用方已用
+     * HandoffRules/HandoffGate 判定本条来信需要用户本人接管；true → 路由
+     * HANDOFF（incoming_handoff），本回合转通报不自动发送。默认 false 零回归。
+     */
+    val isHandoff: Boolean = false,
 )
 
 /**
@@ -128,7 +139,12 @@ object DirectorRoutes {
      */
     fun decide(input: DirectorInput): DirectorDecision {
         val (route, reason) = when (input.trigger) {
-            DirectorTrigger.INCOMING -> DirectorRoute.REPLY to "incoming_default"
+            DirectorTrigger.INCOMING ->
+                if (input.isHandoff) {
+                    DirectorRoute.HANDOFF to "incoming_handoff"
+                } else {
+                    DirectorRoute.REPLY to "incoming_default"
+                }
             DirectorTrigger.MANUAL ->
                 if (input.requestSmalltalk) {
                     DirectorRoute.SMALL_TALK to "manual_smalltalk_entry"

@@ -117,6 +117,7 @@ class Director @Inject constructor(private val db: AdvisorDatabase) {
         DirectorRoute.ACTION_HINT -> ROUTE_ACTION_HINT
         DirectorRoute.BRIEF -> ROUTE_BRIEF
         DirectorRoute.NOOP -> ROUTE_NOOP
+        DirectorRoute.HANDOFF -> ROUTE_HANDOFF
     }
 
     private companion object {

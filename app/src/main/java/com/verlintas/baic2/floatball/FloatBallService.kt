@@ -65,6 +65,7 @@ import com.verlintas.baic2.R
 import com.verlintas.baic2.TAB_SETTINGS
 import com.verlintas.baic2.floatball.director.AdvisorNotificationListener
 import com.verlintas.baic2.floatball.auto.CompanionWindowController
+import com.verlintas.baic2.floatball.notify.EscalationNotifier
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.keepalive.KeepAliveManager
 import dagger.hilt.android.AndroidEntryPoint
@@ -358,6 +359,9 @@ class FloatBallService : Service() {
             CompanionWindowController.ACTION_RENEW_WINDOW -> onCompanionRenew(intent)
             // M2-a 起草通知点开：分屏预览代拟稿，一键发送/改后发送（§8.1 N4）。
             AdvisorNotificationListener.ACTION_SHOW_DRAFT -> handleShowDraft(intent)
+            // 接管/达成通报点开（2026-10-20 通报方案 §4.1）：分屏定位到该会话，
+            // 不带代拟条——接管场景答案必须用户亲笔，不把 AI 草稿挂一键发送。
+            EscalationNotifier.ACTION_SHOW_ESCALATION -> handleShowEscalation(intent)
         }
         // OneShot 的像素截屏期间严禁把球加回（会污染 OCR 帧），跳过兜底显示。
         val overlayIdle = ball == null && menuView == null && split == null
@@ -1375,6 +1379,21 @@ class FloatBallService : Service() {
         ensureSplit()
         draftState = DraftUi(draft, imPackage.orEmpty(), conversationId)
         split?.let { FloatUi.renderDraftStrip(it.draftStrip, editing = false, text = draft) }
+    }
+
+    /**
+     * 接管/达成通报点开（2026-10-20 通报方案 §4.1）：复用起草路径的分屏定位
+     * 与联系人会话跳转，但**不进版本草稿态**（draftState 保持 null、代拟条
+     * 隐藏）——H 场景 AI 不得代答，G 场景用户跟进方式自定。
+     */
+    private fun handleShowEscalation(intent: Intent?) {
+        val conversationId = intent?.getLongExtra(EscalationNotifier.EXTRA_CONVERSATION_ID, -1L) ?: -1L
+        val contactId = intent?.getLongExtra(EscalationNotifier.EXTRA_CONTACT_ID, -1L) ?: -1L
+        val contactName = intent?.getStringExtra(EscalationNotifier.EXTRA_CONTACT_NAME)
+        if (conversationId <= 0 || contactId <= 0 || contactName.isNullOrBlank()) return
+        screenAdvisor.showDraftConversation(conversationId, contactId, contactName)
+        ensureSplit()
+        exitDraftState()
     }
 
     /**

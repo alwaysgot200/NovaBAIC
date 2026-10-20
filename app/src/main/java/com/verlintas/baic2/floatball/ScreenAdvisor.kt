@@ -83,9 +83,14 @@ import com.verlintas.baic2.floatball.director.GateReasons
 import com.verlintas.baic2.floatball.director.GateRejection
 import com.verlintas.baic2.floatball.director.GateRules
 import com.verlintas.baic2.floatball.director.Gatekeeper
+import com.verlintas.baic2.floatball.director.GoalHitRules
+import com.verlintas.baic2.floatball.director.HandoffCategory
+import com.verlintas.baic2.floatball.director.HandoffGate
+import com.verlintas.baic2.floatball.director.HandoffRules
 import com.verlintas.baic2.floatball.director.TopicEngine
 import com.verlintas.baic2.floatball.director.TopicEngineStore
 import com.verlintas.baic2.floatball.director.WarmChatPrompt
+import com.verlintas.baic2.floatball.notify.EscalationNotifier
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -155,6 +160,8 @@ class ScreenAdvisor @Inject constructor(
     private val director: Director,
     private val topicEngineStore: TopicEngineStore,
     private val gatekeeper: Gatekeeper,
+    private val handoffGate: HandoffGate,
+    private val escalationNotifier: EscalationNotifier,
 ) {
 
     /** 面板渲染所需的一切：会话消息 + 正在流式的回答 + 阶段状态。 */
@@ -1380,6 +1387,17 @@ class ScreenAdvisor @Inject constructor(
         // M0 调度中枢旁路（方案 §5）：连续/后台回合=INCOMING，手动回合=MANUAL；
         // 「来点闲聊」入口记 SMALL_TALK（manual_smalltalk_entry，方案 §10）。
         // 未绑定联系人时 Director 内部只决策不落库。
+        //
+        // 接管/达成通报判定（2026-10-20 通报方案 §2/§3）：仅 INCOMING 回路且绑定
+        // 联系人才判——手动回合人已在场，无需通报。判定（轻 LLM ≤8s）先于路由，
+        // 结论经 DirectorInput.isHandoff 进路由表；命中即通报+挂起自动发送。
+        var isHandoff = false
+        var handoffAvoid: String? = null
+        if (!skipDirectorRoute && backgroundTurn && contact != null) {
+            val escalation = judgeEscalation(conversationId, contact)
+            isHandoff = escalation.isHandoff
+            handoffAvoid = escalation.avoidSection
+        }
         if (!skipDirectorRoute) {
             director.route(
                 DirectorInput(
@@ -1387,16 +1405,81 @@ class ScreenAdvisor @Inject constructor(
                     requestSmalltalk = smalltalk != null,
                     stageDwellDays = contact?.let { stageDwellDays(it.contactId) } ?: 0L,
                     nowMs = System.currentTimeMillis(),
+                    isHandoff = isHandoff,
                 ),
                 contactId = contact?.contactId,
                 conversationId = conversationId,
                 turnMessageId = turnMessageId,
             )
         }
+        if (isHandoff && contact != null) {
+            val outcome = lastEscalationOutcome
+            escalationNotifier.notifyHandoff(
+                contact = contact,
+                conversationId = conversationId,
+                incoming = outcome.incoming,
+                category = outcome.category ?: HandoffCategory.DECISION,
+            )
+        }
         _transcript.update { it.copy(status = Status.Thinking, lastUsage = null) }
         turnMutex.withLock {
-            runAdvisorTurn(conversationId, contact, backgroundTurn, smalltalk)
+            runAdvisorTurn(conversationId, contact, backgroundTurn, smalltalk, handoffAvoid)
         }
+    }
+
+    /** [judgeEscalation] 的最近一次产物（同协程串行复用，避免二次查询）。 */
+    private var lastEscalationOutcome = EscalationOutcome()
+
+    /** 接管通报判定的完整产物（供路由与通报两个消费点复用）。 */
+    private data class EscalationOutcome(
+        val isHandoff: Boolean = false,
+        val category: HandoffCategory? = null,
+        val incoming: String = "",
+        /** 非接管但 uncertain 时挂进 system prompt 的生成端回避约束（宽松档）。 */
+        val avoidSection: String? = null,
+    )
+
+    /**
+     * 接管/达成通报判定（2026-10-20 通报方案 §2.2/§3.1）：读最新来信 →
+     * 白名单快筛 → 强模式直判（省 LLM）→ 轻 LLM 分类兜底 → 词表合并。
+     * 旁路纪律：任何失败静默降级为不接管，绝不阻断回合。
+     */
+    private suspend fun judgeEscalation(conversationId: Long, contact: ContactRef): EscalationOutcome {
+        if (!prefs.state.value.escalationEnabled) return EscalationOutcome()
+        val question = runCatching { historyGateway.recentMessages(conversationId, 1) }
+            .getOrNull()
+            ?.lastOrNull { it.role == ChatRole.USER }
+            ?.content
+            ?: return EscalationOutcome()
+        val incoming = IncomingCue.latestIncoming(stripScreenLabel(question))
+            ?.takeIf { it.isNotBlank() }
+            ?: return EscalationOutcome()
+        // G 达成快通道（§3.1）：对方明示同意/敲定，当回合立即通报（与 H 互斥——
+        // 接管与达成同时命中时接管优先，主人在场比庆祝更重要）。
+        if (!HandoffRules.whitelistHit(incoming)) {
+            val strong = HandoffRules.strongHit(incoming)
+            val llmHandoff = strong?.let { true } ?: handoffGate.classify(incoming)
+            val judgment = HandoffRules.judge(incoming, llmHandoff)
+            if (judgment.handoff) {
+                return EscalationOutcome(
+                    isHandoff = true,
+                    category = judgment.category,
+                    incoming = incoming,
+                )
+            }
+            if (judgment.uncertain) {
+                return EscalationOutcome(
+                    incoming = incoming,
+                    avoidSection = if (prefs.state.value.escalationStrict) null else HANDOFF_AVOID_SECTION,
+                )
+            }
+            if (GoalHitRules.hit(incoming)) {
+                runCatching {
+                    escalationNotifier.notifyGoalHit(contact, conversationId, incoming)
+                }
+            }
+        }
+        return EscalationOutcome()
     }
 
     /**

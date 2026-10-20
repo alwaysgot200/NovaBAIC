@@ -487,6 +487,9 @@ const val ROUTE_ACTION_HINT = "action_hint"
 const val ROUTE_BRIEF = "brief"
 const val ROUTE_NOOP = "noop"
 
+/** 2026-10-20 接管通报方案 §5：接管型来信（答案只有用户本人持有），转通报不自动发送。 */
+const val ROUTE_HANDOFF = "handoff"
+
 /** action_plays.kind：行动建议类型（方案 §6）：约会 / 礼品 / 拜访 / 关怀 / 自定义。 */
 const val ACTION_KIND_MEETUP = "meetup"
 const val ACTION_KIND_GIFT = "gift"
