@@ -28,6 +28,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # vendor/assists 为 assists 库的 submodule 存档（fork 工作分支），
+          # 构建虽走 Maven AAR，但缺 submodule 会让 git 工作树处于脏状态。
+          submodules: true
 
       # 第一道门：标签必须形如 vXX.XX.XX，且打在 laocanmou 分支的最新提交上。
       # GitHub 的 tag 推送事件无法按分支过滤，因此在作业内显式校验，

@@ -1,0 +1,4 @@
+[submodule "vendor/assists"]
+	path = vendor/assists
+	url = https://github.com/alwaysgot200/assists.git
+	branch = nova-integration
