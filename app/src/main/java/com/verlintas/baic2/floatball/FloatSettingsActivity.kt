@@ -47,6 +47,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -464,6 +465,11 @@ private fun AdvisorSettingsScreen(
                     settings = settings,
                     prefs = prefs,
                     readinessGate = readinessGate,
+                )
+                // 2026-10-20 通报方案：H 接管/G 达成铃声通报 + SMTP 邮件配置。
+                EscalationSection(
+                    settings = settings,
+                    prefs = prefs,
                 )
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -1049,6 +1055,171 @@ private fun AutoExecutorSection(
             Text(stringResource(R.string.float_settings_readiness_rerun))
         }
     }
+}
+
+/**
+ * 接管与达成通报设置面（2026-10-20 通报方案 §十）：总闸 + uncertain 严格档 +
+ * SMTP 邮件服务器配置（邮件实发 E3 接入，本区块先落配置，默认=测试环境阿里企业邮）。
+ */
+@Composable
+private fun EscalationSection(
+    settings: AdvisorPrefs.Settings,
+    prefs: AdvisorPrefs,
+) {
+    val scheme = MaterialTheme.colorScheme
+    SectionLabel(stringResource(R.string.float_settings_escalation_section))
+    ToggleRow(
+        title = stringResource(R.string.float_settings_escalation),
+        hint = stringResource(R.string.float_settings_escalation_hint),
+        checked = settings.escalationEnabled,
+        onChange = { prefs.setEscalationEnabled(it) },
+    )
+    ToggleRow(
+        title = stringResource(R.string.float_settings_escalation_strict),
+        hint = stringResource(R.string.float_settings_escalation_strict_hint),
+        checked = settings.escalationStrict,
+        onChange = { prefs.setEscalationStrict(it) },
+    )
+    var smtpDialog by remember { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = scheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable { smtpDialog = true },
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                text = stringResource(R.string.float_settings_smtp_entry),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = settings.smtpHost + ":" + settings.smtpPort +
+                    if (settings.smtpSsl) " (SSL)" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (smtpDialog) {
+        SmtpConfigDialog(
+            settings = settings,
+            onSave = { host, port, ssl, user, password, fromName, fromEmail, timeout ->
+                prefs.setSmtpConfig(host, port, ssl, user, password, fromName, fromEmail, timeout)
+                smtpDialog = false
+            },
+            onDismiss = { smtpDialog = false },
+        )
+    }
+}
+
+/** SMTP 配置对话框：初始值取当前设置（首次打开=测试环境阿里企业邮缺省）。 */
+@Composable
+private fun SmtpConfigDialog(
+    settings: AdvisorPrefs.Settings,
+    onSave: (
+        host: String,
+        port: Int,
+        ssl: Boolean,
+        user: String,
+        password: String,
+        fromName: String,
+        fromEmail: String,
+        timeoutSec: Int,
+    ) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var host by remember { mutableStateOf(settings.smtpHost) }
+    var port by remember { mutableStateOf(settings.smtpPort.toString()) }
+    var ssl by remember { mutableStateOf(settings.smtpSsl) }
+    var user by remember { mutableStateOf(settings.smtpUser) }
+    var password by remember { mutableStateOf(settings.smtpPassword) }
+    var fromName by remember { mutableStateOf(settings.smtpFromName) }
+    var fromEmail by remember { mutableStateOf(settings.smtpFromEmail) }
+    var timeout by remember { mutableStateOf(settings.smtpTimeoutSec.toString()) }
+    val portValue = port.toIntOrNull() ?: settings.smtpPort
+    val timeoutValue = timeout.toIntOrNull() ?: settings.smtpTimeoutSec
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.float_settings_smtp_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = host,
+                    onValueChange = { host = it },
+                    label = { Text(stringResource(R.string.float_settings_smtp_host)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = port,
+                    onValueChange = { port = it },
+                    label = { Text(stringResource(R.string.float_settings_smtp_port)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = stringResource(R.string.float_settings_smtp_ssl),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(checked = ssl, onCheckedChange = { ssl = it })
+                }
+                OutlinedTextField(
+                    value = user,
+                    onValueChange = { user = it },
+                    label = { Text(stringResource(R.string.float_settings_smtp_user)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text(stringResource(R.string.float_settings_smtp_password)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = fromName,
+                    onValueChange = { fromName = it },
+                    label = { Text(stringResource(R.string.float_settings_smtp_from_name)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = fromEmail,
+                    onValueChange = { fromEmail = it },
+                    label = { Text(stringResource(R.string.float_settings_smtp_from_email)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = timeout,
+                    onValueChange = { timeout = it },
+                    label = { Text(stringResource(R.string.float_settings_smtp_timeout)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSave(host, portValue, ssl, user, password, fromName, fromEmail, timeoutValue)
+                },
+            ) { Text(stringResource(R.string.float_settings_smtp_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.float_settings_smtp_cancel))
+            }
+        },
+    )
 }
 
 @Composable

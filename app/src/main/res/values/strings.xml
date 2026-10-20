@@ -731,6 +731,31 @@
     <string name="float_settings_executor_a11y">仅无障碍</string>
     <string name="float_settings_executor_shizuku">Shizuku 免无障碍</string>
     <string name="float_settings_readiness_checking">正在逐项检测就绪状态…</string>
+    <!-- 2026-10-20 通报方案 §4：H 接管/G 达成铃声通报。 -->
+    <string name="float_escalation_channel">老参谋通报</string>
+    <string name="float_escalation_handoff_title">%1$s 需要你接管</string>
+    <string name="float_escalation_handoff_text">【%1$s】%2$s</string>
+    <string name="float_escalation_handoff_text_plain">%1$s</string>
+    <string name="float_escalation_goal_title">%1$s 传来达成信号</string>
+    <string name="float_escalation_goal_text">%1$s</string>
+    <string name="float_settings_escalation_section">接管与达成通报</string>
+    <string name="float_settings_escalation">需要接管/目标达成时通知主人</string>
+    <string name="float_settings_escalation_hint">对方提出只有你能回答的事（日程、索要物品、决策），或目标达成（约见、成交）时，铃声通知提醒你亲自处理；只通报不代答，随后自动发送暂停等你回来</string>
+    <string name="float_settings_escalation_strict">严格档（拿不准也通报）</string>
+    <string name="float_settings_escalation_strict_hint">关闭=宽松：疑似接管时照常参谋并回避私人事实；开启=宁打扰勿漏报，疑似即通报接管</string>
+    <string name="float_settings_smtp_entry">SMTP 邮件服务器配置</string>
+    <string name="float_settings_smtp_entry_hint">通报邮件的发送账号，当前默认为测试环境阿里企业邮</string>
+    <string name="float_settings_smtp_dialog_title">SMTP 邮件服务器</string>
+    <string name="float_settings_smtp_host">服务器地址</string>
+    <string name="float_settings_smtp_port">端口</string>
+    <string name="float_settings_smtp_ssl">使用 SSL</string>
+    <string name="float_settings_smtp_user">账号</string>
+    <string name="float_settings_smtp_password">密码/授权码</string>
+    <string name="float_settings_smtp_from_name">发件人名称</string>
+    <string name="float_settings_smtp_from_email">发件邮箱</string>
+    <string name="float_settings_smtp_timeout">超时（秒）</string>
+    <string name="float_settings_smtp_save">保存</string>
+    <string name="float_settings_smtp_cancel">取消</string>
     <string name="float_settings_readiness_blocked">存在缺项，已保持当前通道。处理缺项后点「重新检测」，全绿自动切换。</string>
     <string name="float_settings_readiness_rerun">重新检测</string>
     <string name="float_readiness_shizuku">Shizuku 桥就绪</string>

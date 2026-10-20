@@ -96,6 +96,22 @@ class DirectorRoutesTest {
         assertEquals("scheduled_brief", d.reason)
     }
 
+    // ── 接管通报路由（2026-10-20 通报方案 §5） ────────────────────────────
+
+    @Test
+    fun incomingHandoff_routesHandoff() {
+        val d = DirectorRoutes.decide(input(DirectorTrigger.INCOMING).copy(isHandoff = true))
+        assertEquals(DirectorRoute.HANDOFF, d.route)
+        assertEquals("incoming_handoff", d.reason)
+    }
+
+    @Test
+    fun handoffFlag_onlyAffectsIncoming() {
+        val d = DirectorRoutes.decide(input(DirectorTrigger.MANUAL).copy(isHandoff = true))
+        assertEquals(DirectorRoute.REPLY, d.route)
+        assertEquals("manual_default", d.reason)
+    }
+
     // ── replan 信号阈值边界（观察性：不改路由） ──────────────────────────
 
     @Test

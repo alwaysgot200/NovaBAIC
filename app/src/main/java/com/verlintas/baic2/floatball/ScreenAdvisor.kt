@@ -888,6 +888,11 @@ class ScreenAdvisor @Inject constructor(
     suspend fun submitTurn(content: String, backgroundTurn: Boolean = false): SubmitOutcome =
         when (val prepared = prepareTurn(content)) {
             is PreparedTurn.Ready -> {
+                // 手动回合 = 用户在分屏亲笔发言：若该联系人正因接管通报挂起
+                // 自动发送，此刻即视为接管完成，解除挂起（通报方案 §2.5）。
+                if (!backgroundTurn) {
+                    activeContact.value?.contactId?.let { escalationNotifier.releaseAwaitingHuman(it) }
+                }
                 executePrepared(
                     prepared.conversationId,
                     prepared.contact,
@@ -900,11 +905,14 @@ class ScreenAdvisor @Inject constructor(
             PreparedTurn.Empty -> SubmitOutcome.EMPTY
         }
 
-    /** 通知代拟回合结果：仅 [SubmitOutcome.RAN] 且草稿非空时监听器才发起草通知。 */
+    /** 通知代拟回合结果：仅 [SubmitOutcome.RAN] 且草稿非空时监听器才发起草通知；
+     * [handoff]=本回合命中接管通报（监听器据此抑制 AI 草稿通知——接管场景
+     * 通报已发，AI 代答稿不可挂一键发送）。 */
     data class NotificationTurnResult(
         val outcome: SubmitOutcome,
         val conversationId: Long? = null,
         val draft: String? = null,
+        val handoff: Boolean = false,
     )
 
     /**
@@ -948,7 +956,14 @@ class ScreenAdvisor @Inject constructor(
         executePrepared(conversationId, contact, backgroundTurn = true, turnMessageId = turnMessageId)
         val draft = historyGateway.recentMessages(conversationId, DRAFT_LOOKBACK_MESSAGES)
             .lastOrNull { it.role == ChatRole.ASSISTANT }?.content
-        return NotificationTurnResult(SubmitOutcome.RAN, conversationId, draft)
+        // 接管命中即挂起位已置位（executePrepared 内 notifyHandoff 同步标记）：
+        // 监听器据此抑制 AI 草稿通知，接管通报是唯一出口。
+        return NotificationTurnResult(
+            outcome = SubmitOutcome.RAN,
+            conversationId = conversationId,
+            draft = draft,
+            handoff = escalationNotifier.isAwaitingHuman(contact.contactId),
+        )
     }
 
     /**
@@ -1393,10 +1408,11 @@ class ScreenAdvisor @Inject constructor(
         // 结论经 DirectorInput.isHandoff 进路由表；命中即通报+挂起自动发送。
         var isHandoff = false
         var handoffAvoid: String? = null
+        var escalationOutcome = EscalationOutcome()
         if (!skipDirectorRoute && backgroundTurn && contact != null) {
-            val escalation = judgeEscalation(conversationId, contact)
-            isHandoff = escalation.isHandoff
-            handoffAvoid = escalation.avoidSection
+            escalationOutcome = judgeEscalation(conversationId, contact)
+            isHandoff = escalationOutcome.isHandoff
+            handoffAvoid = escalationOutcome.avoidSection
         }
         if (!skipDirectorRoute) {
             director.route(
@@ -1413,12 +1429,11 @@ class ScreenAdvisor @Inject constructor(
             )
         }
         if (isHandoff && contact != null) {
-            val outcome = lastEscalationOutcome
             escalationNotifier.notifyHandoff(
                 contact = contact,
                 conversationId = conversationId,
-                incoming = outcome.incoming,
-                category = outcome.category ?: HandoffCategory.DECISION,
+                incoming = escalationOutcome.incoming,
+                category = escalationOutcome.category,
             )
         }
         _transcript.update { it.copy(status = Status.Thinking, lastUsage = null) }
@@ -1426,9 +1441,6 @@ class ScreenAdvisor @Inject constructor(
             runAdvisorTurn(conversationId, contact, backgroundTurn, smalltalk, handoffAvoid)
         }
     }
-
-    /** [judgeEscalation] 的最近一次产物（同协程串行复用，避免二次查询）。 */
-    private var lastEscalationOutcome = EscalationOutcome()
 
     /** 接管通报判定的完整产物（供路由与通报两个消费点复用）。 */
     private data class EscalationOutcome(
@@ -1468,10 +1480,13 @@ class ScreenAdvisor @Inject constructor(
                 )
             }
             if (judgment.uncertain) {
-                return EscalationOutcome(
-                    incoming = incoming,
-                    avoidSection = if (prefs.state.value.escalationStrict) null else HANDOFF_AVOID_SECTION,
-                )
+                // 严格档：uncertain 也视同接管转通报（宁严勿松，方案 §十.1）；
+                // 宽松档（默认）：放行正常回答，仅挂生成端回避约束。
+                return if (prefs.state.value.escalationStrict) {
+                    EscalationOutcome(isHandoff = true, category = null, incoming = incoming)
+                } else {
+                    EscalationOutcome(incoming = incoming, avoidSection = HANDOFF_AVOID_SECTION)
+                }
             }
             if (GoalHitRules.hit(incoming)) {
                 runCatching {
@@ -1547,6 +1562,7 @@ class ScreenAdvisor @Inject constructor(
         contact: ContactRef?,
         tightRetry: Boolean,
         smalltalk: TopicEngine.TopicPick? = null,
+        handoffAvoidSection: String? = null,
     ) {
         val settings = prefs.state.value
         val config: ProviderConfig = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
@@ -1873,6 +1889,8 @@ class ScreenAdvisor @Inject constructor(
             PREAMBLE_SECTION,
             // M3-a：自动档激活（总闸开+联系人白名单内）时追加生成端红线段。
             autoDirectiveSection(),
+            // 接管判定 uncertain（宽松档）时的私人事实回避约束（通报方案 §2.4）。
+            handoffAvoidSection,
             styleWithLength,
             strategySection,
             // 保温闲聊段紧跟策略段（KPI 覆盖：自然度优先于任务推进，见 WarmChatPrompt）。
@@ -2927,6 +2945,17 @@ class ScreenAdvisor @Inject constructor(
         const val DIRECTION_REQUIRE =
             "本回合的建议回复必须服务于这个即时方向；若当前屏幕话题偏离，" +
                 "也要指出如何把对话自然引回该方向。"
+
+        /**
+         * 接管判定 uncertain（宽松档）时的生成端回避约束（2026-10-20 通报方案
+         * §2.4）：分类器拿不准的来信照常回答，但禁止编造只有用户本人持有的
+         * 事实，用含糊回避留待用户补充——漏报的最后防线。
+         */
+        const val HANDOFF_AVOID_SECTION =
+            "【私人事实回避】若对方在问你的日程、住址、家庭、收入、资产等只有机主本人" +
+                "才知道的信息，或要求你做机主本人的决定：不要编造任何具体事实，" +
+                "用自然含糊的话术轻轻带过（如「这个我说了不算，回头问问再说」），" +
+                "把实质回答留给机主本人；除此之外的日常话题正常聊。"
 
         /** 即时方向 AI 拟定的系统提示词：只输出编号列表。 */
         const val DIRECTION_SYSTEM =

@@ -126,6 +126,29 @@ class AdvisorPrefs @Inject constructor(
          * 显式通道不可用时不静默换道，直接降起草档。
          */
         val autoExecutorChannel: String = InjectorSelector.CONFIG_AUTO,
+        /**
+         * 接管/达成通报总闸（2026-10-20 通报方案 §十）：H 接管型与 G 达成型命中
+         * 后铃声通知主人。默认开启——通报只是旁路提醒，不改变任何发送决策。
+         */
+        val escalationEnabled: Boolean = true,
+        /**
+         * uncertain 严格档：false=宽松（放行+私人事实回避约束，默认）；
+         * true=拿不准也按接管通报（宁打扰勿漏报）。
+         */
+        val escalationStrict: Boolean = false,
+        /** 邮件通报开关（E3 接入 SMTP 实发后消费；E1 仅落设置无 UI 入口）。 */
+        val escalationMailEnabled: Boolean = false,
+        /** SMTP 主机（通报邮件通道，E3 消费；默认=测试环境阿里企业邮）。 */
+        val smtpHost: String = DEFAULT_SMTP_HOST,
+        /** SMTP 端口（SSL 通常 465）。 */
+        val smtpPort: Int = DEFAULT_SMTP_PORT,
+        val smtpSsl: Boolean = true,
+        val smtpUser: String = DEFAULT_SMTP_USER,
+        val smtpPassword: String = DEFAULT_SMTP_PASSWORD,
+        val smtpFromName: String = DEFAULT_SMTP_FROM_NAME,
+        val smtpFromEmail: String = DEFAULT_SMTP_FROM_EMAIL,
+        /** SMTP 连接/读超时（秒）。 */
+        val smtpTimeoutSec: Int = DEFAULT_SMTP_TIMEOUT_SEC,
     ) {
         /** 白名单的 Long 视图（非法项静默忽略；与 [addAutoWhitelistContact] 同口径）。 */
         val autoWhitelistIds: Set<Long>
@@ -233,6 +256,18 @@ class AdvisorPrefs @Inject constructor(
                 .coerceIn(0f, 1f),
             autoExecutorChannel = prefs.getString(KEY_AUTO_EXECUTOR, InjectorSelector.CONFIG_AUTO)
                 ?.takeIf { it in InjectorSelector.CONFIG_OPTIONS } ?: InjectorSelector.CONFIG_AUTO,
+            escalationEnabled = prefs.getBoolean(KEY_ESCALATION_ENABLED, true),
+            escalationStrict = prefs.getBoolean(KEY_ESCALATION_STRICT, false),
+            escalationMailEnabled = prefs.getBoolean(KEY_ESCALATION_MAIL, false),
+            smtpHost = prefs.getString(KEY_SMTP_HOST, DEFAULT_SMTP_HOST)
+                ?.trim()?.takeIf { it.isNotBlank() } ?: DEFAULT_SMTP_HOST,
+            smtpPort = prefs.getInt(KEY_SMTP_PORT, DEFAULT_SMTP_PORT).coerceIn(1, 65_535),
+            smtpSsl = prefs.getBoolean(KEY_SMTP_SSL, true),
+            smtpUser = prefs.getString(KEY_SMTP_USER, DEFAULT_SMTP_USER)?.trim().orEmpty(),
+            smtpPassword = prefs.getString(KEY_SMTP_PASSWORD, DEFAULT_SMTP_PASSWORD).orEmpty(),
+            smtpFromName = prefs.getString(KEY_SMTP_FROM_NAME, DEFAULT_SMTP_FROM_NAME)?.trim().orEmpty(),
+            smtpFromEmail = prefs.getString(KEY_SMTP_FROM_EMAIL, DEFAULT_SMTP_FROM_EMAIL)?.trim().orEmpty(),
+            smtpTimeoutSec = prefs.getInt(KEY_SMTP_TIMEOUT, DEFAULT_SMTP_TIMEOUT_SEC).coerceIn(5, 120),
         )
 
     private val _tokenStats = MutableStateFlow(loadTokenStats())
@@ -377,6 +412,65 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(autoExecutorChannel = value) }
     }
 
+    // ── 接管/达成通报（2026-10-20 通报方案 §十） ──
+
+    /** 通报总闸（judgeEscalation 即时读，下一封来信生效）。 */
+    fun setEscalationEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_ESCALATION_ENABLED, enabled).apply()
+        _state.update { it.copy(escalationEnabled = enabled) }
+    }
+
+    /** uncertain 严格档开关（false=宽松放行+回避约束，true=疑似即通报）。 */
+    fun setEscalationStrict(strict: Boolean) {
+        prefs.edit().putBoolean(KEY_ESCALATION_STRICT, strict).apply()
+        _state.update { it.copy(escalationStrict = strict) }
+    }
+
+    /** 邮件通报开关（E3 消费）。 */
+    fun setEscalationMailEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_ESCALATION_MAIL, enabled).apply()
+        _state.update { it.copy(escalationMailEnabled = enabled) }
+    }
+
+    /** SMTP 配置一次性保存（设置页对话框提交；主机留空回退默认）。 */
+    fun setSmtpConfig(
+        host: String,
+        port: Int,
+        ssl: Boolean,
+        user: String,
+        password: String,
+        fromName: String,
+        fromEmail: String,
+        timeoutSec: Int,
+    ) {
+        val trimmedHost = host.trim()
+        val safeHost = trimmedHost.takeIf { it.isNotBlank() } ?: DEFAULT_SMTP_HOST
+        val safePort = port.coerceIn(1, 65_535)
+        val safeTimeout = timeoutSec.coerceIn(5, 120)
+        prefs.edit()
+            .putString(KEY_SMTP_HOST, safeHost)
+            .putInt(KEY_SMTP_PORT, safePort)
+            .putBoolean(KEY_SMTP_SSL, ssl)
+            .putString(KEY_SMTP_USER, user.trim())
+            .putString(KEY_SMTP_PASSWORD, password)
+            .putString(KEY_SMTP_FROM_NAME, fromName.trim())
+            .putString(KEY_SMTP_FROM_EMAIL, fromEmail.trim())
+            .putInt(KEY_SMTP_TIMEOUT, safeTimeout)
+            .apply()
+        _state.update {
+            it.copy(
+                smtpHost = safeHost,
+                smtpPort = safePort,
+                smtpSsl = ssl,
+                smtpUser = user.trim(),
+                smtpPassword = password,
+                smtpFromName = fromName.trim(),
+                smtpFromEmail = fromEmail.trim(),
+                smtpTimeoutSec = safeTimeout,
+            )
+        }
+    }
+
     /** 记录一个主参谋回合的实际用量（模型 Usage 事件；缺测按 0 计），累计持久化。 */
     fun recordTurnUsage(inputTokens: Long, outputTokens: Long) {
         val current = _tokenStats.value
@@ -476,6 +570,26 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_COMPANION_MAX_SENDS = "companion_max_sends"
         const val KEY_REUSE_CLIFF = "reuse_cliff_similarity"
         const val KEY_AUTO_EXECUTOR = "auto_executor_channel"
+        const val KEY_ESCALATION_ENABLED = "escalation_enabled"
+        const val KEY_ESCALATION_STRICT = "escalation_strict"
+        const val KEY_ESCALATION_MAIL = "escalation_mail_enabled"
+        const val KEY_SMTP_HOST = "escalation_smtp_host"
+        const val KEY_SMTP_PORT = "escalation_smtp_port"
+        const val KEY_SMTP_SSL = "escalation_smtp_ssl"
+        const val KEY_SMTP_USER = "escalation_smtp_user"
+        const val KEY_SMTP_PASSWORD = "escalation_smtp_password"
+        const val KEY_SMTP_FROM_NAME = "escalation_smtp_from_name"
+        const val KEY_SMTP_FROM_EMAIL = "escalation_smtp_from_email"
+        const val KEY_SMTP_TIMEOUT = "escalation_smtp_timeout"
+
+        // ── 通报邮件 SMTP 缺省（测试环境：阿里企业邮，用户 2026-10-20 口径） ──
+        const val DEFAULT_SMTP_HOST = "smtp.qiye.aliyun.com"
+        const val DEFAULT_SMTP_PORT = 465
+        const val DEFAULT_SMTP_USER = "marketing@80fafa.com"
+        const val DEFAULT_SMTP_PASSWORD = "Topway#123456"
+        const val DEFAULT_SMTP_FROM_NAME = "80lili帮您理理"
+        const val DEFAULT_SMTP_FROM_EMAIL = "marketing@80fafa.com"
+        const val DEFAULT_SMTP_TIMEOUT_SEC = 30
 
         /** 断崖阈值默认值（V-B，方案 §3「默认保守」）：低于共享池续用线 0.45，日常聊天噪声不触发分叉。 */
         const val REUSE_CLIFF_DEFAULT = 0.25f
