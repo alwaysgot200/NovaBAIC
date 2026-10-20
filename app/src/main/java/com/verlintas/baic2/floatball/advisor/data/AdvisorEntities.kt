@@ -286,10 +286,9 @@ const val HORIZON_L3 = 3
 const val HORIZON_L2 = 2
 const val HORIZON_L1 = 1
 
-/** goal_decomps.kind：L3→L2 候选 / L2→路线图 / 修炼项。 */
+/** goal_decomps.kind：L3→L2 候选 / L2→路线图。 */
 const val DECOMP_OUTCOMES = "outcomes"
 const val DECOMP_ROADMAP = "roadmap"
-const val DECOMP_PRACTICES = "practices"
 
 /** 策略卡状态：草稿（待审）/ 已确认生效 / 已归档（忽略或被新版本替代）。 */
 const val CARD_DRAFT = "draft"

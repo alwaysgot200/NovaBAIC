@@ -72,9 +72,6 @@ interface ContactProfileDao {
     @Query("UPDATE contact_profiles SET deletedAt = :now, updatedAt = :now WHERE id = :id AND mergedInto IS NULL")
     suspend fun setDeleted(id: Long, now: Long)
 
-    @Query("UPDATE contact_profiles SET deletedAt = NULL, updatedAt = :now WHERE id = :id")
-    suspend fun setUndeleted(id: Long, now: Long)
-
     @Query("UPDATE contact_profiles SET mergedInto = :intoId, updatedAt = :now WHERE id = :id")
     suspend fun markMerged(id: Long, intoId: Long, now: Long)
 
@@ -192,9 +189,6 @@ interface PersonaFieldDao {
     @Query("SELECT * FROM persona_fields")
     suspend fun listAll(): List<PersonaFieldEntity>
 
-    @Query("SELECT field FROM persona_fields WHERE contactId = :contactId")
-    suspend fun fieldKeys(contactId: Long): List<String>
-
     /** 合并时给被舍弃的冲突旧值留痕（方案 §4.3 字段择优冲突）。 */
     @Query("UPDATE persona_fields SET evidence = :note, updatedAt = :now WHERE contactId = :contactId AND field = :field")
     suspend fun annotateConflict(contactId: Long, field: String, note: String, now: Long)
@@ -208,9 +202,6 @@ interface ExtractionHoldDao {
 
     @Query("SELECT untilAt FROM extraction_holds WHERE contactId = :contactId AND field = :field")
     suspend fun until(contactId: Long, field: String): Long?
-
-    @Query("DELETE FROM extraction_holds WHERE untilAt < :now")
-    suspend fun purgeExpired(now: Long)
 }
 
 @Dao
@@ -298,9 +289,6 @@ interface GroupMemberDao {
     @Query("UPDATE group_members SET linkedContactId = :linkedContactId WHERE id = :id")
     suspend fun setLink(id: Long, linkedContactId: Long?)
 
-    @Query("UPDATE group_members SET displayName = :displayName WHERE id = :id")
-    suspend fun rename(id: Long, displayName: String)
-
     @Query("DELETE FROM group_members WHERE id = :id AND groupContactId = :groupContactId")
     suspend fun delete(id: Long, groupContactId: Long)
 }
@@ -322,9 +310,6 @@ interface PlaybookDao {
 
     @Query("DELETE FROM playbooks_fts WHERE rowid IN (SELECT id FROM playbooks WHERE source = 'builtin')")
     suspend fun clearBuiltinFts()
-
-    @Query("SELECT * FROM playbooks WHERE id IN (:ids)")
-    suspend fun byIds(ids: List<Long>): List<PlaybookEntity>
 
     // 不用 rank 排序：Room 校验器不识别 FTS 虚拟列，排序统一在检索器侧做。
     @Query("SELECT rowid FROM playbooks_fts WHERE playbooks_fts MATCH :match LIMIT :limit")
@@ -359,9 +344,6 @@ interface MergeRecordDao {
 
     @Query("DELETE FROM merge_records WHERE fromContactId = :from")
     suspend fun delete(from: Long)
-
-    @Query("DELETE FROM merge_records WHERE mergedAt < :threshold")
-    suspend fun purgeOlderThan(threshold: Long)
 }
 
 // ─────────────────────────────── P2：三级目标 + 策略卡 ───────────────────────────────
@@ -375,9 +357,6 @@ interface GoalDao {
 
     @Query("SELECT * FROM goals WHERE id = :id")
     suspend fun find(id: Long): GoalEntity?
-
-    @Query("SELECT * FROM goals WHERE id = :id")
-    fun observe(id: Long): Flow<GoalEntity?>
 
     @Query("SELECT * FROM goals WHERE contactId = :contactId ORDER BY horizon DESC, priority DESC, updatedAt DESC")
     fun observeByContact(contactId: Long): Flow<List<GoalEntity>>
@@ -408,9 +387,6 @@ interface GoalDao {
     /** 采纳 provisional 行是状态转换而非新增：计数需排除被采纳的那一行本身。 */
     @Query("SELECT COUNT(*) FROM goals WHERE contactId = :contactId AND horizon = :horizon AND id != :exceptId AND status IN ('$GOAL_PROVISIONAL', '$GOAL_ACTIVE')")
     suspend fun countActiveExcept(contactId: Long, horizon: Int, exceptId: Long): Int
-
-    @Query("SELECT * FROM goals WHERE contactId = :contactId AND horizon = $HORIZON_L2 AND status = '$GOAL_PROVISIONAL' AND promptCount < 2 ORDER BY priority DESC, updatedAt DESC")
-    suspend fun listPromptableProvisionalL2(contactId: Long): List<GoalEntity>
 
     /** L1 观察期建议 7 天未确认 → 惰性归档（Repository 在 T1 取数时调用）。 */
     @Query("UPDATE goals SET status = '$GOAL_ABANDONED', updatedAt = :now WHERE contactId = :contactId AND horizon = $HORIZON_L1 AND status = '$GOAL_PROVISIONAL' AND createdAt < :threshold")
@@ -613,9 +589,6 @@ interface DirectorLogDao {
     @Insert
     suspend fun insert(entry: DirectorLogEntity): Long
 
-    @Query("SELECT * FROM director_logs WHERE contactId = :contactId ORDER BY id DESC LIMIT :limit")
-    suspend fun latestFor(contactId: Long, limit: Int = 50): List<DirectorLogEntity>
-
     @Query(
         "DELETE FROM director_logs WHERE contactId = :contactId AND id NOT IN " +
             "(SELECT id FROM director_logs WHERE contactId = :contactId ORDER BY id DESC LIMIT :keep)",
@@ -673,9 +646,6 @@ interface ActionPlayDao {
     @Query("UPDATE action_plays SET status = :status, resultNote = :resultNote WHERE id = :id")
     suspend fun updateStatus(id: Long, status: String, resultNote: String? = null)
 
-    @Query("SELECT * FROM action_plays WHERE contactId = :contactId AND status = '$ACTION_STATUS_DRAFT' ORDER BY id DESC")
-    suspend fun openDrafts(contactId: Long): List<ActionPlayEntity>
-
     @Query("SELECT * FROM action_plays WHERE contactId = :contactId ORDER BY id DESC LIMIT :limit")
     suspend fun recentFor(contactId: Long, limit: Int = 20): List<ActionPlayEntity>
 }
@@ -708,10 +678,6 @@ interface ProactivePolicyDao {
     suspend fun forContact(contactId: Long): ProactivePolicyEntity?
 
     // ---- M2-b（追加式）：检点枚举 + 设置页观察 ----
-
-    /** 全部已启用的主动策略（周期检点逐个过频控规则）。 */
-    @Query("SELECT * FROM proactive_policies WHERE enabled = 1")
-    suspend fun listEnabled(): List<ProactivePolicyEntity>
 
     /** 全部策略行（V-C §4.5：显式行优先，无行按风格分档给缺省，需读全量判重）。 */
     @Query("SELECT * FROM proactive_policies")

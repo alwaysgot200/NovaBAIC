@@ -78,16 +78,6 @@ internal object OcrNoiseFilter {
         return lines.filter { line -> keepLine(line.text, rules, names) }
     }
 
-    /** 无包围盒文本的同款判定（a11y 文本阶梯等只有整段文本的场景）。 */
-    fun cleanTextLines(
-        lines: List<String>,
-        rules: CompiledNoiseRules,
-        whitelistNames: Collection<String> = emptyList(),
-    ): List<String> {
-        val names = whitelistNames.map { it.trim() }.filter { it.length >= 2 }
-        return lines.filter { keepLine(it, rules, names) }
-    }
-
     private fun keepLine(raw: String, rules: CompiledNoiseRules, whitelistNames: List<String>): Boolean {
         val text = normalize(raw)
         if (text.isEmpty()) return false

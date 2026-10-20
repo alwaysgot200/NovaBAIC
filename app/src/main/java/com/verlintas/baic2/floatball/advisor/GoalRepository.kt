@@ -21,7 +21,6 @@ package com.verlintas.baic2.floatball.advisor
 
 import androidx.room.withTransaction
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
-import com.verlintas.baic2.floatball.advisor.data.CARD_DRAFT
 import com.verlintas.baic2.floatball.advisor.data.GOAL_ABANDONED
 import com.verlintas.baic2.floatball.advisor.data.GOAL_ACTIVE
 import com.verlintas.baic2.floatball.advisor.data.GOAL_DONE
@@ -33,7 +32,6 @@ import com.verlintas.baic2.floatball.advisor.data.HORIZON_L1
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L2
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L3
 import com.verlintas.baic2.floatball.advisor.data.DECOMP_ROADMAP
-import com.verlintas.baic2.floatball.advisor.data.MISSION_PENDING
 import com.verlintas.baic2.floatball.advisor.data.StageStateEntity
 import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
 import com.verlintas.baic2.floatball.advisor.strategy.RoadmapPayload
@@ -81,8 +79,6 @@ class GoalRepository @Inject constructor(
     suspend fun goal(id: Long): GoalEntity? = goalDao.find(id)
 
     fun observeGoals(contactId: Long): Flow<List<GoalEntity>> = goalDao.observeByContact(contactId)
-
-    fun observeGoal(id: Long): Flow<GoalEntity?> = goalDao.observe(id)
 
     /** 某档当前有效目标（provisional+active），priority/updatedAt 有序。 */
     suspend fun activeGoals(contactId: Long, horizon: Int): List<GoalEntity> =
@@ -542,10 +538,5 @@ class GoalRepository @Inject constructor(
         const val REASON_TITLE_EMPTY = "title_empty"
         const val REASON_L1_NEEDS_L2 = "l1_needs_l2"
         const val REASON_NOT_FOUND = "not_found"
-
-        /** 供调用方判断 pending 态（避免各文件再引常量）。 */
-        const val MISSION_STATUS_PENDING = MISSION_PENDING
-        const val GOAL_STATUS_DONE = GOAL_DONE
-        const val CARD_STATUS_DRAFT = CARD_DRAFT
     }
 }

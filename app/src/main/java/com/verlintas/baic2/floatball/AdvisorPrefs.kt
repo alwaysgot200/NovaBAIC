@@ -240,37 +240,6 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(maxSessionMs = ms) }
     }
 
-    fun setAutoScrollScreens(screens: Int) {
-        val value = screens.coerceIn(0, 3)
-        prefs.edit().putInt(KEY_SCROLL_SCREENS, value).apply()
-        _state.update { it.copy(autoScrollScreens = value) }
-    }
-
-    fun setScrollSettleMs(ms: Long) {
-        val value = ms.coerceIn(600L, 1_500L)
-        prefs.edit().putLong(KEY_SCROLL_SETTLE, value).apply()
-        _state.update { it.copy(scrollSettleMs = value) }
-    }
-
-    fun setScrollBack(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_SCROLL_BACK, enabled).apply()
-        _state.update { it.copy(scrollBack = enabled) }
-    }
-
-    fun setSwipeHeightRatio(ratio: Float) {
-        val value = ratio.coerceIn(0.5f, 0.9f)
-        prefs.edit().putFloat(KEY_SWIPE_RATIO, value).apply()
-        _state.update { it.copy(swipeHeightRatio = value) }
-    }
-
-    /** 整体替换禁滑名单（运行中改，下一回合即生效）。 */
-    fun setSwipeBlockedPackages(packages: Set<String>) {
-        val value = packages.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-        // SharedPreferences 直接持有调用方集合，防御性拷一份再存。
-        prefs.edit().putStringSet(KEY_SWIPE_BLOCKLIST, value.toSet()).apply()
-        _state.update { it.copy(swipeBlockedPackages = value) }
-    }
-
     /** 连续模式静止降频倍数（仅接受 1/2/4，运行中改下一抓拍循环即生效）。 */
     fun setIdleBackoffMultiplier(multiplier: Int) {
         val value = multiplier.takeIf { it in BACKOFF_OPTIONS } ?: 2
@@ -389,13 +358,6 @@ class AdvisorPrefs @Inject constructor(
         val value = sends.takeIf { it in COMPANION_SEND_OPTIONS } ?: DEFAULT_COMPANION_MAX_SENDS
         prefs.edit().putInt(KEY_COMPANION_MAX_SENDS, value).apply()
         _state.update { it.copy(companionMaxSends = value) }
-    }
-
-    /** 会话复用断崖阈值 X（V-B，方案 §3）：[0,1]，下一回合即生效。 */
-    fun setReuseCliffSimilarity(value: Float) {
-        val clean = value.coerceIn(0f, 1f)
-        prefs.edit().putFloat(KEY_REUSE_CLIFF, clean).apply()
-        _state.update { it.copy(reuseCliffSimilarity = clean) }
     }
 
     /** 记录一个主参谋回合的实际用量（模型 Usage 事件；缺测按 0 计），累计持久化。 */

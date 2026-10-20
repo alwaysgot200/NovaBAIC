@@ -47,8 +47,6 @@ class StrategyCardRepository @Inject constructor(
     /** 最新一行（任意状态）；空态判断用。 */
     suspend fun latestAny(contactId: Long): StrategyCardEntity? = cardDao.latestAny(contactId)
 
-    suspend fun latestDraft(contactId: Long): StrategyCardEntity? = cardDao.latest(contactId, CARD_DRAFT)
-
     suspend fun latestConfirmed(contactId: Long): StrategyCardEntity? =
         cardDao.latest(contactId, CARD_CONFIRMED)
 

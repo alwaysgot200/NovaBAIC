@@ -1301,12 +1301,6 @@ internal object FloatUi {
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
     }
 
-    private fun rounded(context: Context, color: Int, radiusDp: Int): GradientDrawable =
-        GradientDrawable().apply {
-            cornerRadius = dp(context, radiusDp).toFloat()
-            setColor(color)
-        }
-
     private fun dp(context: Context, value: Int): Int =
         (value * context.resources.displayMetrics.density).toInt()
 

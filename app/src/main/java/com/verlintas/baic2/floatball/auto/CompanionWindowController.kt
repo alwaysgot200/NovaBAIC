@@ -41,7 +41,6 @@ import com.verlintas.baic2.floatball.contact.ContactHistoryGateway
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.floatball.director.DirectorRoutes
 import com.verlintas.baic2.floatball.director.Gatekeeper
-import com.verlintas.baic2.floatball.director.GateReasons
 import com.verlintas.baic2.floatball.director.ProactivePolicyRepository
 import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -55,8 +54,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -270,7 +267,6 @@ class CompanionWindowController @Inject constructor(
     private val windowScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _activeWindow = MutableStateFlow<WindowSnapshot?>(null)
-    val activeWindow: StateFlow<WindowSnapshot?> = _activeWindow.asStateFlow()
 
     private var deadlineJob: Job? = null
     private var pendingDispatchJob: Job? = null

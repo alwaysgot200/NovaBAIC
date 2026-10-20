@@ -278,13 +278,6 @@ class ContactRepository @Inject constructor(
 
     // ---- 档案编辑 ----
 
-    suspend fun updateGoalStyle(contactId: Long, goal: String?, style: String?) {
-        val p = db.contactProfileDao().findById(contactId) ?: return
-        db.contactProfileDao().update(
-            p.copy(goal = goal?.trim()?.takeIf { it.isNotEmpty() }, style = style?.trim()?.takeIf { it.isNotEmpty() }, updatedAt = System.currentTimeMillis()),
-        )
-    }
-
     /** P1：联系人详情只改业务目标；风格改走 style_cards，旧 style 列保持原样（回退链只读）。 */
     suspend fun updateGoal(contactId: Long, goal: String?) {
         val p = db.contactProfileDao().findById(contactId) ?: return
@@ -470,9 +463,6 @@ class ContactRepository @Inject constructor(
             dao.touch(existing.id, now)
         }
     }
-
-    suspend fun groupMembers(groupContactId: Long): List<GroupMemberEntity> =
-        db.groupMemberDao().listForGroup(groupContactId)
 
     fun observeGroupMembers(groupContactId: Long) =
         db.groupMemberDao().observeForGroup(groupContactId)

@@ -31,8 +31,6 @@ import com.verlintas.baic2.floatball.advisor.data.HORIZON_L2
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L3
 import com.verlintas.baic2.floatball.advisor.data.PersonaFieldEntity
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_REROUTE
-import com.verlintas.baic2.floatball.advisor.strategy.L1Candidate
-import com.verlintas.baic2.floatball.advisor.strategy.L2Candidate
 import com.verlintas.baic2.floatball.advisor.strategy.OutcomesPayload
 import com.verlintas.baic2.floatball.advisor.strategy.RerouteRules
 import com.verlintas.baic2.floatball.advisor.strategy.RoadmapPayload

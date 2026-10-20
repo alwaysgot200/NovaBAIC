@@ -125,15 +125,6 @@ object PersonaValues {
         runCatching {
             json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()), value)
         }.getOrDefault(emptyList())
-
-    /** 单行渲染「标签: 值」；tags 顿号拼接，空值返回 null（调用方跳过）。 */
-    fun renderLine(label: String, type: String, value: String): String? {
-        val rendered = when (type) {
-            PersonaFieldType.TAGS -> decodeTags(value).filter { it.isNotBlank() }.joinToString("、")
-            else -> value.trim()
-        }
-        return rendered.takeIf { it.isNotEmpty() }?.let { "$label: $it" }
-    }
 }
 
 /**

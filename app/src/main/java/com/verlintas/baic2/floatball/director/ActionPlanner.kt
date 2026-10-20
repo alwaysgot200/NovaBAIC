@@ -24,7 +24,6 @@ import android.util.Log
 import com.verlintas.baic2.core.data.repository.AgentRepository
 import com.verlintas.baic2.core.engine.AuxiliaryTasks
 import com.verlintas.baic2.floatball.advisor.GoalRepository
-import com.verlintas.baic2.floatball.advisor.ScenarioPack
 import com.verlintas.baic2.floatball.advisor.StrategyBrief
 import com.verlintas.baic2.floatball.advisor.data.ACTION_KIND_CARE
 import com.verlintas.baic2.floatball.advisor.data.ACTION_KIND_CUSTOM
@@ -143,9 +142,8 @@ object ActionStratagemEngine {
     /** 步骤条数上限（库内模板 4 条，模型 2~4 条口径）。 */
     const val STEPS_MAX = 4
 
-    /** 提示词数据段总预算与候选块预算（确定性截断，防极端资产撑爆）。 */
+    /** 提示词数据段总预算（确定性截断，防极端资产撑爆）。 */
     const val PROMPT_BUDGET = 2600
-    const val CANDIDATE_BUDGET = 2200
 
     /** 合法 kind 全集与四大类分组（资产校验与解析共用）。 */
     internal val KINDS = setOf(ACTION_KIND_MEETUP, ACTION_KIND_GIFT, ACTION_KIND_VISIT, ACTION_KIND_CARE, ACTION_KIND_CUSTOM)

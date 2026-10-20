@@ -41,9 +41,6 @@ object TopicStyleTags {
     const val LIFE = "生活"
     const val HOBBY = "爱好"
 
-    /** 全部风格词（种子补标与过滤的合法值域）。 */
-    val ALL = listOf(INDUSTRY, WORK, FOOD, FUN, JOKE, LIFE, HOBBY)
-
     /** 风格词 → 近义词/包含线索（素材 tag 自由文本的宽松匹配表）。 */
     private val ALIASES: Map<String, List<String>> = mapOf(
         INDUSTRY to listOf("行业", "industry", "职场", "业务"),

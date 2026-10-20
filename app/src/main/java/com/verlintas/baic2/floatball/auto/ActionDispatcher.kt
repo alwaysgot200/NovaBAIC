@@ -218,9 +218,6 @@ class ActionDispatcher @Inject constructor(
 
     private val ledger = AutoSendLedger()
 
-    /** 指定联系人的最近发送记录（新→旧，对账 API）。 */
-    fun recentSendRecords(contactId: Long): List<SendRecord> = ledger.recent(contactId)
-
     /**
      * 执行一次自动发送：总闸+白名单前置闸 → 三步状态机 → 指纹入账 →
      * director_logs 落库 → 失败降级起草通知。全程不抛异常（降级矩阵纪律）。
