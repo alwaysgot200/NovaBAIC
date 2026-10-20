@@ -118,6 +118,9 @@ class AdvisorNotificationListener : NotificationListenerService() {
                 ?.let { return }
             val result = screenAdvisor.submitNotificationTurn(parsed.body, contact)
             if (result.outcome != ScreenAdvisor.SubmitOutcome.RAN) return
+            // 接管通报命中（2026-10-20 通报方案 §4.5）：铃声通报是唯一出口，
+            // 抑制 AI 草稿通知——接管场景答案必须用户亲笔，不挂一键发送。
+            if (result.handoff) return
             val draft = result.draft ?: return
             val conversationId = result.conversationId ?: return
             postDraftNotification(

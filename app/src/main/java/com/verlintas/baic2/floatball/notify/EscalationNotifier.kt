@@ -31,7 +31,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.verlintas.baic2.R
-import com.verlintas.baic2.core.data.repository.ContactRepository
+import com.verlintas.baic2.floatball.advisor.ContactRepository
 import com.verlintas.baic2.floatball.AdvisorPrefs
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.floatball.FloatBallService
@@ -42,6 +42,7 @@ import com.verlintas.baic2.floatball.advisor.data.ROUTE_NOOP
 import com.verlintas.baic2.floatball.advisor.data.TRIGGER_INCOMING
 import com.verlintas.baic2.floatball.director.DirectorRoutes
 import com.verlintas.baic2.floatball.director.HandoffCategory
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -88,14 +89,15 @@ class EscalationNotifier @Inject constructor(
 
     /**
      * H 接管通报：铃声通知 + await-human 挂起 + 通报台账行。
-     * [incoming] 为来信摘录（即取即用）；[category] 决定通知副标题。
+     * [incoming] 为来信摘录（即取即用）；[category] 为 null 时（严格档 uncertain
+     * 命中）通知不带类别副标题。
      * @return 是否真正发出（false = 节流命中或权限缺失）。
      */
     suspend fun notifyHandoff(
         contact: ContactRef,
         conversationId: Long,
         incoming: String,
-        category: HandoffCategory,
+        category: HandoffCategory?,
     ): Boolean = runCatching {
         val now = System.currentTimeMillis()
         synchronized(lastHandoffAt) {
@@ -107,7 +109,11 @@ class EscalationNotifier @Inject constructor(
         _awaitingHuman.value = _awaitingHuman.value + contact.contactId
         logLedger(contact.contactId, conversationId, ROUTE_HANDOFF, "escalation_notified")
         val title = context.getString(R.string.float_escalation_handoff_title, contact.displayName)
-        val body = context.getString(R.string.float_escalation_handoff_text, category.label, incoming)
+        val body = if (category == null) {
+            context.getString(R.string.float_escalation_handoff_text_plain, incoming)
+        } else {
+            context.getString(R.string.float_escalation_handoff_text, category.label, incoming)
+        }
         postEscalation(contact, conversationId, title, body)
     }.getOrDefault(false)
 
@@ -143,7 +149,7 @@ class EscalationNotifier @Inject constructor(
      * 点击经 service action 拉起分屏到该会话（**不带代拟条**——接管场景不把
      * AI 草稿挂一键发送，答案必须用户亲笔）。
      */
-    private fun postEscalation(
+    private suspend fun postEscalation(
         contact: ContactRef,
         conversationId: Long,
         title: String,

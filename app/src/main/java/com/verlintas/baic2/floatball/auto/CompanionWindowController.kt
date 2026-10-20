@@ -42,6 +42,7 @@ import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.floatball.director.DirectorRoutes
 import com.verlintas.baic2.floatball.director.Gatekeeper
 import com.verlintas.baic2.floatball.director.ProactivePolicyRepository
+import com.verlintas.baic2.floatball.notify.EscalationNotifier
 import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -178,6 +179,9 @@ internal object CompanionLedgerEvents {
     const val END_PREFIX = "companion_end:"
     const val VETOED_PREFIX = "companion_vetoed:"
 
+    /** 接管通报挂起中跳过派发（2026-10-20 通报方案 §2.5，等待主人亲笔）。 */
+    const val AWAIT_HUMAN_SKIP = "await_human_skip"
+
     /** 结束原因键（window_expired/service_stop/service_destroyed…）。 */
     fun endReason(why: String) = END_PREFIX + why
 
@@ -234,6 +238,7 @@ class CompanionWindowController @Inject constructor(
     private val policyRepository: ProactivePolicyRepository,
     private val dispatcher: ActionDispatcher,
     private val gatekeeper: Gatekeeper,
+    private val escalationNotifier: EscalationNotifier,
     private val prefs: AdvisorPrefs,
     private val db: AdvisorDatabase,
     @ApplicationContext private val context: Context,
@@ -443,6 +448,12 @@ class CompanionWindowController @Inject constructor(
             }
         }
         tally.onDraft()
+        // 接管通报挂起位（2026-10-20 通报方案 §2.5）：该联系人来信需要用户本人
+        // 接管时，草稿绝不自动派发（AI 不得代答），台账留痕等待主人。
+        if (escalationNotifier.isAwaitingHuman(window.contactId)) {
+            logGearEvent(window.contactId, CompanionLedgerEvents.AWAIT_HUMAN_SKIP)
+            return
+        }
         val request = AutoSendRequest(
             contactId = active.contactId,
             contactName = active.displayName,
