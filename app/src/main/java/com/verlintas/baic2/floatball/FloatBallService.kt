@@ -489,7 +489,11 @@ class FloatBallService : Service() {
                     suppressTapUp = false
                     // 长按预热：第一触点即开始读无障碍文本，与系统长按判定
                     // 并行，长按确认后毫秒级进 LLM（拖动/抬起均自动丢弃）。
-                    if (mode == Mode.IDLE) screenAdvisor.preheat()
+                    // 面板可见时禁预热：无障碍连 overlay 文字一起读，预读结果
+                    // 将全是面板自身文字（bug ①自噬），宁走像素路径。
+                    if (mode == Mode.IDLE && (split == null || splitDetached)) {
+                        screenAdvisor.preheat()
+                    }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -561,10 +565,11 @@ class FloatBallService : Service() {
         ball?.setMode(FloatUi.BallMode.BUSY, this)
         val preheated = screenAdvisor.consumePreheat()
         val needsHide = preheated == null || preheated.length < ScreenPerceiver.MIN_TEXT_CHARS
-        if (needsHide) {
-            hideAllOverlays() // 像素路径：先撤自身浮层防污染
-            detachSplitWindow() // 面板文字同样不能进画面（铁律 §8.1）
-        }
+        if (needsHide) hideAllOverlays() // 像素路径：先撤自身浮层防污染
+        // 无条件摘面板（铁律 §8.1）：旧逻辑以「预读文本够长」跳过摘除——面板
+        // 开着时预读的恰是面板自身文字，喂给 LLM 即自噬、面板自关自开闪烁
+        // （bug ①）。回合结束由 Unchanged→reattach / TurnStarted→ensureSplit 回挂。
+        detachSplitWindow()
         runOneShot(preheated.takeIf { !needsHide }, settleMs = 0L)
     }
 
