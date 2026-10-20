@@ -21,9 +21,15 @@ package com.verlintas.baic2.device.impl.a11y
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.verlintas.baic2.device.api.AccessibilityBridge
 import com.verlintas.baic2.device.api.TextNode
@@ -93,13 +99,51 @@ class AndroidAccessibilityBridge @Inject constructor() : AccessibilityBridge {
         val arguments = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
-        val ok = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-        if (ok) {
-            Result.success(Unit)
-        } else {
-            Result.failure(IllegalStateException("set_text_rejected: the field refused the input"))
+        if (target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) {
+            return@withContext Result.success(Unit)
         }
+        pasteFallback(active, target, text)
     }
+
+    /**
+     * Second tier of the type fallback chain: clipboard write + node
+     * ACTION_PASTE, which bypasses the IME and reaches self-drawn input
+     * fields that reject ACTION_SET_TEXT. The previous clipboard text is
+     * restored one beat later; a failed restore is logged, never blocking
+     * the result.
+     */
+    private fun pasteFallback(
+        service: AccessibilityService,
+        target: AccessibilityNodeInfo,
+        text: String,
+    ): Result<Unit> {
+        val clipboard = runCatching {
+            service.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        }.getOrNull() ?: return pasteFailure("no clipboard service")
+        val previous = runCatching {
+            clipboard.primaryClip?.getItemAt(0)?.coerceToText(service)?.toString()
+        }.getOrNull()
+        return runCatching {
+            clipboard.setPrimaryClip(ClipData.newPlainText("baic2", text))
+            if (target.performAction(AccessibilityNodeInfo.ACTION_PASTE, null)) {
+                Handler(Looper.getMainLooper()).postDelayed(
+                    {
+                        runCatching {
+                            previous?.let { clipboard.setPrimaryClip(ClipData.newPlainText("baic2", it)) }
+                        }.onFailure { Log.w(TAG, "clipboard restore failed: ${it.message}") }
+                    },
+                    RESTORE_DELAY_MS,
+                )
+                Result.success(Unit)
+            } else {
+                pasteFailure("the field refused the paste")
+            }
+        }.getOrElse { pasteFailure(it.message ?: "clipboard unavailable") }
+    }
+
+    private fun pasteFailure(detail: String): Result<Unit> = Result.failure(
+        IllegalStateException("clipboard_paste_rejected: $detail"),
+    )
 
     override suspend fun pressKey(key: String): Result<Unit> = withContext(Dispatchers.Main) {
         val active = service ?: return@withContext notEnabled()
@@ -185,7 +229,9 @@ class AndroidAccessibilityBridge @Inject constructor() : AccessibilityBridge {
     override fun screenText(maxNodes: Int): String {
         val root = service?.rootInActiveWindow ?: return ""
         val lines = mutableListOf<String>()
-        root.walk { node ->
+        // Traversal budget must never starve the requested line budget:
+        // sparse-label windows (long chats) need more nodes than lines.
+        root.walk(maxNodes = maxNodes.coerceAtLeast(MAX_NODES)) { node ->
             if (lines.size < maxNodes) {
                 val label = node.text?.toString()?.takeIf { it.isNotBlank() }
                     ?: node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
@@ -234,11 +280,14 @@ class AndroidAccessibilityBridge @Inject constructor() : AccessibilityBridge {
         ),
     )
 
-    private inline fun AccessibilityNodeInfo.walk(visit: (AccessibilityNodeInfo) -> Unit) {
+    private inline fun AccessibilityNodeInfo.walk(
+        maxNodes: Int = MAX_NODES,
+        visit: (AccessibilityNodeInfo) -> Unit,
+    ) {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(this)
         var visited = 0
-        while (queue.isNotEmpty() && visited < MAX_NODES) {
+        while (queue.isNotEmpty() && visited < maxNodes) {
             val node = queue.removeFirst()
             visited++
             runCatching { visit(node) }
@@ -259,6 +308,10 @@ class AndroidAccessibilityBridge @Inject constructor() : AccessibilityBridge {
     }
 
     private companion object {
-        const val MAX_NODES = 800
+        // 4000 covers long chat windows with keyboard open (tail elements
+        // such as the send button used to fall off an 800-node walk).
+        const val MAX_NODES = 4_000
+        const val RESTORE_DELAY_MS = 120L
+        const val TAG = "Baic2A11yBridge"
     }
 }
