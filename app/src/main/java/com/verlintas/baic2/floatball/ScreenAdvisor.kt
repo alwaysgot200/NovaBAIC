@@ -170,8 +170,6 @@ class ScreenAdvisor @Inject constructor(
         val messages: List<ChatMessage> = emptyList(),
         val streaming: String? = null,
         val status: Status = Status.Idle,
-        /** 最近一个完成回合的模型上报用量（面板小字；新回合开始清空）。 */
-        val lastUsage: TurnTokens? = null,
         /**
          * 本会话最近任务令（P3 §九）：驱动参谋气泡行内「✓采纳」——
          * 只在最新 assistant 气泡、且存在 pending 任务令时可点。
@@ -195,9 +193,6 @@ class ScreenAdvisor @Inject constructor(
         val pending: Boolean,
         val adoptedIndex: Int?,
     )
-
-    /** 单回合 token 用量（模型 Usage；个别供应商不上报则为 0）。 */
-    data class TurnTokens(val input: Long, val output: Long)
 
     sealed interface Status {
         data object Idle : Status
@@ -1436,7 +1431,7 @@ class ScreenAdvisor @Inject constructor(
                 category = escalationOutcome.category,
             )
         }
-        _transcript.update { it.copy(status = Status.Thinking, lastUsage = null) }
+        _transcript.update { it.copy(status = Status.Thinking) }
         turnMutex.withLock {
             runAdvisorTurn(conversationId, contact, backgroundTurn, smalltalk, handoffAvoid)
         }
@@ -2198,8 +2193,9 @@ class ScreenAdvisor @Inject constructor(
     }
 
     /**
-     * 完成回合的用量入账：累计持久化 + 面板小字；连续模式下若本次会话用量
-     * 达到预算上限，发出自动停录请求（在回合落库之后，不丢这条回答）。
+     * 完成回合的用量入账（累计持久化；逐条用量随消息落库供两个界面显示）。
+     * 连续模式下若本次会话用量达到预算上限，发出自动停录请求（在回合落库
+     * 之后，不丢这条回答）。
      */
     private fun recordTurnUsage(
         input: Long,
@@ -2208,7 +2204,6 @@ class ScreenAdvisor @Inject constructor(
         sessionBudget: Long,
     ) {
         prefs.recordTurnUsage(input, output)
-        _transcript.update { it.copy(lastUsage = TurnTokens(input, output)) }
         if (backgroundTurn && sessionBudget > 0L) {
             val used = prefs.tokenStats.value.sessionTotal
             if (used >= sessionBudget) _budgetExceeded.tryEmit(Unit)
@@ -2241,6 +2236,9 @@ class ScreenAdvisor @Inject constructor(
         val live = StringBuilder()
         var sawText = false
         var failureReason: String? = null
+        // 本回合累计用量：落库写进 assistant 消息（分屏/主窗口逐条显示）。
+        var usageIn = 0L
+        var usageOut = 0L
         // 正文首字揭示：策略回合在首段可见输出到达后，保证「正在定本轮策略」
         // 最短展示 PLAN_HINT_MIN_MS 再清除，避免提示一闪而过。
         var bodyRevealed = false
@@ -2266,7 +2264,11 @@ class ScreenAdvisor @Inject constructor(
                         _transcript.update { it.copy(streaming = live.toString()) }
                     }
                 }
-                is AdvisorResponder.Chunk.Usage -> onUsage(chunk.inputTokens, chunk.outputTokens)
+                is AdvisorResponder.Chunk.Usage -> {
+                    usageIn += chunk.inputTokens.coerceAtLeast(0L)
+                    usageOut += chunk.outputTokens.coerceAtLeast(0L)
+                    onUsage(chunk.inputTokens, chunk.outputTokens)
+                }
                 is AdvisorResponder.Chunk.Failure -> failureReason = chunk.reason
                 AdvisorResponder.Chunk.Done -> Unit
             }
@@ -2336,6 +2338,8 @@ class ScreenAdvisor @Inject constructor(
                 role = ChatRole.ASSISTANT,
                 content = live.toString(),
                 createdAt = System.currentTimeMillis(),
+                usageInput = usageIn.takeIf { it > 0L },
+                usageOutput = usageOut.takeIf { it > 0L },
             ),
         )
         _transcript.update { it.copy(streaming = null, status = Status.Idle) }
@@ -2375,6 +2379,9 @@ class ScreenAdvisor @Inject constructor(
         var completed = false
         var completedMessageId: Long? = null
         var failureReason: String? = null
+        // 兜底落库用的回合累计用量（主路径用量随 event.message 走 AgentLoop 上报值）。
+        var usageIn = 0L
+        var usageOut = 0L
         // 正文首字揭示（与 lean 通道同口径）；思考过程不算正文。
         var bodyRevealed = false
         suspend fun revealBody() {
@@ -2430,6 +2437,8 @@ class ScreenAdvisor @Inject constructor(
                                 role = ChatRole.ASSISTANT,
                                 content = live.toString(),
                                 createdAt = System.currentTimeMillis(),
+                                usageInput = usageIn.takeIf { it > 0L },
+                                usageOutput = usageOut.takeIf { it > 0L },
                             ),
                         )
                         live.setLength(0)
@@ -2440,8 +2449,11 @@ class ScreenAdvisor @Inject constructor(
                         failureReason = failureReason ?: REASON_NO_RESPONSE
                     }
                 }
-                is AgentEvent.Usage ->
+                is AgentEvent.Usage -> {
+                    usageIn += (event.promptTokens ?: 0L).coerceAtLeast(0L)
+                    usageOut += (event.completionTokens ?: 0L).coerceAtLeast(0L)
                     onUsage(event.promptTokens ?: 0L, event.completionTokens ?: 0L)
+                }
                 is AgentEvent.Failed -> failureReason = event.error.message
                 else -> Unit
             }
@@ -2505,6 +2517,8 @@ class ScreenAdvisor @Inject constructor(
                         role = ChatRole.ASSISTANT,
                         content = live.toString(),
                         createdAt = System.currentTimeMillis(),
+                        usageInput = usageIn.takeIf { it > 0L },
+                        usageOutput = usageOut.takeIf { it > 0L },
                     ),
                 )
                 _transcript.update { it.copy(streaming = null, status = Status.Idle) }

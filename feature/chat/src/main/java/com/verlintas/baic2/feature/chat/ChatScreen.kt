@@ -1043,7 +1043,8 @@ private fun usageLevel(state: ChatUiState): Int? {
     return (used * 100 / window).coerceIn(0, 999).toInt()
 }
 
-private fun formatTokens(tokens: Long): String = when {
+/** k/M 两级压缩（千/百万）；上下文用量标签与逐条消息用量共用。 */
+internal fun formatTokens(tokens: Long): String = when {
     tokens >= 1_000_000 -> String.format(java.util.Locale.ROOT, "%.1fM", tokens / 1_000_000.0)
     tokens >= 1_000 -> String.format(java.util.Locale.ROOT, "%.1fK", tokens / 1_000.0)
     else -> tokens.toString()

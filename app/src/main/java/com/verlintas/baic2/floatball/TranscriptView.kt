@@ -68,9 +68,6 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         val contentBox: LinearLayout? = null,
     ) {
         var bindSignature: String? = null
-
-        /** 气泡底部用量小字（[buildCopyFooter] 创建，重绑时随盒重建）。 */
-        var usageLabel: TextView? = null
     }
 
     // ── P3 §九：行内交互回调（由服务接线，视图本身不碰业务） ─────────────
@@ -131,7 +128,6 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         }
         renderStreaming(state.streaming)
         renderStatus(state)
-        renderUsage(state, lastAssistantId)
         // 仅当原本就贴近底部时跟随流式滚动；用户翻阅历史时不打扰。
         scroll.post {
             val child = scroll.getChildAt(0)
@@ -303,7 +299,8 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
     }
 
     /**
-     * 回复底部一行：左 token 用量小字（无用量即隐藏）+ 右复制图标——两者
+     * 回复底部一行：左 token 用量小字（随消息持久化的 usageInput/usageOutput，
+     * 模型上报过才显示——每条历史回复各自带）+ 右复制图标——两者
      * 合并成单行省一行的纵向占位。复制图标一键复制该回复全文（overlay
      * 窗口挂不上系统选择手柄与复制菜单——Chromium/Editor 均验证失败，
      * 此为整段复制的出口）。点按后图标闪 ✓ 1.2s 作反馈——Toast 会被
@@ -328,7 +325,13 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { weight = 1f }
         }
-        bubble.usageLabel = usage
+        // 逐条用量直接取消息持久化字段（模型上报过才显示）。
+        val usageIn = message.usageInput
+        val usageOut = message.usageOutput
+        if (usageIn != null || usageOut != null) {
+            usage.text = "↑" + compactTokens(usageIn ?: 0L) + "  ↓" + compactTokens(usageOut ?: 0L)
+            usage.visibility = View.VISIBLE
+        }
         row.addView(usage)
         row.addView(
             ImageView(context).apply {
@@ -628,22 +631,6 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
             bubbles[key]!!
         }
         holder.text.text = text
-    }
-
-    /**
-     * 回合 token 用量小字（UiState.lastUsage）：流式结束且模型上报过用量时，
-     * 填入最新回复气泡底部行的左侧小字「↑输入 ↓输出」（与复制图标同行）；
-     * 新回合开始 lastUsage 清空即自动隐藏。
-     */
-    private fun renderUsage(state: ScreenAdvisor.UiState, lastAssistantId: Long?) {
-        val label = lastAssistantId?.let { bubbles[it] }?.usageLabel ?: return
-        val usage = state.lastUsage
-        if (usage == null || state.streaming != null) {
-            label.visibility = View.GONE
-            return
-        }
-        label.text = "↑" + compactTokens(usage.input) + "  ↓" + compactTokens(usage.output)
-        label.visibility = View.VISIBLE
     }
 
     private fun compactTokens(n: Long): String = when {

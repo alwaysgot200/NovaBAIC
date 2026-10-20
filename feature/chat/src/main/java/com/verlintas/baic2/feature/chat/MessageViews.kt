@@ -303,6 +303,16 @@ private fun AssistantMessage(
             Spacer(Modifier.size(Baic2Spacing.sm))
             ToolCard(call = call)
         }
+        // 逐条 token 用量（随消息持久化，模型上报过才显示）。
+        if (message.usageInput != null || message.usageOutput != null) {
+            Text(
+                text = "↑" + formatTokens(message.usageInput ?: 0L) +
+                    "  ↓" + formatTokens(message.usageOutput ?: 0L),
+                style = Baic2Mono.label,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = Baic2Spacing.xs),
+            )
+        }
     }
 }
 
