@@ -68,6 +68,9 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         val contentBox: LinearLayout? = null,
     ) {
         var bindSignature: String? = null
+
+        /** 气泡底部用量小字（[buildCopyFooter] 创建，重绑时随盒重建）。 */
+        var usageLabel: TextView? = null
     }
 
     // ── P3 §九：行内交互回调（由服务接线，视图本身不碰业务） ─────────────
@@ -106,7 +109,7 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         }
         // 移除已消失的消息（清空会话）。
         val ids = visible.mapTo(HashSet()) { it.id }
-        bubbles.keys.filterNot { it == STATUS_KEY || it == USAGE_KEY || ids.contains(it) }.toList().forEach { stale ->
+        bubbles.keys.filterNot { it == STATUS_KEY || ids.contains(it) }.toList().forEach { stale ->
             bubbles.remove(stale)?.let { list.removeView(it.container) }
         }
         visible.forEach { message -> upsertBubble(message) }
@@ -128,7 +131,7 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         }
         renderStreaming(state.streaming)
         renderStatus(state)
-        renderUsage(state, lastAssistantId?.let { bubbles[it] }?.container)
+        renderUsage(state, lastAssistantId)
         // 仅当原本就贴近底部时跟随流式滚动；用户翻阅历史时不打扰。
         scroll.post {
             val child = scroll.getChildAt(0)
@@ -296,38 +299,56 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
             }
         }
         basis.takeIf { it.isNotEmpty() }?.let { box.addView(buildBasisFooter(box, it)) }
-        box.addView(buildCopyFooter(message))
+        box.addView(buildCopyFooter(message, bubble))
     }
 
     /**
-     * 回复底部复制图标：一键复制该回复全文（overlay 窗口挂不上系统选择手柄
-     * 与复制菜单——Chromium/Editor 均验证失败，此为整段复制的出口）。
-     * 点按后图标闪 ✓ 1.2s 作反馈——Toast 会被面板自身遮挡（overlay 层级
-     * 高于 TYPE_TOAST），图标态变化是唯一可靠的可见反馈。
+     * 回复底部一行：左 token 用量小字（无用量即隐藏）+ 右复制图标——两者
+     * 合并成单行省一行的纵向占位。复制图标一键复制该回复全文（overlay
+     * 窗口挂不上系统选择手柄与复制菜单——Chromium/Editor 均验证失败，
+     * 此为整段复制的出口）。点按后图标闪 ✓ 1.2s 作反馈——Toast 会被
+     * 面板自身遮挡（overlay 层级高于 TYPE_TOAST），图标态变化是唯一
+     * 可靠的可见反馈。
      */
-    private fun buildCopyFooter(message: ChatMessage): View =
-        ImageView(context).apply {
-            setImageResource(R.drawable.fb_ic_copy)
-            contentDescription = context.getString(R.string.float_copy_desc)
-            alpha = 0.75f
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(10).toFloat()
-                setColor(0x22FFFFFF)
-            }
+    private fun buildCopyFooter(message: ChatMessage, bubble: Bubble): View {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                topMargin = dp(4)
-                gravity = Gravity.END
-            }
-            setOnClickListener {
-                copyReply(message.content)
-                setImageResource(R.drawable.fb_ic_check)
-                postDelayed({ setImageResource(R.drawable.fb_ic_copy) }, 1200L)
-            }
+            ).apply { topMargin = dp(4) }
         }
+        val usage = TextView(context).apply {
+            setTextColor(USAGE_COLOR)
+            textSize = 11f
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { weight = 1f }
+        }
+        bubble.usageLabel = usage
+        row.addView(usage)
+        row.addView(
+            ImageView(context).apply {
+                setImageResource(R.drawable.fb_ic_copy)
+                contentDescription = context.getString(R.string.float_copy_desc)
+                alpha = 0.75f
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(0x22FFFFFF)
+                }
+                setOnClickListener {
+                    copyReply(message.content)
+                    setImageResource(R.drawable.fb_ic_check)
+                    postDelayed({ setImageResource(R.drawable.fb_ic_copy) }, 1200L)
+                }
+            },
+        )
+        return row
+    }
 
     /** 单条编号建议：正文 + 行尾采纳/已采纳；长按弹三档纠偏条。 */
     private fun buildSuggestionView(
@@ -611,36 +632,18 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
 
     /**
      * 回合 token 用量小字（UiState.lastUsage）：流式结束且模型上报过用量时，
-     * 在最新回复下方渲染一行极简「↑输入 ↓输出」；新回合开始 lastUsage 清空
-     * 即自动摘除。锚定到最后一个参谋气泡之后（而非列表尾——新回合的用户
-     * 消息先落时用量行不至于排到它下面）。
+     * 填入最新回复气泡底部行的左侧小字「↑输入 ↓输出」（与复制图标同行）；
+     * 新回合开始 lastUsage 清空即自动隐藏。
      */
-    private fun renderUsage(state: ScreenAdvisor.UiState, anchor: View?) {
+    private fun renderUsage(state: ScreenAdvisor.UiState, lastAssistantId: Long?) {
+        val label = lastAssistantId?.let { bubbles[it] }?.usageLabel ?: return
         val usage = state.lastUsage
         if (usage == null || state.streaming != null) {
-            bubbles.remove(USAGE_KEY)?.let { list.removeView(it.container) }
+            label.visibility = View.GONE
             return
         }
-        val holder = bubbles[USAGE_KEY] ?: run {
-            val created = TextView(context).apply {
-                setTextColor(USAGE_COLOR)
-                textSize = 11f
-                setPadding(dp(10), 0, dp(10), dp(2))
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                ).apply { setMargins(dp(8), 0, dp(8), 0) }
-            }
-            bubbles[USAGE_KEY] = Bubble(created, created)
-            bubbles[USAGE_KEY]!!
-        }
-        list.removeView(holder.container)
-        if (anchor != null && anchor.parent === list) {
-            list.addView(holder.container, list.indexOfChild(anchor) + 1)
-        } else {
-            list.addView(holder.container)
-        }
-        holder.text.text = "↑" + compactTokens(usage.input) + "  ↓" + compactTokens(usage.output)
+        label.text = "↑" + compactTokens(usage.input) + "  ↓" + compactTokens(usage.output)
+        label.visibility = View.VISIBLE
     }
 
     private fun compactTokens(n: Long): String = when {
@@ -658,9 +661,6 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
     private companion object {
         /** 状态行的伪 id（真实消息 id 是数据库自增正数）。 */
         const val STATUS_KEY = -1L
-
-        /** token 用量小字行的伪 id。 */
-        const val USAGE_KEY = -2L
 
         /** 用量小字用色（弱于状态行，纯辅助信息）。 */
         val USAGE_COLOR = 0x59FFFFFF.toInt()
