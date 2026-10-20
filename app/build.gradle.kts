@@ -140,9 +140,11 @@ dependencies {
     implementation(project(":device:api"))
     implementation(project(":device:impl"))
 
-    // assists RPA 基座：opcv 传递 mp（录屏帧源）与 base（AssistsCore/服务合体）；
-    // log/ime/web/assistsx 仅存档于 vendor/assists submodule，不引入编译
+    // assists RPA 基座：opcv 传递 base（AssistsCore/服务合体）；mp 为
+    // implementation 不传递，显式引入（投影帧源，模式 B）；log/ime/web/assistsx
+    // 仅存档于 vendor/assists submodule，不引入编译
     implementation(libs.assists.opcv)
+    implementation(libs.assists.mp)
     implementation(project(":tools"))
     implementation(project(":mcp"))
     implementation(project(":eval"))
