@@ -41,6 +41,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -390,6 +391,21 @@ class FloatBallService : Service() {
 
     // -------------------------------------------------------- gestures
 
+    /**
+     * 系统手势豁免：贴边窗口的拖动热区整块排除出边缘手势条。球默认贴
+     * 屏幕右缘，球身/菜单窗右半落在返回手势（Gesture Monitor）的边缘
+     * 条内——从该侧起拖会被系统抢占、触摸流半途 CANCEL，表现为「拖不
+     * 动/时灵时不灵」。API 29 前无手势导航，无需处理。
+     */
+    private fun excludeSystemGestures(view: View) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        view.post {
+            view.setSystemGestureExclusionRects(
+                listOf(Rect(0, 0, view.width, view.height))
+            )
+        }
+    }
+
     /** 手势路由：单击/双击/长按交给 GestureDetector，拖动本地处理。 */
     private fun attachBallGesture(view: FrameLayout, params: WindowManager.LayoutParams) {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
@@ -399,12 +415,35 @@ class FloatBallService : Service() {
         var startY = 0
         var dragging = false
 
+        // 双击仲裁：菜单窗口盖住主球朝向侧，抢先展开会吃掉双击第二击的落点；
+        // 但等系统 onSingleTapConfirmed 的 300ms 确认窗太迟钝。改为 tap-UP 后
+        // [TAP_ARB_MS] 内无第二击即展开（仍远快于原 300ms），第二击到达则撤销
+        // 待展开并立即走双击。suppress 标记防止双击第二击的 UP 再触发单击。
+        var pendingExpand: Runnable? = null
+        var suppressTapUp = false
+        fun cancelPendingExpand() {
+            pendingExpand?.let(view::removeCallbacks)
+            pendingExpand = null
+        }
+
         val detector = GestureDetector(
             this,
             object : GestureDetector.SimpleOnGestureListener() {
-                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                override fun onSingleTapUp(e: MotionEvent): Boolean {
+                    if (suppressTapUp) {
+                        suppressTapUp = false
+                        return true
+                    }
                     when (mode) {
-                        Mode.IDLE -> expandMenu()
+                        Mode.IDLE -> {
+                            cancelPendingExpand()
+                            val r = Runnable {
+                                pendingExpand = null
+                                if (mode == Mode.IDLE) expandMenu()
+                            }
+                            pendingExpand = r
+                            view.postDelayed(r, TAP_ARB_MS)
+                        }
                         Mode.RECORDING -> toggleSplit()
                         Mode.ONESHOT -> Unit // 忙碌：单击无效
                     }
@@ -412,8 +451,15 @@ class FloatBallService : Service() {
                 }
 
                 override fun onDoubleTap(e: MotionEvent): Boolean {
+                    suppressTapUp = true
                     when (mode) {
-                        Mode.IDLE -> startRecording()
+                        Mode.IDLE -> {
+                            // 第一击在仲裁窗内已展开菜单（间隔>120ms 的双击），
+                            // 撤掉再进连续参谋，防菜单残留。
+                            dismissMenuNow()
+                            cancelPendingExpand()
+                            startRecording()
+                        }
                         Mode.RECORDING -> stopRecording()
                         Mode.ONESHOT -> Unit // 忙碌：双击无效
                     }
@@ -422,7 +468,10 @@ class FloatBallService : Service() {
 
                 override fun onLongPress(e: MotionEvent) {
                     // 长按=单次参谋；OneShot/Recording 态长按拒绝。
-                    if (mode == Mode.IDLE) startOneShot()
+                    if (mode == Mode.IDLE) {
+                        cancelPendingExpand()
+                        startOneShot()
+                    }
                 }
             },
         )
@@ -436,6 +485,8 @@ class FloatBallService : Service() {
                     startX = params.x
                     startY = params.y
                     dragging = false
+                    // 新一触点：清上一轮双击抑制，避免吞掉后续合法单击。
+                    suppressTapUp = false
                     // 长按预热：第一触点即开始读无障碍文本，与系统长按判定
                     // 并行，长按确认后毫秒级进 LLM（拖动/抬起均自动丢弃）。
                     if (mode == Mode.IDLE) screenAdvisor.preheat()
@@ -446,12 +497,32 @@ class FloatBallService : Service() {
                     val dy = event.rawY - downRawY
                     if (!dragging && (abs(dx) > slop || abs(dy) > slop)) dragging = true
                     if (dragging) {
-                        moveBallWithFollow(view, params, startX + dx.toInt(), startY + dy.toInt())
+                        requestBallMove(startX + dx.toInt(), startY + dy.toInt())
                     }
                     true
                 }
                 else -> true
             }
+        }
+    }
+
+    // 拖动合帧：MOVE 事件频率远高于屏幕刷新率，updateViewLayout 是跨进程
+    // 调用，逐事件直发会掉帧+耗电；每帧至多应用一次最新目标位置。
+    private var movePending = false
+    private var moveTargetX = 0
+    private var moveTargetY = 0
+
+    /** 请求把主球移到 (x,y)：帧间多次请求合并为一次窗口平移。 */
+    private fun requestBallMove(x: Int, y: Int) {
+        moveTargetX = x
+        moveTargetY = y
+        if (movePending) return
+        movePending = true
+        ball?.root?.postOnAnimation {
+            movePending = false
+            val view = ball?.root ?: return@postOnAnimation
+            val params = ballParams ?: return@postOnAnimation
+            moveBallWithFollow(view, params, moveTargetX, moveTargetY)
         }
     }
 
@@ -472,6 +543,10 @@ class FloatBallService : Service() {
             metrics.heightPixels - dp(FloatUi.BALL_SIZE_DP + FloatUi.MARGIN_DP),
         )
         runCatching { windowManager.updateViewLayout(view, params) }
+        // 回写拖动落点：摘窗复挂（单次参谋投影/拒绝授权等）走 showBall()
+        // 用 ballX/ballY 重建球，不同步会把球瞬移回旧位。
+        ballX = params.x
+        ballY = params.y
         followMenu(params)
     }
 
@@ -797,6 +872,7 @@ class FloatBallService : Service() {
         windowManager.addView(view.root, params)
         ball = view
         ballParams = params
+        excludeSystemGestures(view.root)
         // 重建后按当前状态机恢复外观（录制态=红球）。
         view.setMode(
             when (mode) {
@@ -844,6 +920,7 @@ class FloatBallService : Service() {
             draftCallbacks = draftCallbacks,
         )
         panel.handle.setOnTouchListener(makeResizeListener())
+        excludeSystemGestures(panel.handle)
 
         // 正文区挂载轻量转录视图：与主界面同一个「老参谋」会话的数据流。
         val transcript = TranscriptView(this)
@@ -1525,11 +1602,7 @@ class FloatBallService : Service() {
                 }
 
                 override fun onDragBy(totalDx: Float, totalDy: Float) {
-                    val view = ball?.root ?: return
-                    val params = ballParams ?: return
-                    moveBallWithFollow(
-                        view,
-                        params,
+                    requestBallMove(
                         fanDragStartX + totalDx.toInt(),
                         fanDragStartY + totalDy.toInt(),
                     )
@@ -1538,16 +1611,45 @@ class FloatBallService : Service() {
                 override fun onDragEnd() = Unit
             },
         )
+        // 菜单窗盖住主球朝向侧：双击第二击（仲裁窗 120ms 后到达的）会落在
+        // 本窗空白处而非主球——近球空白点按在双击时限内转发为连续参谋。
+        fan.setBlankTapListener { x, y -> forwardDoubleTapIfNeeded(x, y) }
         val params = overlayParams(width = fanWidth, height = fanHeight).apply {
             gravity = Gravity.TOP or Gravity.START
             x = fan.windowX
             y = fan.windowY
         }
         windowManager.addView(fan.root, params)
+        excludeSystemGestures(fan.root)
         menuView = fan.root
         menuParams = params
         fanMenu = fan
+        menuOpenedAt = SystemClock.uptimeMillis()
         fan.expand()
+    }
+
+    /** 扇形菜单挂窗时刻（双击转发仲裁用）。 */
+    private var menuOpenedAt = 0L
+
+    /**
+     * 双击第二击落在菜单窗时的转发：第二击打在主球近旁空白（时间仍在系统
+     * 双击时限内）= 用户在双击，转发进连续参谋；其余空白点按照常收起。
+     */
+    private fun forwardDoubleTapIfNeeded(x: Float, y: Float) {
+        if (mode != Mode.IDLE || menuOpenedAt == 0L) return
+        // 菜单在 tap-UP 后 TAP_ARB_MS 才挂窗，第二击最晚出现在系统双击时限
+        // 末尾：换算成挂窗后允许的转发窗口。
+        val windowMs = ViewConfiguration.getDoubleTapTimeout() - TAP_ARB_MS
+        if (SystemClock.uptimeMillis() - menuOpenedAt > windowMs) return
+        val params = ballParams ?: return
+        val cx = params.x + dp(FloatUi.BALL_SIZE_DP) / 2f
+        val cy = params.y + dp(FloatUi.BALL_SIZE_DP) / 2f
+        val radius = dp(FloatUi.BALL_SIZE_DP).toFloat()
+        val hit = (x - cx) * (x - cx) + (y - cy) * (y - cy) <= radius * radius
+        if (hit) {
+            dismissMenuNow()
+            startRecording()
+        }
     }
 
     /** 拖动主球时，展开中的扇形菜单跟随球心（几何/窗口位置整体重算）。 */
@@ -1573,14 +1675,29 @@ class FloatBallService : Service() {
 
     private fun collapseMenu() {
         val fan = fanMenu ?: return
+        val windowParams = menuParams
         fanMenu = null
         menuView = null
         menuParams = null
-        fan.collapse()
-        // 等收起动画走完再摘窗口。
-        mainHandler.postDelayed({
+        // 收起动画期间窗口转为不可触摸：尚未摘除的窗口若保持可触摸会
+        // 吞掉落在其上的点按（僵尸窗——收起后短时间内点主球无响应的
+        // 根因），透传后主球在收起全程立即可点。
+        if (windowParams != null) {
+            windowParams.flags = windowParams.flags or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            runCatching { windowManager.updateViewLayout(fan.root, windowParams) }
+        }
+        // 摘窗由收起动画结束回调驱动（原 postDelayed 估时在动画被取消/掉帧
+        // 时会残留透明窗——「收起后点球无响应」的另一来源），另保留兜底
+        // 定时器：endAction 被吞的罕见路径下再摘一次。
+        fan.collapse {
             runCatching { windowManager.removeView(fan.root) }
-        }, FloatUi.FAN_ANIM_MS + 60)
+        }
+        mainHandler.postDelayed({
+            if (fan.root.isAttachedToWindow) {
+                runCatching { windowManager.removeView(fan.root) }
+            }
+        }, FloatUi.FAN_ANIM_MS * 3)
     }
 
     // ------------------------------------------------ main / dialogs
@@ -1755,6 +1872,9 @@ class FloatBallService : Service() {
         const val ACTION_START_RECORDING = "com.verlintas.baic2.floatball.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.verlintas.baic2.floatball.STOP_RECORDING"
         const val CONSENT_SETTLE_MS = 350L
+
+        /** 单击展开扇形菜单的双击仲裁窗：tap-UP 后该时间内无第二击即展开。 */
+        const val TAP_ARB_MS = 120L
 
         /**
          * 授权孤儿兜底时长。只防「中转 Activity 结果永远不回来」（进程级异常），

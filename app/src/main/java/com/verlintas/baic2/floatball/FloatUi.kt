@@ -60,8 +60,9 @@ internal object FloatUi {
     const val FAN_CHILD_DP = 32
     const val FAN_ORBIT_DP = 3 * BALL_SIZE_DP / 2 // 66dp
     const val FAN_EDGE_MARGIN_DP = 8
-    const val FAN_STAGGER_MS = 30L
-    const val FAN_ANIM_MS = 160L
+    /** 错峰弹出间隔/单球弹出时长：压缩到 12/120ms，末球 ~180ms 内到位。 */
+    const val FAN_STAGGER_MS = 12L
+    const val FAN_ANIM_MS = 120L
 
     /** 分屏面板高度占屏幕比例的上下限。 */
     const val SPLIT_MIN_RATIO = 0.30f
@@ -243,6 +244,7 @@ internal object FloatUi {
      */
     private class FanDragLayout(context: Context) : FrameLayout(context) {
         var handler: FanDragHandler? = null
+        var onBlankTap: ((Float, Float) -> Unit)? = null
         private val slop = ViewConfiguration.get(context).scaledTouchSlop
         private var downRawX = 0f
         private var downRawY = 0f
@@ -285,6 +287,9 @@ internal object FloatUi {
                         handler?.onDragEnd()
                         return true
                     }
+                    // 非拖动抬起=空白点按：把按下坐标交给宿主（服务层用它做
+                    // 双击第二击落在菜单窗内时的转发仲裁），随后照常走 click。
+                    onBlankTap?.invoke(downRawX, downRawY)
                 }
             }
             return super.onTouchEvent(ev)
@@ -375,6 +380,7 @@ internal object FloatUi {
         val index: Int,
         var dirX: Float = 0f,
         var dirY: Float = 0f,
+        var pendingExpand: Runnable? = null,
     )
 
     /** 扇形菜单句柄：root 进窗口；[place] 按球心位置重算子球布局与窗口坐标。 */
@@ -401,6 +407,11 @@ internal object FloatUi {
         /** 接线整体拖动回调（服务层平移主球窗口+本菜单跟随）。 */
         fun setDragHandler(handler: FanDragHandler?) {
             (root as? FanDragLayout)?.handler = handler
+        }
+
+        /** 接线空白点按回调（参数=按下坐标；服务层用于双击转发仲裁）。 */
+        fun setBlankTapListener(l: ((Float, Float) -> Unit)?) {
+            (root as? FanDragLayout)?.onBlankTap = l
         }
 
         /**
@@ -456,40 +467,54 @@ internal object FloatUi {
             return tilt
         }
 
-        /** 子球从球心错峰回弹弹出。 */
+        /** 子球从球心错峰回弹弹出；错峰 Runnable 登记在册，收起时可撤销。 */
         fun expand() {
             expanded = true
             val overshoot = android.view.animation.OvershootInterpolator(0.9f)
             children.forEach { child ->
-                child.view.postDelayed(
-                    {
-                        child.view.animate()
-                            .translationX(0f)
-                            .translationY(0f)
-                            .scaleX(1f)
-                            .scaleY(1f)
-                            .alpha(1f)
-                            .setInterpolator(overshoot)
-                            .setDuration(FAN_ANIM_MS)
-                            .start()
-                    },
-                    child.index * FAN_STAGGER_MS,
-                )
+                val runnable = Runnable {
+                    child.pendingExpand = null
+                    child.view.animate()
+                        .translationX(0f)
+                        .translationY(0f)
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .alpha(1f)
+                        .setInterpolator(overshoot)
+                        .setDuration(FAN_ANIM_MS)
+                        .start()
+                }
+                child.pendingExpand = runnable
+                child.view.postDelayed(runnable, child.index * FAN_STAGGER_MS)
             }
         }
 
-        /** 子球缩回球心（服务层随后移除窗口）。 */
-        fun collapse() {
+        /**
+         * 子球缩回球心；[onEnd] 在收起动画结束后回调（服务层随即摘窗，
+         * 替代估时 postDelayed）。先撤销尚未起跳的错峰弹出 Runnable，
+         * 防止「点开即点空」时残留 Runnable 把已收的子球又弹回去。
+         */
+        fun collapse(onEnd: (() -> Unit)? = null) {
             expanded = false
             children.forEach { child ->
-                child.view.animate()
+                child.pendingExpand?.let(child.view::removeCallbacks)
+                child.pendingExpand = null
+            }
+            val last = children.lastOrNull()
+            if (last == null) {
+                onEnd?.invoke()
+                return
+            }
+            children.forEach { child ->
+                val anim = child.view.animate()
                     .translationX(-child.dirX * orbit)
                     .translationY(-child.dirY * orbit)
                     .scaleX(0.6f)
                     .scaleY(0.6f)
                     .alpha(0f)
                     .setDuration(FAN_ANIM_MS)
-                    .start()
+                if (child === last && onEnd != null) anim.withEndAction(onEnd)
+                anim.start()
             }
         }
     }
