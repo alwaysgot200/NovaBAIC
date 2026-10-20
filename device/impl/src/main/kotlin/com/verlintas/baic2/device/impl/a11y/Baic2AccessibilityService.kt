@@ -24,12 +24,19 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import com.ven.assists.service.AssistsService
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 
+/**
+ * 本应用唯一无障碍服务。R1 集成起继承 assists 的 [AssistsService]（D2 方案甲，
+ * 一行级 [upstream-touch]）：super 调用自动完成 AssistsCore 全局实例注册与
+ * listeners 分发；Manifest 组件名、服务配置 xml、[bridge] 接线全部不变，
+ * 系统无障碍设置里仍只有一个开关。
+ */
 @AndroidEntryPoint
-class Baic2AccessibilityService : AccessibilityService() {
+class Baic2AccessibilityService : AssistsService() {
 
     @Inject
     lateinit var bridge: AndroidAccessibilityBridge
@@ -39,9 +46,9 @@ class Baic2AccessibilityService : AccessibilityService() {
         bridge.attach(this)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
-
-    override fun onInterrupt() = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        super.onAccessibilityEvent(event)
+    }
 
     override fun onDestroy() {
         bridge.detach(this)

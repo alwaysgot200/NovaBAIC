@@ -58,6 +58,12 @@ android {
             ?: 302
         versionName = providers.gradleProperty("baic.versionName").orNull
             ?: "0.3.2"
+
+        // assists-opcv 传递的 OpenCV 4.9 AAR 含 4 ABI 原生库；debug 保留 x86_64
+        // 供模拟器冒烟，release 收敛双 ABI 控体积（方案 §21.1 / 项目铁律 ABI 基线）。
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     signingConfigs {
@@ -85,6 +91,11 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // release 收敛双 ABI（模拟器不跑 release）
+            ndk {
+                abiFilters.clear()
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            }
             val releaseSigning = signingConfigs.getByName("release")
             if (releaseSigning.storeFile != null) {
                 signingConfig = releaseSigning
@@ -128,6 +139,10 @@ dependencies {
     implementation(project(":feature:library"))
     implementation(project(":device:api"))
     implementation(project(":device:impl"))
+
+    // assists RPA 基座：opcv 传递 mp（录屏帧源）与 base（AssistsCore/服务合体）；
+    // log/ime/web/assistsx 仅存档于 vendor/assists submodule，不引入编译
+    implementation(libs.assists.opcv)
     implementation(project(":tools"))
     implementation(project(":mcp"))
     implementation(project(":eval"))

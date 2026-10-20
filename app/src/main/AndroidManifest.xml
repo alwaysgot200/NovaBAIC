@@ -32,6 +32,10 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <!-- M2-a 起草档：通知监听（BIND 由系统授予，非运行时权限） -->
+    <!-- assists 合并治理（R1）：移除 assists-base 带入的联系人写权限，本应用无此用途 -->
+    <uses-permission
+        android:name="android.permission.WRITE_CONTACTS"
+        tools:node="remove" />
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />

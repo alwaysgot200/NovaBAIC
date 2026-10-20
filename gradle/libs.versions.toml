@@ -24,6 +24,8 @@ shizuku = "13.1.5"
 jsoup = "1.18.3"
 zxing = "3.5.3"
 snakeyaml = "2.3"
+# assists RPA 基座（vendor/assists submodule 固定 3.5.9 tag，与 AAR 版本对应）
+assists = "3.5.9"
 
 # Test
 junit = "4.13.2"
@@ -74,6 +76,11 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+
+# assists RPA 基座（opcv 传递依赖 mp 与 base；log/ime/web/assistsx 不引入编译）
+assists-base = { group = "io.github.ven-coder", name = "assists-base", version.ref = "assists" }
+assists-opcv = { group = "io.github.ven-coder", name = "assists-opcv", version.ref = "assists" }
+assists-mp = { group = "io.github.ven-coder", name = "assists-mp", version.ref = "assists" }
 
 # Test
 junit = { group = "junit", name = "junit", version.ref = "junit" }

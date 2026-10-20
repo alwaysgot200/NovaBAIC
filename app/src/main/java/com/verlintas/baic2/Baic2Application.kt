@@ -23,6 +23,8 @@ import android.app.Application
 import com.verlintas.baic2.core.data.repository.RunRepository
 import com.verlintas.baic2.mcp.McpManager
 import com.verlintas.baic2.tools.automation.AutomationBootstrap
+import com.ven.assists.AssistsCore
+import com.ven.assists.opcv.OpencvWrapper
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -46,6 +48,10 @@ class Baic2Application : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // assists RPA 基座（R1）：Core 注册应用上下文；OpenCV 异步加载本地库，
+        // 首次找图前预热。二者失败不阻断主流程。
+        runCatching { AssistsCore.init(this) }
+        runCatching { OpencvWrapper.init() }
         runCatching { automationBootstrap.start() }
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { devAgentSeeder.seedIfNeeded() }

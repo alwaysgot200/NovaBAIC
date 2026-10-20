@@ -42,6 +42,9 @@ dependencies {
     api(project(":device:api"))
     api(project(":core:model"))
 
+    // D2 方案甲：Baic2AccessibilityService 继承 AssistsService 需要编译期可见
+    api(libs.assists.base)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.mlkit.text.recognition.chinese)
