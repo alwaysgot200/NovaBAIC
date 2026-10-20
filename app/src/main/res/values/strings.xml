@@ -739,6 +739,12 @@
     <string name="float_escalation_handoff_text_plain">%1$s</string>
     <string name="float_escalation_goal_title">%1$s 传来达成信号</string>
     <string name="float_escalation_goal_text">%1$s</string>
+    <string name="float_privacy_channel">老参谋隐私知会</string>
+    <string name="float_privacy_bypass_title">%1$s 话题已绕行</string>
+    <string name="float_privacy_bypass_text">对方问到【%1$s】：%2$s 已继续聊天但未正面回答，点击查看回合与台账。</string>
+    <string name="float_persona_privacy_policy">隐私策略</string>
+    <string name="float_persona_privacy_policy_handoff">交给主人回复</string>
+    <string name="float_persona_privacy_policy_bypass">绕行并汇报</string>
     <string name="float_settings_escalation_section">接管与达成通报</string>
     <string name="float_settings_escalation">需要接管/目标达成时通知主人</string>
     <string name="float_settings_escalation_hint">对方提出只有你能回答的事（日程、索要物品、决策），或目标达成（约见、成交）时，铃声通知提醒你亲自处理；只通报不代答，随后自动发送暂停等你回来</string>

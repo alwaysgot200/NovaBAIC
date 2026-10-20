@@ -64,7 +64,10 @@ import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.data.ENGAGEMENT_MUTE
 import com.verlintas.baic2.floatball.advisor.data.ENGAGEMENT_PROACTIVE
 import com.verlintas.baic2.floatball.advisor.data.ENGAGEMENT_REACTIVE
+import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_BYPASS
+import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_HANDOFF
 import com.verlintas.baic2.floatball.advisor.data.SelfPersonaEntity
+import com.verlintas.baic2.floatball.advisor.data.normalizePrivacyPolicy
 import kotlinx.coroutines.launch
 
 /**
@@ -72,7 +75,8 @@ import kotlinx.coroutines.launch
  * §2.4/§2.5/§2.6/§4.1）：对方风格三标签（identity/chatStyle/closeness 手动芯片，
  * 落库存展示词表原词，与 V-C 萃取共用同一词汇口径）+ 我方关系侧面 facet
  * （增删/从全局库选/自输，pending 差异标签核阅转正或丢弃）+ 维持度三档 +
- * isGroup 开关 + 手动合并入口（选候选 → 选主档案，跨包名同人才合并）。
+ * 隐私策略两档（F1，handoff=交主人/bypass=绕行并汇报）+ isGroup 开关 +
+ * 手动合并入口（选候选 → 选主档案，跨包名同人才合并）。
  *
  * 独立成文件而非内嵌 GoalTab：既有大文件只做一行挂载，保持追加式 diff；
  * 编辑去重逻辑在 [FacetEditor]（纯函数，有单测）；写路径全部经
@@ -267,6 +271,26 @@ internal fun AdvisorPersonaCard(
                         scope.launch { contacts.setEngagement(contactId, ENGAGEMENT_MUTE) }
                     },
                     label = { Text(stringResource(R.string.float_persona_engagement_mute)) },
+                )
+            }
+
+            // ── 隐私策略（F1，隐私闸门方案 §3.2）：问到我方隐私时交主人还是绕行 ──
+            SectionLabel(stringResource(R.string.float_persona_privacy_policy))
+            val privacyPolicy = normalizePrivacyPolicy(profile?.privacyPolicy)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = privacyPolicy == PRIVACY_POLICY_HANDOFF,
+                    onClick = {
+                        scope.launch { contacts.setPrivacyPolicy(contactId, PRIVACY_POLICY_HANDOFF) }
+                    },
+                    label = { Text(stringResource(R.string.float_persona_privacy_policy_handoff)) },
+                )
+                FilterChip(
+                    selected = privacyPolicy == PRIVACY_POLICY_BYPASS,
+                    onClick = {
+                        scope.launch { contacts.setPrivacyPolicy(contactId, PRIVACY_POLICY_BYPASS) }
+                    },
+                    label = { Text(stringResource(R.string.float_persona_privacy_policy_bypass)) },
                 )
             }
 

@@ -30,6 +30,7 @@ import com.verlintas.baic2.floatball.advisor.data.MIGRATION_6_7
 import com.verlintas.baic2.floatball.advisor.data.MIGRATION_7_8
 import com.verlintas.baic2.floatball.advisor.data.MIGRATION_8_9
 import com.verlintas.baic2.floatball.advisor.data.MIGRATION_9_10
+import com.verlintas.baic2.floatball.advisor.data.MIGRATION_10_11
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -50,6 +51,6 @@ object AdvisorModule {
         Room.databaseBuilder(context, AdvisorDatabase::class.java, "advisor.db")
             // 版本迁移必须显式声明：画像/绑定是用户数据，禁止任何静默清库兜底。
             // 漏写迁移应在开发期直接崩溃暴露，而不是上线后删用户数据。
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
             .build()
 }

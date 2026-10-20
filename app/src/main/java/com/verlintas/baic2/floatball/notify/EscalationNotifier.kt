@@ -39,9 +39,11 @@ import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.DirectorLogEntity
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_HANDOFF
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_NOOP
+import com.verlintas.baic2.floatball.advisor.data.ROUTE_REPLY
 import com.verlintas.baic2.floatball.advisor.data.TRIGGER_INCOMING
 import com.verlintas.baic2.floatball.director.DirectorRoutes
 import com.verlintas.baic2.floatball.director.HandoffCategory
+import com.verlintas.baic2.floatball.experts.privacy.PrivacyDomain
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -78,6 +80,7 @@ class EscalationNotifier @Inject constructor(
     /** 进程内节流：contactId → 最近一次通报时间。 */
     private val lastHandoffAt = HashMap<Long, Long>()
     private val lastGoalHitAt = HashMap<Long, Long>()
+    private val lastPrivacyAt = HashMap<Long, Long>()
 
     fun isAwaitingHuman(contactId: Long): Boolean = _awaitingHuman.value.contains(contactId)
 
@@ -144,6 +147,40 @@ class EscalationNotifier @Inject constructor(
     }.getOrDefault(false)
 
     /**
+     * F1 隐私绕行轻通报（隐私闸门方案 §3.4 bypass 档）：对方问到隐私、联系人
+     * 策略为 bypass——LLM 继续聊但回避该域，本方法只「汇报主人」：静音通知
+     * （IMPORTANCE_DEFAULT 渠道、无铃声、无全屏意图），主人在忙不被打断，
+     * 回头看通知即可；不挂 await-human（AI 正常回答中）。点击同样拉起分屏
+     * 定位到该会话，方便主人查看绕行回复与台账。
+     *
+     * 渠道说明：方案写「同渠道」，但通知渠道的重要性在创建后不可降级——
+     * 复用铃声渠道必响铃。故建独立静音渠道 floatball_privacy（同级入口、
+     * 同 service action、同节流口径），语义等价且不惊扰。
+     */
+    suspend fun notifyPrivacyBypass(
+        contact: ContactRef,
+        conversationId: Long,
+        incoming: String,
+        domain: PrivacyDomain,
+    ): Boolean = runCatching {
+        val now = System.currentTimeMillis()
+        synchronized(lastPrivacyAt) {
+            lastPrivacyAt[contact.contactId]?.let { last ->
+                if (now - last < THROTTLE_MS) return@runCatching false
+            }
+            lastPrivacyAt[contact.contactId] = now
+        }
+        // 台账：route=reply + reason=privacy_bypass_<域码>（周报对账 startsWith 聚合）。
+        logLedger(
+            contact.contactId, conversationId, ROUTE_REPLY,
+            REASON_PRIVACY_BYPASS + "_" + domain.code,
+        )
+        val title = context.getString(R.string.float_privacy_bypass_title, contact.displayName)
+        val body = context.getString(R.string.float_privacy_bypass_text, domain.label, incoming)
+        postLight(contact, conversationId, title, body)
+    }.getOrDefault(false)
+
+    /**
      * 高优铃声通知：floatball_escalation 渠道（IMPORTANCE_HIGH + 默认通知声 +
      * 震动 + CATEGORY_ALARM），锁屏全屏横幅（USE_FULL_SCREEN_INTENT，普通权限）。
      * 点击经 service action 拉起分屏到该会话（**不带代拟条**——接管场景不把
@@ -204,6 +241,55 @@ class EscalationNotifier @Inject constructor(
         return NotifyGate.notifyIfPermitted(context, notificationIdFor(contact.contactId), builder.build())
     }
 
+    /**
+     * F1 静音轻通报：floatball_privacy 渠道（IMPORTANCE_DEFAULT、无声无震动）、
+     * 无全屏意图、无 await-human——「汇报」语义只是知会，不打断主人。点击
+     * 同铃声通道：service action 拉起分屏定位到该会话。
+     */
+    private suspend fun postLight(
+        contact: ContactRef,
+        conversationId: Long,
+        title: String,
+        body: String,
+    ): Boolean {
+        val manager = NotificationManagerCompat.from(context)
+        if (!manager.areNotificationsEnabled()) return false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    PRIVACY_CHANNEL_ID,
+                    context.getString(R.string.float_privacy_channel),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    enableVibration(false)
+                    setSound(null, null)
+                },
+            )
+        }
+        val imPackage = contactRepository.profile(contact.contactId)?.imPackage.orEmpty()
+        val contentIntent = PendingIntent.getForegroundService(
+            context,
+            requestCodeFor(contact.contactId),
+            Intent(context, FloatBallService::class.java)
+                .setAction(ACTION_SHOW_ESCALATION)
+                .putExtra(EXTRA_CONVERSATION_ID, conversationId)
+                .putExtra(EXTRA_CONTACT_ID, contact.contactId)
+                .putExtra(EXTRA_CONTACT_NAME, contact.displayName)
+                .putExtra(EXTRA_IM_PACKAGE, imPackage),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = NotificationCompat.Builder(context, PRIVACY_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+        return NotifyGate.notifyIfPermitted(context, privacyNotificationIdFor(contact.contactId), builder.build())
+    }
+
     /** 通报事件台账行（旁路：route=handoff/noop + reason 事件键，回放可见）。 */
     private suspend fun logLedger(contactId: Long, conversationId: Long, route: String, reason: String) {
         runCatching {
@@ -229,9 +315,18 @@ class EscalationNotifier @Inject constructor(
         /** 通报渠道：与起草渠道（floatball_draft）分开，铃声/震动独立可调。 */
         const val CHANNEL_ID = "floatball_escalation"
 
+        /** F1 隐私绕行轻通报渠道：静音（IMPORTANCE_DEFAULT），与铃声渠道分开。 */
+        const val PRIVACY_CHANNEL_ID = "floatball_privacy"
+
+        /** F1 隐私绕行台账 reason 键前缀（周报对账 startsWith 聚合域分布）。 */
+        const val REASON_PRIVACY_BYPASS = "privacy_bypass"
+
         /** 通知 id 派生基座：与起草通道 2_000_000 不撞。 */
         private const val NOTIFICATION_ID_BASE = 2_100_000L
         private const val REQUEST_CODE_BASE = 2_100_000L
+
+        /** F1 轻通报通知 id 基座：与铃声通道 2_100_000 不撞。 */
+        private const val PRIVACY_NOTIFICATION_ID_BASE = 2_200_000L
 
         /** 同联系人通报节流窗。 */
         private const val THROTTLE_MS = 30 * 60_000L
@@ -248,5 +343,9 @@ class EscalationNotifier @Inject constructor(
         const val EXTRA_IM_PACKAGE = "escalation_im_package"
 
         fun notificationIdFor(contactId: Long): Int = (NOTIFICATION_ID_BASE + contactId).toInt()
+
+        /** F1 轻通报通知 id（同联系人可与铃声通报并存，互不覆盖）。 */
+        fun privacyNotificationIdFor(contactId: Long): Int =
+            (PRIVACY_NOTIFICATION_ID_BASE + contactId).toInt()
     }
 }

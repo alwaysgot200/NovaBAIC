@@ -56,6 +56,8 @@ import com.verlintas.baic2.floatball.advisor.data.HORIZON_L2
 import com.verlintas.baic2.floatball.advisor.data.MISSION_IGNORED
 import com.verlintas.baic2.floatball.advisor.data.MISSION_INFORMATIONAL
 import com.verlintas.baic2.floatball.advisor.data.MISSION_PENDING
+import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_BYPASS
+import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_HANDOFF
 import com.verlintas.baic2.floatball.advisor.data.SCENE_CHAT
 import com.verlintas.baic2.floatball.advisor.data.SCENE_NON_CHAT
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_BRANCH
@@ -83,13 +85,13 @@ import com.verlintas.baic2.floatball.director.GateReasons
 import com.verlintas.baic2.floatball.director.GateRejection
 import com.verlintas.baic2.floatball.director.GateRules
 import com.verlintas.baic2.floatball.director.Gatekeeper
-import com.verlintas.baic2.floatball.director.GoalHitRules
 import com.verlintas.baic2.floatball.director.HandoffCategory
-import com.verlintas.baic2.floatball.director.HandoffGate
-import com.verlintas.baic2.floatball.director.HandoffRules
 import com.verlintas.baic2.floatball.director.TopicEngine
 import com.verlintas.baic2.floatball.director.TopicEngineStore
 import com.verlintas.baic2.floatball.director.WarmChatPrompt
+import com.verlintas.baic2.floatball.experts.ExpertPanel
+import com.verlintas.baic2.floatball.experts.privacy.PrivacyAssets
+import com.verlintas.baic2.floatball.experts.privacy.PrivacyDomain
 import com.verlintas.baic2.floatball.notify.EscalationNotifier
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -144,6 +146,7 @@ class ScreenAdvisor @Inject constructor(
     private val prefs: AdvisorPrefs,
     private val keepAlivePrefs: KeepAlivePrefs,
     private val contactDirectory: ContactDirectory,
+    private val contactRepository: com.verlintas.baic2.floatball.advisor.ContactRepository,
     private val historyGateway: ContactHistoryGateway,
     private val memoryReader: ContactMemoryReader,
     private val stitcher: MultiScreenStitcher,
@@ -160,7 +163,7 @@ class ScreenAdvisor @Inject constructor(
     private val director: Director,
     private val topicEngineStore: TopicEngineStore,
     private val gatekeeper: Gatekeeper,
-    private val handoffGate: HandoffGate,
+    private val expertPanel: ExpertPanel,
     private val escalationNotifier: EscalationNotifier,
 ) {
 
@@ -1398,9 +1401,10 @@ class ScreenAdvisor @Inject constructor(
         // 「来点闲聊」入口记 SMALL_TALK（manual_smalltalk_entry，方案 §10）。
         // 未绑定联系人时 Director 内部只决策不落库。
         //
-        // 接管/达成通报判定（2026-10-20 通报方案 §2/§3）：仅 INCOMING 回路且绑定
-        // 联系人才判——手动回合人已在场，无需通报。判定（轻 LLM ≤8s）先于路由，
-        // 结论经 DirectorInput.isHandoff 进路由表；命中即通报+挂起自动发送。
+        // 接管/达成/隐私通报判定（2026-10-20 通报方案 §2/§3 + 隐私闸门方案 §3.3）：
+        // 仅 INCOMING 回路且绑定联系人才判——手动回合人已在场，无需通报。判定
+        // （专家合议团，共享一次轻 LLM ≤8s）先于路由，结论经 DirectorInput.isHandoff
+        // 进路由表；接管命中即铃声通报+挂起自动发送，bypass 命中即绕行+轻通报。
         var isHandoff = false
         var handoffAvoid: String? = null
         var escalationOutcome = EscalationOutcome()
@@ -1430,6 +1434,16 @@ class ScreenAdvisor @Inject constructor(
                 incoming = escalationOutcome.incoming,
                 category = escalationOutcome.category,
             )
+        } else if (contact != null && escalationOutcome.privacyBypass != null) {
+            // F1 bypass 档：LLM 照常回答（回避段已注入），只静音知会主人。
+            runCatching {
+                escalationNotifier.notifyPrivacyBypass(
+                    contact = contact,
+                    conversationId = conversationId,
+                    incoming = escalationOutcome.incoming,
+                    domain = escalationOutcome.privacyBypass,
+                )
+            }
         }
         _transcript.update { it.copy(status = Status.Thinking) }
         turnMutex.withLock {
@@ -1444,12 +1458,19 @@ class ScreenAdvisor @Inject constructor(
         val incoming: String = "",
         /** 非接管但 uncertain 时挂进 system prompt 的生成端回避约束（宽松档）。 */
         val avoidSection: String? = null,
+        /**
+         * F1 bypass 档隐私命中（隐私闸门方案 §3.4）：LLM 继续聊但回避该域
+         * （avoidSection=域定制回避段），同时轻通报主人；null = 无 bypass 命中。
+         */
+        val privacyBypass: PrivacyDomain? = null,
     )
 
     /**
-     * 接管/达成通报判定（2026-10-20 通报方案 §2.2/§3.1）：读最新来信 →
-     * 白名单快筛 → 强模式直判（省 LLM）→ 轻 LLM 分类兜底 → 词表合并。
-     * 旁路纪律：任何失败静默降级为不接管，绝不阻断回合。
+     * 接管/达成/隐私通报判定（2026-10-20 通报方案 §2.2/§3.1 + 隐私闸门方案 §3.3）：
+     * 读最新来信 → 专家合议团一次裁决（白名单快筛 → 强模式直判 → 共享分类器
+     * → 多专家合并）。本方法只做编排与消费：接管与 strict-uncertain 转 E1 链、
+     * 隐私按联系人策略分流（handoff 档并入接管链 / bypass 档绕行+轻通报）、
+     * 达成快通道照旧。旁路纪律：合议团意外失败静默降级为不接管，绝不阻断回合。
      */
     private suspend fun judgeEscalation(conversationId: Long, contact: ContactRef): EscalationOutcome {
         if (!prefs.state.value.escalationEnabled) return EscalationOutcome()
@@ -1461,32 +1482,48 @@ class ScreenAdvisor @Inject constructor(
         val incoming = IncomingCue.latestIncoming(stripScreenLabel(question))
             ?.takeIf { it.isNotBlank() }
             ?: return EscalationOutcome()
-        // G 达成快通道（§3.1）：对方明示同意/敲定，当回合立即通报（与 H 互斥——
-        // 接管与达成同时命中时接管优先，主人在场比庆祝更重要）。
-        if (!HandoffRules.whitelistHit(incoming)) {
-            val strong = HandoffRules.strongHit(incoming)
-            val llmHandoff = strong?.let { true } ?: handoffGate.classify(incoming)
-            val judgment = HandoffRules.judge(incoming, llmHandoff)
-            if (judgment.handoff) {
+        val review = runCatching { expertPanel.reviewIncoming(incoming) }
+            .getOrElse { return EscalationOutcome() }
+        // 接管命中：走 E1 接管链（铃声通报 + await-human 挂起 + 抑制 AI 草稿）。
+        if (review.handoff.handoff) {
+            return EscalationOutcome(
+                isHandoff = true,
+                category = review.handoff.category,
+                incoming = incoming,
+            )
+        }
+        if (review.handoff.uncertain) {
+            // 严格档：uncertain 也视同接管转通报（宁严勿松，方案 §十.1）；
+            // 宽松档（默认）：放行正常回答，仅挂生成端回避约束。
+            return if (prefs.state.value.escalationStrict) {
+                EscalationOutcome(isHandoff = true, category = null, incoming = incoming)
+            } else {
+                EscalationOutcome(incoming = incoming, avoidSection = HANDOFF_AVOID_SECTION)
+            }
+        }
+        // F1 隐私闸门：按联系人策略分流（默认 handoff 交主人；bypass 绕行+轻通报）。
+        if (review.privacy.hit && review.privacy.domain != null) {
+            val domain = review.privacy.domain
+            val policy = runCatching { contactRepository.privacyPolicy(contact.contactId) }
+                .getOrNull() ?: PRIVACY_POLICY_HANDOFF
+            if (policy == PRIVACY_POLICY_BYPASS) {
                 return EscalationOutcome(
-                    isHandoff = true,
-                    category = judgment.category,
                     incoming = incoming,
+                    avoidSection = PrivacyAssets.avoidSection(domain),
+                    privacyBypass = domain,
                 )
             }
-            if (judgment.uncertain) {
-                // 严格档：uncertain 也视同接管转通报（宁严勿松，方案 §十.1）；
-                // 宽松档（默认）：放行正常回答，仅挂生成端回避约束。
-                return if (prefs.state.value.escalationStrict) {
-                    EscalationOutcome(isHandoff = true, category = null, incoming = incoming)
-                } else {
-                    EscalationOutcome(incoming = incoming, avoidSection = HANDOFF_AVOID_SECTION)
-                }
-            }
-            if (GoalHitRules.hit(incoming)) {
-                runCatching {
-                    escalationNotifier.notifyGoalHit(contact, conversationId, incoming)
-                }
+            // handoff 档（默认）：接管链照走，类别=私人事实。
+            return EscalationOutcome(
+                isHandoff = true,
+                category = HandoffCategory.PRIVACY,
+                incoming = incoming,
+            )
+        }
+        // G 达成快通道（§3.1）：对方明示同意/敲定，当回合立即通报。
+        if (review.goalHit) {
+            runCatching {
+                escalationNotifier.notifyGoalHit(contact, conversationId, incoming)
             }
         }
         return EscalationOutcome()

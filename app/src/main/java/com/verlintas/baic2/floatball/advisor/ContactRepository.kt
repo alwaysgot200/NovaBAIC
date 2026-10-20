@@ -34,6 +34,7 @@ import com.verlintas.baic2.floatball.advisor.data.MergeRecordEntity
 import com.verlintas.baic2.floatball.advisor.data.SelfPersonaEntity
 import com.verlintas.baic2.floatball.advisor.data.PersonaFieldEntity
 import com.verlintas.baic2.floatball.advisor.data.SessionBindingEntity
+import com.verlintas.baic2.floatball.advisor.data.normalizePrivacyPolicy
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.Serializable
@@ -301,6 +302,16 @@ class ContactRepository @Inject constructor(
     suspend fun setEngagement(contactId: Long, engagement: String) {
         val now = System.currentTimeMillis()
         db.contactProfileDao().setEngagement(contactId, EngagementRules.normalize(engagement), now)
+    }
+
+    /** 隐私策略读（F1）：空/未知值归一 handoff（交主人，宁严勿松）。 */
+    suspend fun privacyPolicy(contactId: Long): String =
+        normalizePrivacyPolicy(db.contactProfileDao().findById(contactId)?.privacyPolicy)
+
+    /** 隐私策略设置（画像页开关，F1）：handoff/bypass。 */
+    suspend fun setPrivacyPolicy(contactId: Long, policy: String) {
+        val now = System.currentTimeMillis()
+        db.contactProfileDao().setPrivacyPolicy(contactId, normalizePrivacyPolicy(policy), now)
     }
 
     /** isGroup 手动切换（误判修正）：与 contactType=group 同步写，保持两列同义。 */

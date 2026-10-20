@@ -87,6 +87,10 @@ interface ContactProfileDao {
     /** 维持度三档设置（v10，方案 §2.6）：画像页三态开关的第一手自动参与开关。 */
     @Query("UPDATE contact_profiles SET engagement = :engagement, updatedAt = :now WHERE id = :id")
     suspend fun setEngagement(id: Long, engagement: String, now: Long)
+
+    /** 隐私策略两档设置（v11，隐私闸门方案 §3.2）：画像页 handoff/bypass 切换。 */
+    @Query("UPDATE contact_profiles SET privacyPolicy = :policy, updatedAt = :now WHERE id = :id")
+    suspend fun setPrivacyPolicy(id: Long, policy: String, now: Long)
 }
 
 /** 说话风格卡（v4）：全局卡 (my_default,0) 与按人卡 (contact,contactId) 各至多一行。 */

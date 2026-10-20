@@ -55,7 +55,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SelfPersonaEntity::class,
         TopicPlanEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -519,6 +519,21 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         db.execSQL(
             "CREATE UNIQUE INDEX IF NOT EXISTS `index_topic_plans_contactId_cycleStart` " +
                 "ON `topic_plans` (`contactId`, `cycleStart`)",
+        )
+    }
+}
+
+/**
+ * v10 → v11（隐私闸门与事实记忆方案 F1，方案 §3.2）：contact_profiles 加
+ * privacyPolicy 列（联系人级隐私策略，TEXT NOT NULL DEFAULT 'handoff'）。
+ * ensureColumn 幂等补列，历史行默认 handoff（交主人，宁严勿松），不搬不删
+ * 任何既有数据；contact_facts 表留 F2 迁移。
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        ensureColumn(
+            db, "contact_profiles", "privacyPolicy",
+            "privacyPolicy TEXT NOT NULL DEFAULT 'handoff'",
         )
     }
 }

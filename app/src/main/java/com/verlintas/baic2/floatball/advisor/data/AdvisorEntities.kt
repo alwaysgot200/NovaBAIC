@@ -37,6 +37,17 @@ const val ENGAGEMENT_PROACTIVE = "proactive"
 const val ENGAGEMENT_REACTIVE = "reactive"
 const val ENGAGEMENT_MUTE = "mute"
 
+/** 联系人级隐私策略两档（F1，2026-10-20 隐私闸门方案 §3.2）。 */
+const val PRIVACY_POLICY_HANDOFF = "handoff"
+const val PRIVACY_POLICY_BYPASS = "bypass"
+
+/**
+ * 隐私策略归一：仅显式配置的 bypass 生效，其余（含 null/历史脏值）一律归
+ * handoff——默认交主人，宁严勿松。
+ */
+fun normalizePrivacyPolicy(policy: String?): String =
+    if (policy == PRIVACY_POLICY_BYPASS) PRIVACY_POLICY_BYPASS else PRIVACY_POLICY_HANDOFF
+
 /** 会话归属场景（v10，方案 §1）：session_bindings.scene；NON_CHAT 会话零人设管线。 */
 const val SCENE_CHAT = "chat"
 const val SCENE_NON_CHAT = "non_chat"
@@ -82,6 +93,13 @@ data class ContactProfileEntity(
      */
     @ColumnInfo(defaultValue = "reactive")
     val engagement: String = ENGAGEMENT_REACTIVE,
+    /**
+     * 联系人级隐私策略（v11，隐私闸门方案 §3.2）：handoff=问到隐私走接管链
+     * 交主人回复（默认）；bypass=继续聊天但回避该域并轻通报主人。域判定由
+     * 隐私专员（experts/privacy）完成，本列只决定处置档。
+     */
+    @ColumnInfo(defaultValue = PRIVACY_POLICY_HANDOFF)
+    val privacyPolicy: String = PRIVACY_POLICY_HANDOFF,
     /** 对方身份类型（v10，方案 §4.1）：领导/客户/同事/朋友/家人/暧昧对象/其他；空 = 待萃取。 */
     val identity: String? = null,
     /** 对方聊天风格（v10，方案 §4.1）：严肃/随和/幽默/热情/冷淡；空 = 待萃取。 */

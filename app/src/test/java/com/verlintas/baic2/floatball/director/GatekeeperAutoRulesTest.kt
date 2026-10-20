@@ -161,8 +161,11 @@ class GatekeeperAutoRulesTest {
     }
 
     @Test
-    fun autoForbiddenItems_threeEntries() {
-        assertEquals(3, GateRules.AUTO_FORBIDDEN_ITEMS.size)
+    fun autoForbiddenItems_fourEntries() {
+        // F1 追加第 4 条（隐私闸门方案 §3.4 自问自答防线）：主动保温/自动档
+        // 不主动掏机主隐私。
+        assertEquals(4, GateRules.AUTO_FORBIDDEN_ITEMS.size)
         assertTrue(GateRules.AUTO_FORBIDDEN_ITEMS.any { it.contains("不代用户做决定") })
+        assertTrue(GateRules.AUTO_FORBIDDEN_ITEMS.any { it.contains("机主隐私") })
     }
 }
