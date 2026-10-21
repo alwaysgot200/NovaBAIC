@@ -1,0 +1,575 @@
+Starting a Gradle Daemon, 8 stopped Daemons could not be reused, use --status for details
+> Task :mcp:preBuild UP-TO-DATE
+> Task :core:engine:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:model:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:network:preBuild UP-TO-DATE
+> Task :eval:preBuild UP-TO-DATE
+> Task :device:impl:preBuild UP-TO-DATE
+> Task :core:data:preBuild UP-TO-DATE
+> Task :device:api:preBuild UP-TO-DATE
+> Task :tools:preBuild UP-TO-DATE
+> Task :core:designsystem:preBuild UP-TO-DATE
+> Task :device:impl:preDebugBuild UP-TO-DATE
+> Task :core:runtime:preBuild UP-TO-DATE
+> Task :app:preBuild UP-TO-DATE
+> Task :tools:preDebugBuild UP-TO-DATE
+> Task :core:network:preDebugBuild UP-TO-DATE
+> Task :core:data:preDebugBuild UP-TO-DATE
+> Task :eval:preDebugBuild UP-TO-DATE
+> Task :core:designsystem:preDebugBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :device:api:preDebugBuild UP-TO-DATE
+> Task :core:runtime:preDebugBuild UP-TO-DATE
+> Task :mcp:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :core:engine:processResources NO-SOURCE
+> Task :feature:agents:preBuild UP-TO-DATE
+> Task :feature:agents:preDebugBuild UP-TO-DATE
+> Task :tools:processDebugNavigationResources UP-TO-DATE
+> Task :feature:chat:preBuild UP-TO-DATE
+> Task :feature:chat:preDebugBuild UP-TO-DATE
+> Task :core:network:processDebugNavigationResources UP-TO-DATE
+> Task :core:designsystem:processDebugNavigationResources UP-TO-DATE
+> Task :mcp:processDebugNavigationResources UP-TO-DATE
+> Task :device:impl:processDebugNavigationResources UP-TO-DATE
+> Task :eval:processDebugNavigationResources UP-TO-DATE
+> Task :core:runtime:processDebugNavigationResources UP-TO-DATE
+> Task :feature:agents:processDebugNavigationResources UP-TO-DATE
+> Task :feature:library:preBuild UP-TO-DATE
+> Task :core:data:processDebugNavigationResources UP-TO-DATE
+> Task :feature:library:preDebugBuild UP-TO-DATE
+> Task :feature:conversations:preBuild UP-TO-DATE
+> Task :device:api:processDebugNavigationResources UP-TO-DATE
+> Task :feature:settings:preBuild UP-TO-DATE
+> Task :feature:settings:preDebugBuild UP-TO-DATE
+> Task :feature:conversations:preDebugBuild UP-TO-DATE
+> Task :feature:tasks:preBuild UP-TO-DATE
+> Task :feature:tasks:preDebugBuild UP-TO-DATE
+> Task :feature:chat:processDebugNavigationResources UP-TO-DATE
+> Task :feature:library:processDebugNavigationResources UP-TO-DATE
+> Task :feature:conversations:processDebugNavigationResources UP-TO-DATE
+> Task :eval:generateDebugResources UP-TO-DATE
+> Task :tools:generateDebugResources UP-TO-DATE
+> Task :core:data:generateDebugResources UP-TO-DATE
+> Task :device:api:generateDebugResources UP-TO-DATE
+> Task :feature:settings:processDebugNavigationResources UP-TO-DATE
+> Task :mcp:generateDebugResources UP-TO-DATE
+> Task :core:network:generateDebugResources UP-TO-DATE
+> Task :feature:tasks:processDebugNavigationResources UP-TO-DATE
+> Task :core:designsystem:generateDebugResources UP-TO-DATE
+> Task :core:runtime:generateDebugResources UP-TO-DATE
+> Task :feature:chat:generateDebugResources UP-TO-DATE
+> Task :device:impl:generateDebugResources UP-TO-DATE
+> Task :app:generateDebugBuildConfig FROM-CACHE
+> Task :device:api:packageDebugResources UP-TO-DATE
+> Task :core:runtime:packageDebugResources UP-TO-DATE
+> Task :core:data:packageDebugResources UP-TO-DATE
+> Task :eval:packageDebugResources UP-TO-DATE
+> Task :core:designsystem:packageDebugResources UP-TO-DATE
+> Task :core:network:packageDebugResources UP-TO-DATE
+> Task :tools:packageDebugResources UP-TO-DATE
+> Task :mcp:packageDebugResources UP-TO-DATE
+> Task :tools:parseDebugLocalResources UP-TO-DATE
+> Task :core:runtime:parseDebugLocalResources UP-TO-DATE
+> Task :core:designsystem:parseDebugLocalResources UP-TO-DATE
+> Task :eval:parseDebugLocalResources UP-TO-DATE
+> Task :core:data:parseDebugLocalResources UP-TO-DATE
+> Task :mcp:parseDebugLocalResources UP-TO-DATE
+> Task :app:generateDebugResources FROM-CACHE
+> Task :eval:generateDebugRFile UP-TO-DATE
+> Task :core:data:generateDebugRFile UP-TO-DATE
+> Task :tools:generateDebugRFile UP-TO-DATE
+> Task :core:designsystem:generateDebugRFile UP-TO-DATE
+> Task :eval:javaPreCompileDebug UP-TO-DATE
+> Task :device:impl:javaPreCompileDebug UP-TO-DATE
+> Task :core:network:parseDebugLocalResources UP-TO-DATE
+> Task :feature:conversations:generateDebugResources UP-TO-DATE
+> Task :mcp:generateDebugRFile UP-TO-DATE
+> Task :core:runtime:generateDebugRFile UP-TO-DATE
+> Task :feature:chat:javaPreCompileDebug UP-TO-DATE
+> Task :core:designsystem:javaPreCompileDebug UP-TO-DATE
+> Task :device:api:parseDebugLocalResources UP-TO-DATE
+> Task :core:runtime:javaPreCompileDebug UP-TO-DATE
+> Task :feature:agents:generateDebugResources UP-TO-DATE
+> Task :tools:javaPreCompileDebug UP-TO-DATE
+> Task :core:network:generateDebugRFile UP-TO-DATE
+> Task :feature:library:generateDebugResources UP-TO-DATE
+> Task :device:api:generateDebugRFile UP-TO-DATE
+> Task :feature:settings:generateDebugResources UP-TO-DATE
+> Task :device:api:javaPreCompileDebug UP-TO-DATE
+> Task :core:model:compileKotlin UP-TO-DATE
+> Task :feature:conversations:packageDebugResources UP-TO-DATE
+> Task :feature:tasks:generateDebugResources UP-TO-DATE
+> Task :feature:conversations:parseDebugLocalResources UP-TO-DATE
+> Task :feature:agents:packageDebugResources UP-TO-DATE
+> Task :feature:chat:packageDebugResources UP-TO-DATE
+> Task :core:model:compileJava NO-SOURCE
+> Task :mcp:javaPreCompileDebug UP-TO-DATE
+> Task :core:network:javaPreCompileDebug UP-TO-DATE
+> Task :eval:generateDebugAssets UP-TO-DATE
+> Task :mcp:generateDebugAssets UP-TO-DATE
+> Task :core:model:processResources NO-SOURCE
+> Task :core:model:classes UP-TO-DATE
+> Task :feature:agents:parseDebugLocalResources UP-TO-DATE
+> Task :feature:conversations:generateDebugRFile UP-TO-DATE
+> Task :device:impl:packageDebugResources UP-TO-DATE
+> Task :feature:library:packageDebugResources UP-TO-DATE
+> Task :core:data:javaPreCompileDebug UP-TO-DATE
+> Task :feature:settings:packageDebugResources UP-TO-DATE
+> Task :feature:chat:parseDebugLocalResources UP-TO-DATE
+> Task :tools:generateDebugAssets UP-TO-DATE
+> Task :eval:mergeDebugAssets UP-TO-DATE
+> Task :core:data:generateDebugAssets UP-TO-DATE
+> Task :mcp:mergeDebugAssets UP-TO-DATE
+> Task :core:designsystem:generateDebugAssets UP-TO-DATE
+> Task :core:data:mergeDebugAssets UP-TO-DATE
+> Task :feature:settings:parseDebugLocalResources UP-TO-DATE
+> Task :tools:mergeDebugAssets UP-TO-DATE
+> Task :core:model:jar UP-TO-DATE
+> Task :device:impl:parseDebugLocalResources UP-TO-DATE
+> Task :app:packageDebugResources FROM-CACHE
+> Task :feature:agents:generateDebugRFile UP-TO-DATE
+> Task :feature:tasks:packageDebugResources UP-TO-DATE
+> Task :feature:library:parseDebugLocalResources UP-TO-DATE
+> Task :core:designsystem:mergeDebugAssets UP-TO-DATE
+> Task :device:impl:generateDebugRFile UP-TO-DATE
+> Task :feature:chat:generateDebugRFile UP-TO-DATE
+> Task :core:runtime:generateDebugAssets UP-TO-DATE
+> Task :feature:library:generateDebugRFile UP-TO-DATE
+> Task :feature:settings:generateDebugRFile UP-TO-DATE
+> Task :core:runtime:mergeDebugAssets UP-TO-DATE
+> Task :device:impl:generateDebugAssets UP-TO-DATE
+> Task :feature:tasks:parseDebugLocalResources UP-TO-DATE
+> Task :feature:library:javaPreCompileDebug UP-TO-DATE
+> Task :feature:conversations:javaPreCompileDebug UP-TO-DATE
+> Task :feature:agents:javaPreCompileDebug UP-TO-DATE
+> Task :device:impl:mergeDebugAssets UP-TO-DATE
+> Task :feature:chat:generateDebugAssets UP-TO-DATE
+> Task :feature:conversations:generateDebugAssets UP-TO-DATE
+> Task :feature:agents:generateDebugAssets UP-TO-DATE
+> Task :feature:library:generateDebugAssets UP-TO-DATE
+> Task :feature:agents:mergeDebugAssets UP-TO-DATE
+> Task :feature:chat:mergeDebugAssets UP-TO-DATE
+> Task :feature:library:mergeDebugAssets UP-TO-DATE
+> Task :feature:conversations:mergeDebugAssets UP-TO-DATE
+> Task :eval:writeDebugAarMetadata UP-TO-DATE
+> Task :mcp:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:tasks:generateDebugRFile UP-TO-DATE
+> Task :device:impl:writeDebugAarMetadata UP-TO-DATE
+> Task :core:engine:compileKotlin UP-TO-DATE
+> Task :core:runtime:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:agents:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:chat:writeDebugAarMetadata UP-TO-DATE
+> Task :tools:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:library:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:tasks:javaPreCompileDebug UP-TO-DATE
+> Task :feature:conversations:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:tasks:generateDebugAssets UP-TO-DATE
+> Task :eval:extractDeepLinksDebug UP-TO-DATE
+> Task :mcp:extractDeepLinksDebug UP-TO-DATE
+> Task :core:engine:compileJava NO-SOURCE
+> Task :core:engine:classes UP-TO-DATE
+> Task :tools:extractDeepLinksDebug UP-TO-DATE
+> Task :feature:tasks:mergeDebugAssets UP-TO-DATE
+> Task :eval:processDebugManifest UP-TO-DATE
+> Task :mcp:processDebugManifest UP-TO-DATE
+> Task :core:engine:jar UP-TO-DATE
+> Task :core:runtime:extractDeepLinksDebug UP-TO-DATE
+> Task :feature:tasks:writeDebugAarMetadata UP-TO-DATE
+> Task :device:impl:extractDeepLinksDebug UP-TO-DATE
+> Task :feature:agents:extractDeepLinksDebug UP-TO-DATE
+> Task :tools:processDebugManifest UP-TO-DATE
+> Task :core:runtime:compileDebugKotlin NO-SOURCE
+> Task :feature:chat:extractDeepLinksDebug UP-TO-DATE
+> Task :core:runtime:compileDebugJavaWithJavac NO-SOURCE
+> Task :feature:agents:processDebugManifest UP-TO-DATE
+> Task :feature:chat:processDebugManifest UP-TO-DATE
+> Task :device:api:compileDebugKotlin UP-TO-DATE
+> Task :feature:conversations:extractDeepLinksDebug UP-TO-DATE
+> Task :feature:library:extractDeepLinksDebug UP-TO-DATE
+> Task :device:api:compileDebugJavaWithJavac NO-SOURCE
+> Task :feature:library:processDebugManifest UP-TO-DATE
+> Task :feature:conversations:processDebugManifest UP-TO-DATE
+> Task :device:api:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :eval:mapDebugSourceSetPaths UP-TO-DATE
+> Task :feature:tasks:extractDeepLinksDebug UP-TO-DATE
+> Task :device:api:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :device:api:generateDebugAssets UP-TO-DATE
+> Task :mcp:mapDebugSourceSetPaths UP-TO-DATE
+> Task :eval:compileDebugLibraryResources UP-TO-DATE
+> Task :device:api:mergeDebugAssets UP-TO-DATE
+> Task :mcp:compileDebugLibraryResources UP-TO-DATE
+> Task :tools:mapDebugSourceSetPaths UP-TO-DATE
+> Task :feature:tasks:processDebugManifest UP-TO-DATE
+> Task :feature:settings:javaPreCompileDebug UP-TO-DATE
+> Task :feature:settings:generateDebugAssets UP-TO-DATE
+> Task :feature:agents:mapDebugSourceSetPaths UP-TO-DATE
+> Task :device:api:processDebugJavaRes UP-TO-DATE
+> Task :tools:compileDebugLibraryResources UP-TO-DATE
+> Task :feature:agents:compileDebugLibraryResources UP-TO-DATE
+> Task :feature:settings:mergeDebugAssets UP-TO-DATE
+> Task :feature:conversations:mapDebugSourceSetPaths UP-TO-DATE
+> Task :feature:chat:mapDebugSourceSetPaths UP-TO-DATE
+> Task :feature:settings:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:library:mapDebugSourceSetPaths UP-TO-DATE
+> Task :device:api:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :core:runtime:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :device:impl:processDebugManifest UP-TO-DATE
+> Task :feature:chat:compileDebugLibraryResources UP-TO-DATE
+> Task :feature:settings:extractDeepLinksDebug UP-TO-DATE
+> Task :core:runtime:processDebugJavaRes NO-SOURCE
+> Task :feature:library:compileDebugLibraryResources UP-TO-DATE
+> Task :device:api:writeDebugAarMetadata UP-TO-DATE
+> Task :feature:tasks:mapDebugSourceSetPaths UP-TO-DATE
+> Task :feature:conversations:compileDebugLibraryResources UP-TO-DATE
+> Task :core:runtime:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:tasks:compileDebugLibraryResources UP-TO-DATE
+> Task :device:api:extractDeepLinksDebug UP-TO-DATE
+> Task :feature:settings:processDebugManifest UP-TO-DATE
+> Task :tools:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:runtime:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :mcp:mergeDebugJniLibFolders UP-TO-DATE
+> Task :eval:mergeDebugJniLibFolders UP-TO-DATE
+> Task :feature:settings:mapDebugSourceSetPaths UP-TO-DATE
+> Task :device:api:processDebugManifest UP-TO-DATE
+> Task :feature:agents:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:runtime:processDebugManifest UP-TO-DATE
+> Task :tools:mergeDebugNativeLibs NO-SOURCE
+> Task :mcp:mergeDebugNativeLibs NO-SOURCE
+> Task :eval:mergeDebugNativeLibs NO-SOURCE
+> Task :device:api:mapDebugSourceSetPaths UP-TO-DATE
+> Task :core:runtime:mapDebugSourceSetPaths UP-TO-DATE
+> Task :feature:settings:compileDebugLibraryResources UP-TO-DATE
+> Task :mcp:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:agents:mergeDebugNativeLibs NO-SOURCE
+> Task :eval:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :device:api:compileDebugLibraryResources UP-TO-DATE
+> Task :core:runtime:compileDebugLibraryResources UP-TO-DATE
+> Task :feature:chat:mergeDebugJniLibFolders UP-TO-DATE
+> Task :tools:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:agents:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:library:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:runtime:mergeDebugJniLibFolders UP-TO-DATE
+> Task :device:api:mergeDebugJniLibFolders UP-TO-DATE
+> Task :feature:settings:mergeDebugJniLibFolders UP-TO-DATE
+> Task :feature:tasks:mergeDebugJniLibFolders UP-TO-DATE
+> Task :feature:chat:mergeDebugNativeLibs NO-SOURCE
+> Task :feature:conversations:mergeDebugJniLibFolders UP-TO-DATE
+> Task :feature:chat:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:library:mergeDebugNativeLibs NO-SOURCE
+> Task :core:runtime:mergeDebugNativeLibs NO-SOURCE
+> Task :feature:tasks:mergeDebugNativeLibs NO-SOURCE
+> Task :device:api:mergeDebugNativeLibs NO-SOURCE
+> Task :feature:settings:mergeDebugNativeLibs NO-SOURCE
+> Task :feature:library:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:conversations:mergeDebugNativeLibs NO-SOURCE
+> Task :core:runtime:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:tasks:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:conversations:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:settings:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :device:api:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :core:network:kspDebugKotlin UP-TO-DATE
+> Task :core:data:kspDebugKotlin UP-TO-DATE
+> Task :device:impl:kspDebugKotlin UP-TO-DATE
+> Task :core:designsystem:compileDebugKotlin UP-TO-DATE
+> Task :core:designsystem:compileDebugJavaWithJavac NO-SOURCE
+> Task :core:designsystem:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:designsystem:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :app:processDebugNavigationResources FROM-CACHE
+> Task :core:designsystem:processDebugJavaRes UP-TO-DATE
+> Task :core:designsystem:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :core:designsystem:writeDebugAarMetadata UP-TO-DATE
+> Task :core:designsystem:extractDeepLinksDebug UP-TO-DATE
+> Task :app:parseDebugLocalResources FROM-CACHE
+> Task :core:designsystem:processDebugManifest UP-TO-DATE
+> Task :core:designsystem:mapDebugSourceSetPaths UP-TO-DATE
+> Task :core:designsystem:compileDebugLibraryResources UP-TO-DATE
+> Task :core:designsystem:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:designsystem:mergeDebugNativeLibs NO-SOURCE
+> Task :core:designsystem:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :device:impl:compileDebugKotlin UP-TO-DATE
+> Task :core:data:compileDebugKotlin UP-TO-DATE
+> Task :core:network:compileDebugKotlin UP-TO-DATE
+> Task :core:data:compileDebugJavaWithJavac UP-TO-DATE
+> Task :device:impl:compileDebugJavaWithJavac UP-TO-DATE
+> Task :core:network:compileDebugJavaWithJavac UP-TO-DATE
+> Task :core:data:transformDebugClassesWithAsm UP-TO-DATE
+> Task :core:data:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:data:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :core:data:processDebugJavaRes UP-TO-DATE
+> Task :app:generateDebugRFile FROM-CACHE
+> Task :core:data:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :device:impl:transformDebugClassesWithAsm UP-TO-DATE
+> Task :core:data:writeDebugAarMetadata UP-TO-DATE
+> Task :app:javaPreCompileDebug FROM-CACHE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :core:data:extractDeepLinksDebug UP-TO-DATE
+> Task :device:impl:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:network:transformDebugClassesWithAsm UP-TO-DATE
+> Task :core:network:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :device:impl:processDebugJavaRes UP-TO-DATE
+> Task :core:data:processDebugManifest UP-TO-DATE
+> Task :core:network:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :core:network:generateDebugAssets UP-TO-DATE
+> Task :core:network:mergeDebugAssets UP-TO-DATE
+> Task :core:data:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:generateDebugGlobalSynthetics FROM-CACHE
+> Task :core:network:processDebugJavaRes UP-TO-DATE
+> Task :core:data:compileDebugLibraryResources UP-TO-DATE
+> Task :core:data:mergeDebugJniLibFolders UP-TO-DATE
+> Task :core:data:mergeDebugNativeLibs NO-SOURCE
+> Task :core:data:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :device:impl:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :device:impl:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :device:impl:mapDebugSourceSetPaths UP-TO-DATE
+> Task :core:network:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :core:network:writeDebugAarMetadata UP-TO-DATE
+> Task :core:network:extractDeepLinksDebug UP-TO-DATE
+> Task :core:network:processDebugManifest UP-TO-DATE
+> Task :device:impl:compileDebugLibraryResources UP-TO-DATE
+> Task :eval:compileDebugKotlin UP-TO-DATE
+> Task :device:impl:mergeDebugJniLibFolders UP-TO-DATE
+> Task :eval:compileDebugJavaWithJavac NO-SOURCE
+> Task :device:impl:mergeDebugNativeLibs NO-SOURCE
+> Task :device:impl:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :eval:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:network:mapDebugSourceSetPaths UP-TO-DATE
+> Task :core:network:compileDebugLibraryResources UP-TO-DATE
+> Task :eval:processDebugJavaRes UP-TO-DATE
+> Task :eval:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :core:network:mergeDebugJniLibFolders UP-TO-DATE
+> Task :eval:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :core:network:mergeDebugNativeLibs NO-SOURCE
+> Task :core:network:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :feature:tasks:kspDebugKotlin UP-TO-DATE
+> Task :feature:agents:kspDebugKotlin UP-TO-DATE
+> Task :tools:kspDebugKotlin UP-TO-DATE
+> Task :feature:tasks:compileDebugKotlin UP-TO-DATE
+> Task :feature:tasks:compileDebugJavaWithJavac UP-TO-DATE
+> Task :feature:agents:compileDebugKotlin UP-TO-DATE
+> Task :feature:agents:compileDebugJavaWithJavac UP-TO-DATE
+> Task :feature:tasks:transformDebugClassesWithAsm UP-TO-DATE
+> Task :feature:tasks:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :feature:tasks:processDebugJavaRes UP-TO-DATE
+> Task :feature:tasks:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:tasks:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :feature:agents:transformDebugClassesWithAsm UP-TO-DATE
+> Task :feature:agents:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :feature:agents:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :feature:agents:processDebugJavaRes UP-TO-DATE
+> Task :feature:agents:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:settings:kspDebugKotlin UP-TO-DATE
+> Task :feature:conversations:kspDebugKotlin UP-TO-DATE
+> Task :tools:compileDebugKotlin UP-TO-DATE
+> Task :tools:compileDebugJavaWithJavac UP-TO-DATE
+> Task :feature:settings:compileDebugKotlin UP-TO-DATE
+> Task :feature:conversations:compileDebugKotlin UP-TO-DATE
+> Task :feature:settings:compileDebugJavaWithJavac UP-TO-DATE
+> Task :feature:conversations:compileDebugJavaWithJavac UP-TO-DATE
+> Task :feature:settings:transformDebugClassesWithAsm UP-TO-DATE
+> Task :feature:settings:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :feature:settings:processDebugJavaRes UP-TO-DATE
+> Task :feature:settings:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :tools:transformDebugClassesWithAsm UP-TO-DATE
+> Task :feature:settings:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :tools:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :tools:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :app:mergeDebugAssets
+> Task :feature:conversations:transformDebugClassesWithAsm UP-TO-DATE
+> Task :feature:conversations:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :tools:processDebugJavaRes UP-TO-DATE
+> Task :feature:conversations:processDebugJavaRes UP-TO-DATE
+> Task :feature:conversations:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:conversations:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :mcp:kspDebugKotlin UP-TO-DATE
+> Task :tools:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:chat:kspDebugKotlin UP-TO-DATE
+> Task :mcp:compileDebugKotlin UP-TO-DATE
+> Task :mcp:compileDebugJavaWithJavac UP-TO-DATE
+> Task :mcp:transformDebugClassesWithAsm UP-TO-DATE
+> Task :mcp:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :feature:chat:compileDebugKotlin UP-TO-DATE
+> Task :mcp:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :mcp:processDebugJavaRes UP-TO-DATE
+> Task :mcp:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:chat:compileDebugJavaWithJavac UP-TO-DATE
+> Task :feature:library:kspDebugKotlin UP-TO-DATE
+> Task :feature:chat:transformDebugClassesWithAsm UP-TO-DATE
+> Task :feature:chat:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :feature:chat:processDebugJavaRes UP-TO-DATE
+> Task :feature:chat:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:chat:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :feature:library:compileDebugKotlin UP-TO-DATE
+> Task :feature:library:compileDebugJavaWithJavac UP-TO-DATE
+> Task :feature:library:transformDebugClassesWithAsm UP-TO-DATE
+> Task :feature:library:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :feature:library:processDebugJavaRes UP-TO-DATE
+> Task :feature:library:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:library:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :app:compressDebugAssets FROM-CACHE
+> Task :app:kspDebugKotlin FROM-CACHE
+> Task :app:desugarDebugFileDependencies FROM-CACHE
+> Task :app:mapDebugSourceSetPaths
+> Task :app:compileDebugNavigationResources FROM-CACHE
+> Task :app:mergeDebugResources FROM-CACHE
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug FROM-CACHE
+> Task :app:processDebugMainManifest FROM-CACHE
+> Task :app:processDebugManifest FROM-CACHE
+> Task :app:processDebugManifestForPackage FROM-CACHE
+> Task :app:mergeDebugJniLibFolders
+> Task :app:checkDebugAarMetadata
+> Task :app:validateSigningDebug
+> Task :app:processDebugResources FROM-CACHE
+> Task :app:writeDebugAppMetadata
+> Task :app:writeDebugSigningConfigVersions
+> Task :app:mergeDebugNativeLibs
+> Task :app:checkDebugDuplicateClasses
+
+> Task :app:stripDebugDebugSymbols
+Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so, libc++_shared.so, libdatastore_shared_counter.so, libmlkit_google_ocr_pipeline.so, libmmkv.so, libopencv_java4.so. Run with --info option to learn more.
+
+> Task :app:mergeExtDexDebug FROM-CACHE
+> Task :app:mergeLibDexDebug FROM-CACHE
+> Task :app:compileDebugKotlin
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/Baic2App.kt:129:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/Baic2App.kt:133:46 'val Icons.Outlined.List: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Outlined.List.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/AdvisorPage.kt:84:46 'val Icons.Outlined.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Outlined.ArrowBack.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/AdvisorProfileActivity.kt:464:13 'fun TabRow(selectedTabIndex: Int, modifier: Modifier = ..., containerColor: Color = ..., contentColor: Color = ..., indicator: ComposableFunction1<List<TabPosition>, Unit> = ..., divider: ComposableFunction0<Unit> = ..., tabs: ComposableFunction0<Unit>): Unit' is deprecated. Replaced with PrimaryTabRow and SecondaryTabRow.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatBallService.kt:1188:61 'static field SHOW_IMPLICIT: Int' is deprecated. Deprecated in Java.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatBallService.kt:1436:57 'static field SHOW_IMPLICIT: Int' is deprecated. Deprecated in Java.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatBallService.kt:1581:58 'static field SHOW_IMPLICIT: Int' is deprecated. Deprecated in Java.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatUi.kt:76:49 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatUi.kt:77:48 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatUi.kt:1103:41 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatUi.kt:1108:37 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatUi.kt:1250:41 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FloatUi.kt:1255:37 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/FrameDiffEngine.kt:195:41 Elvis operator (?:) always returns the left operand of non-nullable type 'FrameDiffEngine.Candidate'.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/OcrNoiseFilter.kt:119:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/OcrNoiseFilter.kt:164:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/OcrNoiseFilter.kt:176:27 Redundant creation of Json format. Creating instances for each usage can be slow.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/ScreenAdvisor.kt:137:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/ScreenAdvisor.kt:2365:79 Elvis operator (?:) always returns the left operand of non-nullable type 'String'.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/ScreenAdvisor.kt:2368:82 Elvis operator (?:) always returns the left operand of non-nullable type 'String'.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/TranscriptView.kt:191:50 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/TranscriptView.kt:191:74 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/TranscriptView.kt:583:41 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/TranscriptView.kt:653:38 Redundant call of conversion method.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/advisor/AdvisorAssetSeeder.kt:39:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/advisor/AdvisorResponder.kt:84:81 Elvis operator (?:) always returns the left operand of non-nullable type 'String'.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/advisor/PersonaSchema.kt:136:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/advisor/PersonaSchema.kt:145:13 Redundant creation of Json format. Creating instances for each usage can be slow.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/advisor/PersonaValueMigrator.kt:43:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/advisor/StyleAssets.kt:119:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/advisor/TitleRules.kt:35:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/advisor/TitleRules.kt:65:27 Redundant creation of Json format. Creating instances for each usage can be slow.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/auto/ActionDispatcher.kt:237:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/auto/CompanionWindowController.kt:244:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/auto/ImageMatcher.kt:77:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/auto/ReadinessGate.kt:74:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/auto/ShizukuInjector.kt:53:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/director/ActionPlanner.kt:343:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/director/ProactiveCheckpoint.kt:123:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/director/TopicEngineStore.kt:49:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/director/TopicPlanner.kt:213:13 Redundant creation of Json format. Creating instances for each usage can be slow.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/floatball/notify/EscalationNotifier.kt:73:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/keepalive/KeepAliveManager.kt:59:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///E:/_android_work/NovaBAIC/app/src/main/java/com/verlintas/baic2/keepalive/KeepAliveUtils.kt:44:5 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+
+> Task :app:compileDebugJavaWithJavac
+> Task :app:processDebugJavaRes
+> Task :app:hiltCollectClassesDebug
+> Task :app:hiltAggregateDepsDebug
+> Task :app:mergeDebugJavaResource
+> Task :app:hiltJavaCompileDebug
+> Task :app:transformDebugClassesWithAsm
+> Task :app:dexBuilderDebug
+> Task :app:mergeProjectDexDebug
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:assembleDebug
+
+BUILD SUCCESSFUL in 5m 40s
+362 actionable tasks: 22 executed, 20 from cache, 320 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.6.1/userguide/configuration_cache_enabling.html

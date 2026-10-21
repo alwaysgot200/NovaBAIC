@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../Secrets"
+		}
+	],
+	"trae": {
+		"workspaceId": "398035703cce34e7fd770d7dea0f4363"
+	},
+	"settings": {}
+}
