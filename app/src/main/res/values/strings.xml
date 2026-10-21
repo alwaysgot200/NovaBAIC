@@ -243,6 +243,15 @@
     <string name="float_profile_candidate_hint">识别自当前聊天窗口；绑定后本会话归入该联系人，下次自动识别命中。</string>
     <string name="float_profile_candidate_create">创建新档案并绑定</string>
     <string name="float_profile_bind_as_this">就是此人 ▸ 绑到这条会话</string>
+    <!-- 详情页两分区：「关联会话」= 跳对方 IM；「参谋会话」= 本系统老参谋对话 -->
+    <string name="float_profile_open_im">关联会话</string>
+    <string name="float_profile_open_im_hint">打开聊天 App，进入与 %1$s 的对话</string>
+    <string name="float_profile_advisor_sessions">参谋会话</string>
+    <!-- IM 直达导航（ImChatNavigator）：结果 Toast 文案 -->
+    <string name="float_im_nav_ok">已进入与 %1$s 的对话</string>
+    <string name="float_im_nav_a11y_off">无障碍服务未开启，无法自动进入对话：已为你打开聊天 App，请手动点击「%1$s」。开启方法：设置 → 无障碍 → BetterAIChat2</string>
+    <string name="float_im_nav_app_missing">未找到对应的聊天应用，无法打开</string>
+    <string name="float_im_nav_generic_fail">未能自动进入与 %1$s 的对话（界面未能定位），已为你打开聊天 App，请手动点击该联系人</string>
     <!-- VA-2 U3（v10 §1.3）：NON_CHAT 分屏隐藏人设区，只显示纯问答标识 -->
     <string name="float_profile_status_nonchat">屏幕参谋 · 纯问答</string>
     <!-- VA-2 U2（v10 §2.4/§2.5/§2.6）：GoalTab 双方人设与维持度区块 -->

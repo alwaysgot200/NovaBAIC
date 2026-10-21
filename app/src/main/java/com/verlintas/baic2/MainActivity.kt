@@ -93,7 +93,12 @@ class MainActivity : ComponentActivity() {
             return
         }
         // 只有"正常启动"（图标冷启动）才自动隐藏；从悬浮球拉起的不隐藏。
-        autoHideWhenReady = intent?.getBooleanExtra(EXTRA_FROM_FLOAT, false) != true
+        // 深链（open_run_id/open_conversation_id/open_tab）明确要打开界面，
+        // 同样豁免自动隐藏——否则深链被拉起后立即压回后台，形同"点了没反应"。
+        val deepLink = (intent?.getLongExtra(EXTRA_OPEN_RUN_ID, -1L) ?: -1L) >= 0L ||
+            (intent?.getLongExtra(EXTRA_OPEN_CONVERSATION_ID, -1L) ?: -1L) >= 0L ||
+            !intent?.getStringExtra(EXTRA_OPEN_TAB).isNullOrBlank()
+        autoHideWhenReady = intent?.getBooleanExtra(EXTRA_FROM_FLOAT, false) != true && !deepLink
         // Rotation restores the same intent: only consume the deep link on a
         // fresh launch (or via onNewIntent), never twice.
         pendingRunId.value = if (savedInstanceState == null) {

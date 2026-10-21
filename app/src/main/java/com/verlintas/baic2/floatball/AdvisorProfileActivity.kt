@@ -141,6 +141,9 @@ class AdvisorProfileActivity : ComponentActivity() {
     lateinit var settingsRepository: SettingsRepository
 
     @Inject
+    lateinit var imNavigator: com.verlintas.baic2.floatball.auto.ImChatNavigator
+
+    @Inject
     lateinit var goalRepository: GoalRepository
 
     @Inject
@@ -656,8 +659,28 @@ private fun ContactDetailScreen(
                 }
             }
 
-            // 关联会话 + 按人搜索
-            SectionTitle(stringResource(R.string.float_profile_conversations))
+            // 关联会话（对方 IM）：a11y 自动搜索导航到具体联系人聊天页；
+            // 无 a11y 或中途失败 → Toast 报原因并指引手动操作（§4.5 铁律：
+            // 硬前置必须显式提示，绝不静默只开 App）。
+            if (!current.imPackage.isNullOrBlank()) {
+                SectionTitle(stringResource(R.string.float_profile_open_im))
+                val imNavigator = advisorActivity().imNavigator
+                TextButton(onClick = {
+                    val pkg = current.imPackage
+                    val displayName = current.displayName
+                    if (!pkg.isNullOrBlank()) {
+                        scope.launch {
+                            val result = imNavigator.openChat(pkg, displayName)
+                            imNavigator.toastResult(result, displayName)
+                        }
+                    }
+                }) {
+                    Text(stringResource(R.string.float_profile_open_im_hint, current.displayName))
+                }
+            }
+
+            // 参谋会话（本系统中与该联系人关联的老参谋对话）+ 按人搜索
+            SectionTitle(stringResource(R.string.float_profile_advisor_sessions))
             boundTitles.forEach { (conversationId, title) ->
                 Text(
                     text = "· $title",
