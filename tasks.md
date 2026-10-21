@@ -31,4 +31,4 @@
 - [x] 诊断日志审查（⑧ v2_debug_frame.png 转储块已删；步骤编号日志保留）
 - [x] 全程 logcat 无 FATAL/AndroidRuntime（含三轮模式 2 + T4 + 最终冒烟）
 - [x] tests/tempImg/ 清理（删除 364 个中间产物，保留 8 张最终证据图：r1-r3_mode1 / r2_end / r3_end+r3_now / r3b_end / t4_end）
-- [ ] git commit（feat: 模式 2 补齐 + 双模验证，Conventional Commits 中文）
+- [x] git commit（0fa5945 feat: 关联会话 RPA 模式 2 补齐——Shizuku screencap 清晰帧三件套 + 双模真机验证全绿）
