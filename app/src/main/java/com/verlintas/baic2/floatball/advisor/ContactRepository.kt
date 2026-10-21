@@ -35,6 +35,8 @@ import com.verlintas.baic2.floatball.advisor.data.SelfPersonaEntity
 import com.verlintas.baic2.floatball.advisor.data.PersonaFieldEntity
 import com.verlintas.baic2.floatball.advisor.data.SessionBindingEntity
 import com.verlintas.baic2.floatball.advisor.data.normalizePrivacyPolicy
+import com.verlintas.baic2.floatball.experts.strategist.TalkerStrategy
+import com.verlintas.baic2.floatball.experts.strategist.TalkerStrategyCodec
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.Serializable
@@ -312,6 +314,22 @@ class ContactRepository @Inject constructor(
     suspend fun setPrivacyPolicy(contactId: Long, policy: String) {
         val now = System.currentTimeMillis()
         db.contactProfileDao().setPrivacyPolicy(contactId, normalizePrivacyPolicy(policy), now)
+    }
+
+    /** 聊天手段策略读（v12，T1-a）：畸形 JSON 回默认档（D1 拍板「全部自评」）。 */
+    suspend fun talkerStrategy(contactId: Long): TalkerStrategy =
+        TalkerStrategyCodec.decode(db.contactProfileDao().findById(contactId)?.talkerStrategyJson)
+
+    /** 聊天手段策略整档设置（画像页三维开关）：编码前档位归一，军师触发判定消费。 */
+    suspend fun setTalkerStrategy(contactId: Long, strategy: TalkerStrategy) {
+        val now = System.currentTimeMillis()
+        db.contactProfileDao().setTalkerStrategy(contactId, TalkerStrategyCodec.encode(strategy), now)
+    }
+
+    /** 阶段意图设置（v12，T1-a，D5 主人手填）：军师正向方针来源；空串清空。 */
+    suspend fun setStageIntent(contactId: Long, intent: String) {
+        val now = System.currentTimeMillis()
+        db.contactProfileDao().setStageIntent(contactId, intent.trim(), now)
     }
 
     /** isGroup 手动切换（误判修正）：与 contactType=group 同步写，保持两列同义。 */

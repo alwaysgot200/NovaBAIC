@@ -55,7 +55,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SelfPersonaEntity::class,
         TopicPlanEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -534,6 +534,26 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
         ensureColumn(
             db, "contact_profiles", "privacyPolicy",
             "privacyPolicy TEXT NOT NULL DEFAULT 'handoff'",
+        )
+    }
+}
+
+/**
+ * v11 → v12（聊天策略裁量层 T1-a，2026-10-21 总方案 §四）：contact_profiles 加
+ * talkerStrategyJson（撒谎/许愿/举例三维档位，缺键=默认档 D1「全部自评」）与
+ * stageIntent（主人手填的阶段意图）；privacyPolicy 扩第三档 assess 无需迁移
+ * （列仍 TEXT，归一在 normalizePrivacyPolicy）。ensureColumn 幂等补列，
+ * 不搬不删任何既有数据；contact_facts 表留 F2 迁移（v13）。
+ */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        ensureColumn(
+            db, "contact_profiles", "talkerStrategyJson",
+            "talkerStrategyJson TEXT NOT NULL DEFAULT '{}'",
+        )
+        ensureColumn(
+            db, "contact_profiles", "stageIntent",
+            "stageIntent TEXT NOT NULL DEFAULT ''",
         )
     }
 }

@@ -64,10 +64,18 @@ import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.data.ENGAGEMENT_MUTE
 import com.verlintas.baic2.floatball.advisor.data.ENGAGEMENT_PROACTIVE
 import com.verlintas.baic2.floatball.advisor.data.ENGAGEMENT_REACTIVE
+import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_ASSESS
 import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_BYPASS
 import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_HANDOFF
 import com.verlintas.baic2.floatball.advisor.data.SelfPersonaEntity
 import com.verlintas.baic2.floatball.advisor.data.normalizePrivacyPolicy
+import com.verlintas.baic2.floatball.experts.strategist.TALKER_ASSESS
+import com.verlintas.baic2.floatball.experts.strategist.TALKER_DIM_EXEMPLIFYING
+import com.verlintas.baic2.floatball.experts.strategist.TALKER_DIM_LYING
+import com.verlintas.baic2.floatball.experts.strategist.TALKER_DIM_PROMISING
+import com.verlintas.baic2.floatball.experts.strategist.TALKER_FREE
+import com.verlintas.baic2.floatball.experts.strategist.TALKER_NEVER
+import com.verlintas.baic2.floatball.experts.strategist.TalkerStrategyCodec
 import kotlinx.coroutines.launch
 
 /**
@@ -75,8 +83,9 @@ import kotlinx.coroutines.launch
  * §2.4/§2.5/§2.6/§4.1）：对方风格三标签（identity/chatStyle/closeness 手动芯片，
  * 落库存展示词表原词，与 V-C 萃取共用同一词汇口径）+ 我方关系侧面 facet
  * （增删/从全局库选/自输，pending 差异标签核阅转正或丢弃）+ 维持度三档 +
- * 隐私策略两档（F1，handoff=交主人/bypass=绕行并汇报）+ isGroup 开关 +
- * 手动合并入口（选候选 → 选主档案，跨包名同人才合并）。
+ * 隐私策略三档（F1 handoff/bypass + T1 assess 自评）+ 聊天手段策略三维三档
+ * （v12 T1-a：撒谎/许愿/举例，走 experts/strategist/TalkerStrategy）+ 阶段意图
+ * 手填（D5）+ isGroup 开关 + 手动合并入口（选候选 → 选主档案，跨包名同人才合并）。
  *
  * 独立成文件而非内嵌 GoalTab：既有大文件只做一行挂载，保持追加式 diff；
  * 编辑去重逻辑在 [FacetEditor]（纯函数，有单测）；写路径全部经
@@ -274,7 +283,7 @@ internal fun AdvisorPersonaCard(
                 )
             }
 
-            // ── 隐私策略（F1，隐私闸门方案 §3.2）：问到我方隐私时交主人还是绕行 ──
+            // ── 隐私策略（F1 两档 + T1 第三档）：问到我方隐私时交主人/绕行/自评 ──
             SectionLabel(stringResource(R.string.float_persona_privacy_policy))
             val privacyPolicy = normalizePrivacyPolicy(profile?.privacyPolicy)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -292,6 +301,81 @@ internal fun AdvisorPersonaCard(
                     },
                     label = { Text(stringResource(R.string.float_persona_privacy_policy_bypass)) },
                 )
+                FilterChip(
+                    selected = privacyPolicy == PRIVACY_POLICY_ASSESS,
+                    onClick = {
+                        scope.launch { contacts.setPrivacyPolicy(contactId, PRIVACY_POLICY_ASSESS) }
+                    },
+                    label = { Text(stringResource(R.string.float_persona_privacy_policy_assess)) },
+                )
+            }
+
+            // ── 聊天手段策略（v12，T1-a 总方案 §三）：撒谎/许愿/举例三维×三档； ──
+            //    第四维隐私披露即上方 privacyPolicy（单点真源）；正向手段不受此限。
+            SectionLabel(stringResource(R.string.float_persona_talker_strategy))
+            val talker = remember(profile?.talkerStrategyJson) {
+                TalkerStrategyCodec.decode(profile?.talkerStrategyJson)
+            }
+            val talkerDims = listOf(
+                TALKER_DIM_LYING to R.string.float_persona_talker_lying,
+                TALKER_DIM_PROMISING to R.string.float_persona_talker_promising,
+                TALKER_DIM_EXEMPLIFYING to R.string.float_persona_talker_exemplifying,
+            )
+            talkerDims.forEach { (dim, labelRes) ->
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    Text(
+                        text = stringResource(labelRes),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    listOf(TALKER_NEVER, TALKER_ASSESS, TALKER_FREE).forEach { level ->
+                        FilterChip(
+                            selected = talker.levelOf(dim) == level,
+                            onClick = {
+                                scope.launch { contacts.setTalkerStrategy(contactId, talker.withLevel(dim, level)) }
+                            },
+                            label = {
+                                Text(
+                                    stringResource(
+                                        when (level) {
+                                            TALKER_NEVER -> R.string.float_persona_talker_never
+                                            TALKER_ASSESS -> R.string.float_persona_talker_assess
+                                            else -> R.string.float_persona_talker_free
+                                        },
+                                    ),
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
+            // ── 阶段意图（v12，D5 主人手填）：军师「本阶段你要推进：…」方针来源 ──
+            var stageIntentDraft by remember(profile?.stageIntent) {
+                mutableStateOf(profile?.stageIntent.orEmpty())
+            }
+            OutlinedTextField(
+                value = stageIntentDraft,
+                onValueChange = { stageIntentDraft = it },
+                label = { Text(stringResource(R.string.float_persona_stage_intent)) },
+                placeholder = { Text(stringResource(R.string.float_persona_stage_intent_hint)) },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+            )
+            if (stageIntentDraft != profile?.stageIntent.orEmpty()) {
+                TextButton(
+                    onClick = {
+                        scope.launch { contacts.setStageIntent(contactId, stageIntentDraft) }
+                    },
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    Text(stringResource(R.string.float_persona_stage_intent_save))
+                }
             }
 
             // ── 群标识开关（§1.4 误判修正）：isGroup 与 contactType 同步写在 Repository ──

@@ -91,6 +91,14 @@ interface ContactProfileDao {
     /** 隐私策略两档设置（v11，隐私闸门方案 §3.2）：画像页 handoff/bypass 切换。 */
     @Query("UPDATE contact_profiles SET privacyPolicy = :policy, updatedAt = :now WHERE id = :id")
     suspend fun setPrivacyPolicy(id: Long, policy: String, now: Long)
+
+    /** 聊天手段策略三维档位设置（v12，T1-a）：画像页撒谎/许愿/举例档位切换，JSON 整体改写。 */
+    @Query("UPDATE contact_profiles SET talkerStrategyJson = :json, updatedAt = :now WHERE id = :id")
+    suspend fun setTalkerStrategy(id: Long, json: String, now: Long)
+
+    /** 阶段意图设置（v12，T1-a，D5 主人手填）：军师正向方针来源。 */
+    @Query("UPDATE contact_profiles SET stageIntent = :intent, updatedAt = :now WHERE id = :id")
+    suspend fun setStageIntent(id: Long, intent: String, now: Long)
 }
 
 /** 说话风格卡（v4）：全局卡 (my_default,0) 与按人卡 (contact,contactId) 各至多一行。 */

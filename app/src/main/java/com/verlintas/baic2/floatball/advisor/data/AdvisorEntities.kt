@@ -37,16 +37,22 @@ const val ENGAGEMENT_PROACTIVE = "proactive"
 const val ENGAGEMENT_REACTIVE = "reactive"
 const val ENGAGEMENT_MUTE = "mute"
 
-/** 联系人级隐私策略两档（F1，2026-10-20 隐私闸门方案 §3.2）。 */
+/** 联系人级隐私策略三档（F1 两档 + T1 扩第三档 assess，2026-10-21 总方案 §三 D1）。 */
 const val PRIVACY_POLICY_HANDOFF = "handoff"
 const val PRIVACY_POLICY_BYPASS = "bypass"
+const val PRIVACY_POLICY_ASSESS = "assess"
 
 /**
- * 隐私策略归一：仅显式配置的 bypass 生效，其余（含 null/历史脏值）一律归
- * handoff——默认交主人，宁严勿松。
+ * 隐私策略归一：显式 bypass/assess 生效，其余（含 null/历史脏值）一律归
+ * handoff——默认交主人，宁严勿松。assess=自评档：军师逐回合许可+审查官
+ * 验稿+轻通报后才可披露（执法细节 T1-c/d 接线）。
  */
 fun normalizePrivacyPolicy(policy: String?): String =
-    if (policy == PRIVACY_POLICY_BYPASS) PRIVACY_POLICY_BYPASS else PRIVACY_POLICY_HANDOFF
+    when (policy) {
+        PRIVACY_POLICY_BYPASS -> PRIVACY_POLICY_BYPASS
+        PRIVACY_POLICY_ASSESS -> PRIVACY_POLICY_ASSESS
+        else -> PRIVACY_POLICY_HANDOFF
+    }
 
 /** 会话归属场景（v10，方案 §1）：session_bindings.scene；NON_CHAT 会话零人设管线。 */
 const val SCENE_CHAT = "chat"
@@ -100,6 +106,16 @@ data class ContactProfileEntity(
      */
     @ColumnInfo(defaultValue = PRIVACY_POLICY_HANDOFF)
     val privacyPolicy: String = PRIVACY_POLICY_HANDOFF,
+    /**
+     * 聊天手段策略三维档位（v12，T1-a 总方案 §四）：撒谎/许愿/举例，缺键=默认档
+     * （D1 拍板「全部自评」）；第四维隐私披露沿用 [privacyPolicy] 单点真源不入本列。
+     * 编解码在 experts/strategist/TalkerStrategyCodec，畸形 JSON 回默认档。
+     */
+    @ColumnInfo(defaultValue = "{}")
+    val talkerStrategyJson: String = "{}",
+    /** 本阶段意图（v12，T1-a，D5 拍板主人手填）：军师渲染「本阶段你要推进：…」的方针来源；空=无正向方针。 */
+    @ColumnInfo(defaultValue = "")
+    val stageIntent: String = "",
     /** 对方身份类型（v10，方案 §4.1）：领导/客户/同事/朋友/家人/暧昧对象/其他；空 = 待萃取。 */
     val identity: String? = null,
     /** 对方聊天风格（v10，方案 §4.1）：严肃/随和/幽默/热情/冷淡；空 = 待萃取。 */

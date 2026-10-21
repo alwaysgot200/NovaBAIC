@@ -745,6 +745,17 @@
     <string name="float_persona_privacy_policy">隐私策略</string>
     <string name="float_persona_privacy_policy_handoff">交给主人回复</string>
     <string name="float_persona_privacy_policy_bypass">绕行并汇报</string>
+    <string name="float_persona_privacy_policy_assess">自评并汇报</string>
+    <string name="float_persona_talker_strategy">聊天手段策略</string>
+    <string name="float_persona_talker_lying">撒谎（不实陈述）</string>
+    <string name="float_persona_talker_promising">许愿（承诺保证）</string>
+    <string name="float_persona_talker_exemplifying">举例（类比例证）</string>
+    <string name="float_persona_talker_never">禁用</string>
+    <string name="float_persona_talker_assess">自评</string>
+    <string name="float_persona_talker_free">放行</string>
+    <string name="float_persona_stage_intent">阶段意图（本阶段要推进什么）</string>
+    <string name="float_persona_stage_intent_hint">如：促成本周见面</string>
+    <string name="float_persona_stage_intent_save">保存阶段意图</string>
     <string name="float_settings_escalation_section">接管与达成通报</string>
     <string name="float_settings_escalation">需要接管/目标达成时通知主人</string>
     <string name="float_settings_escalation_hint">对方提出只有你能回答的事（日程、索要物品、决策），或目标达成（约见、成交）时，铃声通知提醒你亲自处理；只通报不代答，随后自动发送暂停等你回来</string>
