@@ -60,9 +60,11 @@ internal object SceneGate {
 
     fun classify(foregroundPackage: String?, screenBody: String?): Scene {
         if (foregroundPackage.isNullOrBlank()) {
-            // 包名缺失（a11y/感知降级）时无法做白名单裁决：有聊天结构保守
-            // 给 UNCERTAIN（走轻 LLM 兜底），否则 NON_CHAT——绝不据此进人设管线。
-            return if (hasChatStructure(screenBody)) Scene.Uncertain else Scene.NonChat
+            // 包名缺失（a11y/感知降级，投影+OCR 双模路径）≠ 不在 IM：与白名单
+            // 分支同构一律 UNCERTAIN 走轻 LLM 兜底（§4.5 双模铁律）。此前无结构
+            // 直接 NON_CHAT——OCR 漏认小字号时间戳的聊天屏被误判纯问答，且
+            // 分屏不可点导致用户失去手动关联入口；LLM no/失败/超时仍保守降级。
+            return Scene.Uncertain
         }
         if (foregroundPackage !in NotificationGate.LISTENED_PACKAGES) return Scene.NonChat
         return if (hasChatStructure(screenBody)) Scene.Chat else Scene.Uncertain

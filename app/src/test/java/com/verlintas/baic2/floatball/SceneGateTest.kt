@@ -73,16 +73,15 @@ class SceneGateTest {
     }
 
     @Test
-    fun missingPackageWithChatStructureIsUncertain() {
+    fun missingPackageAlwaysIsUncertain() {
+        // 双模铁律（§4.5）：包名缺失（a11y 关/投影+OCR 降级）≠ 不在 IM——
+        // 有无结构一律 UNCERTAIN 走轻 LLM 兜底，杜绝 OCR 漏认时间戳的
+        // 聊天屏被直接误判 NON_CHAT（LLM no/失败仍保守降级）。
         assertEquals(SceneGate.Scene.Uncertain, SceneGate.classify(null, chatBody))
         assertEquals(SceneGate.Scene.Uncertain, SceneGate.classify("", chatBody))
-    }
-
-    @Test
-    fun missingPackageWithoutStructureIsNonChat() {
-        assertEquals(SceneGate.Scene.NonChat, SceneGate.classify(null, nonChatBody))
-        assertEquals(SceneGate.Scene.NonChat, SceneGate.classify(null, null))
-        assertEquals(SceneGate.Scene.NonChat, SceneGate.classify(null, ""))
+        assertEquals(SceneGate.Scene.Uncertain, SceneGate.classify(null, nonChatBody))
+        assertEquals(SceneGate.Scene.Uncertain, SceneGate.classify(null, null))
+        assertEquals(SceneGate.Scene.Uncertain, SceneGate.classify(null, ""))
     }
 
     // ── F10：UNCERTAIN 轻 LLM 一问的提示词与解析（UncertainPrompts 纯函数） ──
