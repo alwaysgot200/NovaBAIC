@@ -515,6 +515,27 @@ class ContactRepository @Inject constructor(
 
     suspend fun aliases(contactId: Long) = db.contactAliasDao().listFor(contactId)
 
+    /**
+     * 手动把一个称呼挂到档案（快速绑定「绑到已有档案」路径）：alias 列存
+     * 规范化匹配键（下次 [resolve] 的 alias 通道直接命中），rawAlias 存原始
+     * 标题。已存在（同键）时不重复插入（IGNORE）。
+     */
+    suspend fun addAlias(contactId: Long, rawAlias: String, source: String = "user") {
+        val raw = rawAlias.trim()
+        if (raw.isEmpty()) return
+        val normalized = ContactNames.normalize(raw)
+        if (normalized.isEmpty()) return
+        db.contactAliasDao().insert(
+            ContactAliasEntity(
+                contactId = contactId,
+                alias = normalized,
+                rawAlias = raw,
+                source = source,
+                lastSeenAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
     // ---- 画像字段（§4.2） ----
 
     suspend fun fields(contactId: Long): List<PersonaFieldEntity> = db.personaFieldDao().listFor(contactId)

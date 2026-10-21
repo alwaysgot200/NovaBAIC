@@ -180,6 +180,8 @@ class AdvisorProfileActivity : ComponentActivity() {
         val initialConversation = intent.getLongExtra(EXTRA_CONVERSATION_ID, -1L)
         val initialTab = intent.getStringExtra(EXTRA_TAB).orEmpty()
         val initialGoalId = intent.getLongExtra(EXTRA_GOAL_ID, -1L)
+        val candidateTitle = intent.getStringExtra(EXTRA_CANDIDATE_TITLE)
+        val candidatePkg = intent.getStringExtra(EXTRA_CANDIDATE_PKG)
         setContent {
             val themeMode by settingsRepository.themeMode
                 .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
@@ -203,6 +205,8 @@ class AdvisorProfileActivity : ComponentActivity() {
                     currentConversationId = initialConversation,
                     initialTab = initialTab,
                     initialGoalId = initialGoalId,
+                    candidateTitle = candidateTitle,
+                    candidatePkg = candidatePkg,
                     onClose = { finish() },
                 )
             }
@@ -212,6 +216,12 @@ class AdvisorProfileActivity : ComponentActivity() {
     companion object {
         const val EXTRA_CONTACT_ID = "extra_contact_id"
         const val EXTRA_CONVERSATION_ID = "extra_conversation_id"
+
+        /** 快速绑定候选：分屏「未绑定」进来自动预填的聊天对象名（微信昵称等）。 */
+        const val EXTRA_CANDIDATE_TITLE = "extra_candidate_title"
+
+        /** 快速绑定候选的前台包名（建档时决定档案归属的 IM）。 */
+        const val EXTRA_CANDIDATE_PKG = "extra_candidate_pkg"
 
         /** 打开联系人页时默认选中的 Tab；取值 [TAB_GOALS]，缺省为画像 Tab。 */
         const val EXTRA_TAB = "extra_tab"
@@ -231,6 +241,8 @@ private fun ProfileNav(
     currentConversationId: Long,
     initialTab: String,
     initialGoalId: Long,
+    candidateTitle: String?,
+    candidatePkg: String?,
     onClose: () -> Unit,
 ) {
     var screen by remember { mutableStateOf(ProfileScreen.LIST) }
@@ -255,6 +267,9 @@ private fun ProfileNav(
             },
             onMine = { screen = ProfileScreen.MINE },
             onClose = onClose,
+            candidateTitle = candidateTitle,
+            candidatePkg = candidatePkg,
+            currentConversationId = currentConversationId,
         )
 
         ProfileScreen.DETAIL -> ContactDetailScreen(
@@ -276,6 +291,9 @@ private fun ContactListScreen(
     onOpen: (Long) -> Unit,
     onMine: () -> Unit,
     onClose: () -> Unit,
+    candidateTitle: String? = null,
+    candidatePkg: String? = null,
+    currentConversationId: Long = -1L,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -283,6 +301,8 @@ private fun ContactListScreen(
     var query by remember { mutableStateOf("") }
     var all by remember { mutableStateOf<List<ContactProfileEntity>>(emptyList()) }
     var merges by remember { mutableStateOf<List<MergeRecordEntity>>(emptyList()) }
+    // 快速绑定候选被消费（建档/绑到已有档案）后即收起卡片。
+    var candidate by remember { mutableStateOf(candidateTitle?.takeIf { it.isNotBlank() }) }
 
     suspend fun refresh() {
         all = contacts.listAlive()
@@ -296,6 +316,56 @@ private fun ContactListScreen(
     }
 
     PageScaffold(title = stringResource(R.string.float_profile_title), onClose = onClose) {
+        // 快速绑定卡片（分屏「未绑定 → 点此管理画像」带候选进来）：一键建档或
+        // 绑到已有档案，微信昵称同时存为别名，下次识别自动命中。
+        val candidateName = candidate
+        if (candidateName != null && currentConversationId > 0) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = stringResource(R.string.float_profile_candidate_title, candidateName),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = stringResource(R.string.float_profile_candidate_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) {
+                        Button(onClick = {
+                            scope.launch {
+                                runCatching {
+                                    val outcome = contacts.resolve(
+                                        imPackage = candidatePkg ?: "com.tencent.mm",
+                                        rawTitle = candidateName,
+                                        source = "user",
+                                        createStub = true,
+                                    )
+                                    val profile =
+                                        (outcome as? com.verlintas.baic2.floatball.advisor.ResolveOutcome.Matched)?.profile
+                                    if (profile != null) {
+                                        contacts.rebindConversation(currentConversationId, profile.id)
+                                    }
+                                }
+                                candidate = null
+                                refresh()
+                            }
+                        }) { Text(stringResource(R.string.float_profile_candidate_create)) }
+                    }
+                }
+            }
+        }
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -331,13 +401,29 @@ private fun ContactListScreen(
             )
         }
         filtered.forEach { profile ->
-            ContactCard(profile) { onOpen(profile.id) }
+            val bindCandidate: (() -> Unit)? = candidateName?.takeIf { currentConversationId > 0 }?.let { name ->
+                {
+                    scope.launch {
+                        runCatching {
+                            contacts.addAlias(profile.id, name)
+                            contacts.rebindConversation(currentConversationId, profile.id)
+                        }
+                        candidate = null
+                        refresh()
+                    }
+                }
+            }
+            ContactCard(profile, bindCandidate = bindCandidate) { onOpen(profile.id) }
         }
     }
 }
 
 @Composable
-private fun ContactCard(profile: ContactProfileEntity, onClick: () -> Unit) {
+private fun ContactCard(
+    profile: ContactProfileEntity,
+    bindCandidate: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -363,6 +449,11 @@ private fun ContactCard(profile: ContactProfileEntity, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                 )
+            }
+            if (bindCandidate != null) {
+                TextButton(onClick = bindCandidate, modifier = Modifier.padding(top = 2.dp)) {
+                    Text(stringResource(R.string.float_profile_bind_as_this))
+                }
             }
         }
     }
@@ -567,8 +658,21 @@ private fun ContactDetailScreen(
 
             // 关联会话 + 按人搜索
             SectionTitle(stringResource(R.string.float_profile_conversations))
-            boundTitles.forEach { (_, title) ->
-                Text("· $title", style = MaterialTheme.typography.bodyMedium)
+            boundTitles.forEach { (conversationId, title) ->
+                Text(
+                    text = "· $title",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            // 直达主 App 会话（extra 口径 mirror RunService）。
+                            context.startActivity(
+                                android.content.Intent(context, com.verlintas.baic2.MainActivity::class.java)
+                                    .putExtra("open_conversation_id", conversationId)
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                )
             }
             PersonHistorySearch(contactId)
 

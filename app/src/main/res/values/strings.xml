@@ -238,6 +238,11 @@
     <!-- 悬浮球 · 联系人画像（§7） -->
     <string name="float_profile_status_bound">当前联系人：%1$s ▾</string>
     <string name="float_profile_status_unbound">未绑定联系人 ▸ 点此管理画像</string>
+    <!-- 快速绑定（分屏未绑定 → 画像列表一键建档/绑到已有档案） -->
+    <string name="float_profile_candidate_title">将「%1$s」绑为联系人</string>
+    <string name="float_profile_candidate_hint">识别自当前聊天窗口；绑定后本会话归入该联系人，下次自动识别命中。</string>
+    <string name="float_profile_candidate_create">创建新档案并绑定</string>
+    <string name="float_profile_bind_as_this">就是此人 ▸ 绑到这条会话</string>
     <!-- VA-2 U3（v10 §1.3）：NON_CHAT 分屏隐藏人设区，只显示纯问答标识 -->
     <string name="float_profile_status_nonchat">屏幕参谋 · 纯问答</string>
     <!-- VA-2 U2（v10 §2.4/§2.5/§2.6）：GoalTab 双方人设与维持度区块 -->

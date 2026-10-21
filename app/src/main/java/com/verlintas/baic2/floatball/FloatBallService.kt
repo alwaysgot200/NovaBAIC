@@ -319,7 +319,18 @@ class FloatBallService : Service() {
                 getString(R.string.float_profile_status_unbound)
             }
             panel.statusBar.setOnClickListener {
-                openProfileManager(contact?.contactId ?: -1L)
+                val active = screenAdvisor.activeContact.value
+                if (active == null) {
+                    // 未绑定：带识别候选进画像页，列表页顶部出现快速绑定卡片。
+                    val candidate = screenAdvisor.lastChatCandidate
+                    openProfileManager(
+                        contactId = -1L,
+                        candidateTitle = candidate?.second,
+                        candidatePkg = candidate?.first,
+                    )
+                } else {
+                    openProfileManager(active.contactId)
+                }
             }
         }
     }
@@ -332,6 +343,8 @@ class FloatBallService : Service() {
         contactId: Long,
         tab: String? = null,
         goalId: Long = -1L,
+        candidateTitle: String? = null,
+        candidatePkg: String? = null,
     ) {
         startActivity(
             Intent(this, AdvisorProfileActivity::class.java).apply {
@@ -342,6 +355,14 @@ class FloatBallService : Service() {
                 val conversationId = screenAdvisor.transcript.value.conversationId
                 if (conversationId > 0) {
                     putExtra(AdvisorProfileActivity.EXTRA_CONVERSATION_ID, conversationId)
+                }
+                // 快速绑定（未绑定 → 一键建档/绑到已有档案）：把识别候选透传给
+                // 画像列表页，用户不必手抄微信昵称。
+                if (candidateTitle != null) {
+                    putExtra(AdvisorProfileActivity.EXTRA_CANDIDATE_TITLE, candidateTitle)
+                }
+                if (candidatePkg != null) {
+                    putExtra(AdvisorProfileActivity.EXTRA_CANDIDATE_PKG, candidatePkg)
                 }
             },
         )
@@ -986,7 +1007,17 @@ class FloatBallService : Service() {
             getString(R.string.float_profile_status_unbound)
         }
         panel.statusBar.setOnClickListener {
-            openProfileManager(screenAdvisor.activeContact.value?.contactId ?: -1L)
+            val active = screenAdvisor.activeContact.value
+            if (active == null) {
+                val candidate = screenAdvisor.lastChatCandidate
+                openProfileManager(
+                    contactId = -1L,
+                    candidateTitle = candidate?.second,
+                    candidatePkg = candidate?.first,
+                )
+            } else {
+                openProfileManager(active.contactId)
+            }
         }
         // 场景化覆写（VA-2 U3）：NON_CHAT 时上一段的人设文案/点击被纯问答标识替换。
         applyStatusBarScene()

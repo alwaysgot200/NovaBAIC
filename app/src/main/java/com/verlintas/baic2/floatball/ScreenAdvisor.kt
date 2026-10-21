@@ -242,6 +242,24 @@ class ScreenAdvisor @Inject constructor(
     /** 自动发送路径取当回合许可单（无在途回合/军师未触发时为 null，走兜底硬审）。 */
     fun tacticRulingFor(contactId: Long): RuledPermit? = tacticRulings[contactId]
 
+    /**
+     * 最近一次参谋回合的会话 ID（分屏「未绑定 → 快速绑定」透传给画像页做
+     * 「绑到当前会话」；-1 = 尚无回合）。@Volatile：回合协程写、服务主线程读。
+     */
+    @Volatile
+    var activeConversationId: Long = -1L
+        private set
+
+    /**
+     * 最近一次联系人识别尝试的候选（前台包名 to 展示名：a11y 窗口标题 /
+     * OCR 标题带 / 正文发言人）。识别未命中（「未绑定」）时供快速绑定卡片
+     * 预填——用户不必手抄微信昵称。识别命中后不清空（下次未绑定时仍可用
+     * 最近候选），每次尝试覆盖。
+     */
+    @Volatile
+    var lastChatCandidate: Pair<String?, String>? = null
+        private set
+
     private val _turnCompletions = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
     val turnCompletions: SharedFlow<Unit> = _turnCompletions.asSharedFlow()
 
@@ -1204,6 +1222,7 @@ class ScreenAdvisor @Inject constructor(
         if (!isChatWindow(pkg)) return null
         val l1 = perceiver.windowTitle()?.takeUnless { isShellTitle(pkg, it) }
         val l2 = titleFallback?.takeUnless { it.isBlank() || isShellTitle(pkg, it) }
+        if (l1 != null) lastChatCandidate = pkg to l1 else if (l2 != null) lastChatCandidate = pkg to l2
         // 实体判别（v10 §2.1）：正文多发言人先判群——群标题若先走个人
         // resolve 会误建个人 stub，故 Group 分支优先。F7：judge 携标题带判别，
         // 标题显示名与正文唯一发言人不一致（群内一人发言+我插话形态）降 NONE，
@@ -1221,6 +1240,7 @@ class ScreenAdvisor @Inject constructor(
         }
         if (screenBody.isNullOrBlank()) return null
         val speaker = IncomingCue.speakerOf(screenBody) ?: return null
+        lastChatCandidate = pkg to speaker
         return runCatching {
             contactDirectory.resolve(pkg, speaker, allowStub = entity is EntityResolver.Entity.Person)
         }.getOrNull()
@@ -1675,6 +1695,7 @@ class ScreenAdvisor @Inject constructor(
         handoffAvoidSection: String? = null,
         privacyDomain: PrivacyDomain? = null,
     ) {
+        activeConversationId = conversationId
         val settings = prefs.state.value
         val config: ProviderConfig = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
             ?: run {
