@@ -23,6 +23,8 @@ import com.verlintas.baic2.core.data.repository.AgentRepository
 import com.verlintas.baic2.core.engine.AuxiliaryTasks
 import com.verlintas.baic2.floatball.FrameQuality
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
+import com.verlintas.baic2.floatball.experts.strategist.RuledPermit
+import com.verlintas.baic2.floatball.experts.strategist.StrategistAssets
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +62,17 @@ object GateReasons {
 
     /** 自动档：超阶段动作（见面/送礼/上门等）。 */
     const val AUTO_OVERSTEP = "auto_overstep"
+
+    // ── T1-c：越许可检测（裁量层方案 §五，军师许可单 × 稿件词表对账） ──
+
+    /** 稿件命中 D3 红线死清单（任何档位恒拦，泄露锁）。 */
+    const val TACTIC_REDLINE = "tactic_veto_redline"
+
+    /** 承诺类词表命中而 promising 未获许可（或已判超授权问主人）。 */
+    const val TACTIC_PROMISING = "tactic_veto_promising"
+
+    /** 我方隐私自曝语命中而 disclosure 未获许可。 */
+    const val TACTIC_DISCLOSURE = "tactic_veto_disclosure"
 }
 
 /**
@@ -167,12 +180,17 @@ object GateRules {
      * [auto]=false 时行为与旧签名完全一致（既有调用方零破坏）；[auto]=true 且
      * 命中时 replacement=null（自动档拒绝 = 降级起草档，保留原稿交人肉档，
      * 绝不截断改写——方案 §8.2「命中一律降级起草档」）。
+     *
+     * T1-c 追加 [tactics]（军师许可单，null=未触发/失败）：四查之后、auto 四类
+     * 之前执行越许可检测（裁量层方案 §五）——许可单在场时，红线死清单与
+     * 未批敏感词一律拦截降级。
      */
     fun deterministicReview(
         draft: String,
         recentReplies: List<String>,
         maxChars: Int,
         auto: Boolean,
+        tactics: RuledPermit? = null,
     ): GateRejection? {
         val hit = findRedline(draft)
         if (hit != null) {
@@ -184,11 +202,45 @@ object GateRules {
         if (findRepetition(draft, recentReplies) != null) {
             return GateRejection(GateReasons.REPETITIVE, null)
         }
+        tacticReview(draft, tactics)?.let { return it }
         if (auto) {
             val blocked = findAutoBlock(draft)
             if (blocked != null) {
                 return GateRejection(blocked.first, null)
             }
+        }
+        return null
+    }
+
+    // ── T1-c：越许可检测（裁量层方案 §五 四行表，纯函数 JVM 可单测） ─────
+
+    /**
+     * 军师许可单 × 稿件词表的确定性对账：代言者违反许可、或未批维度被稿件
+     * 夹带时拦截。命中一律 replacement=null（降级起草档交人复核，不截断不丢稿）。
+     *
+     * 三行表（顺序即优先级）：
+     * 1. D3 红线死清单：与许可单无关恒拦（[tactics]=null 也查——降级不放松红线）；
+     * 2. D4 承诺词命中且 promising 未批（或 needsHuman 超授权）→ 拦；
+     * 3. 我方隐私自曝语命中且 disclosure 未批 → 拦。
+     *
+     * [tactics]=null 时跳过 2/3 行：军师未触发即用户未开裁量档，该场景由
+     * auto 四类硬审兜底；不会出现「无许可单反而更严」。
+     */
+    fun tacticReview(draft: String, tactics: RuledPermit?): GateRejection? {
+        if (StrategistAssets.redlineHit(draft) != null) {
+            return GateRejection(GateReasons.TACTIC_REDLINE, null)
+        }
+        if (tactics == null) return null
+        val promising = tactics.permit.promising
+        if ((!promising.use || tactics.needsHuman) &&
+            StrategistAssets.PROMISE_WORDS.any { draft.contains(it) }
+        ) {
+            return GateRejection(GateReasons.TACTIC_PROMISING, null)
+        }
+        if (!tactics.permit.disclosure.use &&
+            StrategistAssets.DISCLOSURE_MARKERS.any { draft.contains(it) }
+        ) {
+            return GateRejection(GateReasons.TACTIC_DISCLOSURE, null)
         }
         return null
     }
@@ -319,13 +371,15 @@ class Gatekeeper @Inject constructor(
 ) {
 
     /** 第一道：确定性审（转发纯函数；调用方选线程，本方法不做 IO）。
-     * [auto]=true 时追加四类自动档硬审（钱/承诺/敏感隐私/超阶段，M3-a）。 */
+     * [auto]=true 时追加四类自动档硬审（钱/承诺/敏感隐私/超阶段，M3-a）；
+     * [tactics] 非空时追加军师许可单越许可检测（T1-c，裁量层方案 §五）。 */
     fun deterministicReview(
         draft: String,
         recentReplies: List<String>,
         maxChars: Int,
         auto: Boolean = false,
-    ): GateRejection? = GateRules.deterministicReview(draft, recentReplies, maxChars, auto)
+        tactics: RuledPermit? = null,
+    ): GateRejection? = GateRules.deterministicReview(draft, recentReplies, maxChars, auto, tactics)
 
     /**
      * 第二道：轻 LLM 审。返回 null = 放行（含一切失败路径）。

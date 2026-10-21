@@ -83,4 +83,73 @@ internal object StrategistPrompt {
 
     private const val INCOMING_CLIP = 300
     private const val PRIVACY_ASSESS = "assess"
+
+    // ── 代言者两段渲染（裁量层方案 §四，T1-c 插桩消费；TacticPromptBuilderTest 锁死）──
+
+    /**
+     * 手段库段（永远注入，无需许可）：正向手段全量开放，防军师失误锁死
+     * 代言者；[stageIntent] 非空时显式带入「本阶段你要推进：…」。正文绝不
+     * 出现「目标/策略/方针」字样的表达约束已在 [StrategistAssets.TOOLKIT_SECTION]。
+     */
+    fun toolkitSection(stageIntent: String): String? = buildString {
+        append(StrategistAssets.TOOLKIT_SECTION)
+        if (stageIntent.isNotBlank()) {
+            append("本阶段你要推进：").append(stageIntent.trim()).append('。')
+        }
+    }.takeIf { it.isNotBlank() }
+
+    /**
+     * 作战指令段（有 Permit 才注入）：approach 重点（mixed 省略）+ 各敏感维
+     * 处置三选一——「可自然提及 claim（理由 why）」/「本回合不要…」/
+     * 「超出授权，如对方坚持则表示需确认」（needsHuman）。
+     */
+    fun commandSection(ruled: RuledPermit): String? = buildString {
+        val label = StrategistAssets.approachLabel(ruled.permit.approach)
+        if (ruled.permit.approach != APPROACH_MIXED) {
+            append("【本回合重点】").append("重点用").append(label).append("，其余手段自然取用。\n")
+        }
+        ruled.permit.disclosure.takeIf { it.use || it.useNotDefault() }?.let { d ->
+            // disclosure 无「问主人」通道（needsHuman 只由 promising 超授权产生），
+            // 未批即禁令，被问则带过由 fallbackSection 与 F1 闸兜底。
+            append("【隐私披露】").append(renderDim(d.use, d.claim, d.why, false))
+            append('\n')
+        }
+        ruled.permit.lying.takeIf { it.use || it.useNotDefault() }?.let { l ->
+            append("【不实陈述】").append(renderDim(l.use, l.claim, l.why, false)).append('\n')
+        }
+        ruled.permit.promising.takeIf { it.use || it.useNotDefault() }?.let { p ->
+            append("【承诺保证】").append(renderDim(p.use, p.claim, p.why, ruled.needsHuman)).append('\n')
+        }
+    }.takeIf { it.isNotBlank() }
+
+    /**
+     * 军师失败降级段（§3.5）：Permit=null 时 assess/never 维一律渲染为禁令句
+     * （等价 never 现状口径）；正向手段库段照常（见 [toolkitSection]）。
+     */
+    fun fallbackSection(strategy: TalkerStrategy, privacyPolicy: String?): String? = buildString {
+        if (normalizeTalkerLevel(strategy.lying) != TALKER_FREE) {
+            append("【不实陈述】本回合不要虚构事实，如实表达。\n")
+        }
+        if (normalizeTalkerLevel(strategy.promising) != TALKER_FREE) {
+            append("【承诺保证】不要替用户做任何承诺、保证或期限表态。\n")
+        }
+        if (privacyPolicy != PRIVACY_ASSESS) {
+            append("【隐私披露】不要透露用户本人的隐私信息，被问则自然带过。\n")
+        }
+    }.takeIf { it.isNotBlank() }
+
+    /** 单维处置句：批准=可自然提及 claim；未批=本回合不要；超授权=需确认话术。 */
+    private fun renderDim(use: Boolean, claim: String, why: String, needsHuman: Boolean): String =
+        when {
+            use && needsHuman -> "授权存疑，如对方坚持则表示需要向用户确认，不要直接答应。"
+            use -> buildString {
+                append("可自然提及")
+                if (claim.isNotBlank()) append("「").append(claim).append("」")
+                if (why.isNotBlank()) append("（理由：").append(why).append("）")
+            }
+            else -> "本回合不要动用。"
+        }
+
+    /** 模型未显式给出该维字段（缺省对象）时不渲染，避免空指令噪声。 */
+    private fun TacticRuling.useNotDefault(): Boolean = why.isNotBlank() || claim.isNotBlank()
 }

@@ -56,6 +56,7 @@ import com.verlintas.baic2.floatball.advisor.data.HORIZON_L2
 import com.verlintas.baic2.floatball.advisor.data.MISSION_IGNORED
 import com.verlintas.baic2.floatball.advisor.data.MISSION_INFORMATIONAL
 import com.verlintas.baic2.floatball.advisor.data.MISSION_PENDING
+import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_ASSESS
 import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_BYPASS
 import com.verlintas.baic2.floatball.advisor.data.PRIVACY_POLICY_HANDOFF
 import com.verlintas.baic2.floatball.advisor.data.SCENE_CHAT
@@ -92,6 +93,10 @@ import com.verlintas.baic2.floatball.director.WarmChatPrompt
 import com.verlintas.baic2.floatball.experts.ExpertPanel
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyAssets
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyDomain
+import com.verlintas.baic2.floatball.experts.strategist.RuledPermit
+import com.verlintas.baic2.floatball.experts.strategist.Strategist
+import com.verlintas.baic2.floatball.experts.strategist.StrategistPrompt
+import com.verlintas.baic2.floatball.experts.strategist.TalkerStrategyCodec
 import com.verlintas.baic2.floatball.notify.EscalationNotifier
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -164,6 +169,7 @@ class ScreenAdvisor @Inject constructor(
     private val topicEngineStore: TopicEngineStore,
     private val gatekeeper: Gatekeeper,
     private val expertPanel: ExpertPanel,
+    private val strategist: Strategist,
     private val escalationNotifier: EscalationNotifier,
 ) {
 
@@ -221,6 +227,17 @@ class ScreenAdvisor @Inject constructor(
 
     private val _transcript = MutableStateFlow(UiState())
     val transcript: StateFlow<UiState> = _transcript.asStateFlow()
+
+    /**
+     * T1-c：最近回合的军师许可单（contactId → ruled）。runAdvisorTurn 组装
+     * 提示词前写入；自动发送路径（CompanionWindowController → Gatekeeper
+     * 越许可检测）在草稿审查时经 [tacticRulingFor] 读取同一份——许可单 90s
+     * 缓存 + 此 map 使两处共享零重复 LLM 调用。按联系人覆盖，量级=联系人数。
+     */
+    private val tacticRulings = ConcurrentHashMap<Long, RuledPermit>()
+
+    /** 自动发送路径取当回合许可单（无在途回合/军师未触发时为 null，走兜底硬审）。 */
+    fun tacticRulingFor(contactId: Long): RuledPermit? = tacticRulings[contactId]
 
     private val _turnCompletions = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
     val turnCompletions: SharedFlow<Unit> = _turnCompletions.asSharedFlow()
@@ -1447,7 +1464,14 @@ class ScreenAdvisor @Inject constructor(
         }
         _transcript.update { it.copy(status = Status.Thinking) }
         turnMutex.withLock {
-            runAdvisorTurn(conversationId, contact, backgroundTurn, smalltalk, handoffAvoid)
+            runAdvisorTurn(
+                conversationId,
+                contact,
+                backgroundTurn,
+                smalltalk,
+                handoffAvoid,
+                escalationOutcome.privacyDomain,
+            )
         }
     }
 
@@ -1463,6 +1487,12 @@ class ScreenAdvisor @Inject constructor(
          * （avoidSection=域定制回避段），同时轻通报主人；null = 无 bypass 命中。
          */
         val privacyBypass: PrivacyDomain? = null,
+        /**
+         * F1 隐私命中的对方所问域（T1-c 三分口径共用）：bypass=回避+轻通报、
+         * assess=交军师 disclosure 裁量（正常回合不接管）、handoff=接管链；
+         * null = 本回合无隐私命中。随 [runAdvisorTurn] 进许可单 userPrompt。
+         */
+        val privacyDomain: PrivacyDomain? = null,
     )
 
     /**
@@ -1501,7 +1531,9 @@ class ScreenAdvisor @Inject constructor(
                 EscalationOutcome(incoming = incoming, avoidSection = HANDOFF_AVOID_SECTION)
             }
         }
-        // F1 隐私闸门：按联系人策略分流（默认 handoff 交主人；bypass 绕行+轻通报）。
+        // F1 隐私闸门三分（隐私闸门方案 §3.4 + 裁量层 T1-c）：bypass 绕行+轻通报；
+        // assess 交军师裁量（正常回合继续，所问域随 privacyDomain 进许可单）；
+        // handoff（默认）接管链照走。
         if (review.privacy.hit && review.privacy.domain != null) {
             val domain = review.privacy.domain
             val policy = runCatching { contactRepository.privacyPolicy(contact.contactId) }
@@ -1511,13 +1543,20 @@ class ScreenAdvisor @Inject constructor(
                     incoming = incoming,
                     avoidSection = PrivacyAssets.avoidSection(domain),
                     privacyBypass = domain,
+                    privacyDomain = domain,
                 )
+            }
+            if (policy == PRIVACY_POLICY_ASSESS) {
+                // assess 档：不接管、不挂回避段，正常回答；是否披露由军师裁量
+                // + Gatekeeper 越许可检测兜底（裁量层方案 §五）。
+                return EscalationOutcome(incoming = incoming, privacyDomain = domain)
             }
             // handoff 档（默认）：接管链照走，类别=私人事实。
             return EscalationOutcome(
                 isHandoff = true,
                 category = HandoffCategory.PRIVACY,
                 incoming = incoming,
+                privacyDomain = domain,
             )
         }
         // G 达成快通道（§3.1）：对方明示同意/敲定，当回合立即通报。
@@ -1595,6 +1634,7 @@ class ScreenAdvisor @Inject constructor(
         tightRetry: Boolean,
         smalltalk: TopicEngine.TopicPick? = null,
         handoffAvoidSection: String? = null,
+        privacyDomain: PrivacyDomain? = null,
     ) {
         val settings = prefs.state.value
         val config: ProviderConfig = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
@@ -1915,6 +1955,46 @@ class ScreenAdvisor @Inject constructor(
         val planFilter = strategySnapshot?.let { PlanStreamFilter() }
         val planningStartAt = if (strategySnapshot != null) System.currentTimeMillis() else null
         if (strategySnapshot != null) beginMissionUi() else resetMissionUi()
+        // T1-c 军师许可单（裁量层方案 §四）：触发条件不满足时 Strategist 零成本
+        // 返回（ruled=null, triggered=false）；90s 缓存使连续多回合与自动发送
+        // 路径共享同一许可单。任何失败静默降级：已触发而无许可 → 渲染禁令段
+        // （等价 never 现状口径），回合链条零中断。
+        var tacticToolkit: String? = null
+        var tacticCommand: String? = null
+        var tacticFallback: String? = null
+        val tacticProfile = contact?.let { c ->
+            runCatching { contactRepository.profile(c.contactId) }.getOrNull()
+        }
+        if (contact != null && tacticProfile != null) {
+            val strategy = TalkerStrategyCodec.decode(tacticProfile.talkerStrategyJson)
+            // 手段库段：contact 有档案即恒注入（无需许可，防军师失误锁死代言者）。
+            tacticToolkit = StrategistPrompt.toolkitSection(tacticProfile.stageIntent)
+            val outcome = runCatching {
+                strategist.permit(
+                    contactId = contact.contactId,
+                    strategy = strategy,
+                    privacyPolicy = tacticProfile.privacyPolicy,
+                    stageIntent = tacticProfile.stageIntent,
+                    incomingText = incoming ?: screenBody,
+                    recentDigest = allMessages.asReversed()
+                        .filter { it.role == ChatRole.USER }
+                        .take(RECENT_DIGEST_TURNS)
+                        .asReversed()
+                        .joinToString(" / ") {
+                            stripScreenLabel(it.content).take(RECENT_DIGEST_CLIP)
+                        },
+                    personaDigest = sources.boundDigest.orEmpty(),
+                    privacyDomain = privacyDomain?.code,
+                )
+            }.getOrNull()
+            val ruled = outcome?.ruled
+            if (ruled != null) {
+                tacticRulings[contact.contactId] = ruled
+                tacticCommand = StrategistPrompt.commandSection(ruled)
+            } else if (outcome?.triggered == true) {
+                tacticFallback = StrategistPrompt.fallbackSection(strategy, tacticProfile.privacyPolicy)
+            }
+        }
         // 规约总纲置 system prompt 首位（v4 §8.1）：renderSystemPrompt 会把
         // custom 拼在最前，总纲因此先于上游一切基线条目。
         val customSystemPrompt = listOfNotNull(
@@ -1925,6 +2005,11 @@ class ScreenAdvisor @Inject constructor(
             handoffAvoidSection,
             styleWithLength,
             strategySection,
+            // T1-c 军师两段渲染：手段库段（恒开放）→ 作战指令段（有 Permit）
+            // / 降级禁令段（已触发无 Permit）。
+            tacticToolkit,
+            tacticCommand,
+            tacticFallback,
             // 保温闲聊段紧跟策略段（KPI 覆盖：自然度优先于任务推进，见 WarmChatPrompt）。
             smalltalk?.let { WarmChatPrompt.section(it) },
             sources.brief?.styleSection,
@@ -3088,6 +3173,10 @@ class ScreenAdvisor @Inject constructor(
 
         /** 召回收窄 query 的字符上限（来信候选 + 目标关键词；terms 还会再截断）。 */
         const val RECALL_QUERY_CHARS = 600
+
+        /** T1-c 军师许可单的近两轮来信摘要：参与回合数与单条截断长度。 */
+        const val RECENT_DIGEST_TURNS = 2
+        const val RECENT_DIGEST_CLIP = 120
 
         /**
          * 跨段去重时受保护的笔记类别：承诺/计划/事件/小结只按 id 精确去重，

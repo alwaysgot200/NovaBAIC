@@ -77,8 +77,10 @@ data class RuledPermit(
     val violations: List<String> = emptyList(),
 )
 
-/** 军师产出 + 是否缓存命中（台账区分 tactic_permit_ok / tactic_permit_cached）。 */
+/** 军师产出 + 是否缓存命中（台账区分 tactic_permit_ok / tactic_permit_cached）+ 是否触发过裁量。 */
 data class PermitOutcome(
     val ruled: RuledPermit?,
     val fromCache: Boolean,
+    /** 触发条件（任一敏感维 assess/free 或 stageIntent 非空）成立与否，供调用方 fallback 渲染判定。 */
+    val triggered: Boolean = false,
 )

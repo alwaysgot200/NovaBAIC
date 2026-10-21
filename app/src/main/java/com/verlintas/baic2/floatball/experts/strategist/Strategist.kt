@@ -80,12 +80,16 @@ class Strategist @Inject constructor(
             if (cached != null && now - cached.createdAt <= CACHE_TTL_MS &&
                 fingerprintSimilar(cached.fingerprint, fingerprint)
             ) {
-                return PermitOutcome(cached.ruled, fromCache = true)
+                return PermitOutcome(
+                    ruled = cached.ruled,
+                    fromCache = true,
+                    triggered = triggered(strategy, privacyPolicy, stageIntent),
+                )
             }
         }
 
         if (!triggered(strategy, privacyPolicy, stageIntent)) {
-            return PermitOutcome(null, fromCache = false)
+            return PermitOutcome(null, fromCache = false, triggered = false)
         }
 
         val raw = withContext(Dispatchers.Default) {
@@ -118,7 +122,7 @@ class Strategist @Inject constructor(
         cacheMutex.withLock {
             cache[contactId] = CacheEntry(ruled, System.currentTimeMillis(), fingerprint)
         }
-        return PermitOutcome(ruled, fromCache = false)
+        return PermitOutcome(ruled, fromCache = false, triggered = true)
     }
 
     /** 触发条件（方案 §3.1）：任一敏感维 assess/free，或 stageIntent 非空。 */

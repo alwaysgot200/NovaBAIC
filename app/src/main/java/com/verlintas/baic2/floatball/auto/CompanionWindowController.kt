@@ -487,7 +487,11 @@ class CompanionWindowController @Inject constructor(
             .takeLast(GATE_REPEAT_WINDOW)
             .map { it.content }
         val maxChars = (prefs.state.value.answerTargetChars * 2).coerceAtLeast(MIN_GATE_CHARS)
-        val rejection = gatekeeper.deterministicReview(draft, priorReplies, maxChars, auto = true)
+        // T1-c：附带军师许可单做越许可检测（裁量层方案 §五）。许可单由
+        // runAdvisorTurn 本回合写入 ScreenAdvisor.tacticRulings（90s 缓存共享，
+        // 零重复 LLM）；无在途回合/未触发时为 null，走既有 auto 四类硬审兜底。
+        val tactics = screenAdvisor.tacticRulingFor(window.contactId)
+        val rejection = gatekeeper.deterministicReview(draft, priorReplies, maxChars, auto = true, tactics = tactics)
             ?: gatekeeper.llmReview(draft, priorReplies)
         if (rejection != null) {
             tally.onBlocked()

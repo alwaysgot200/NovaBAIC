@@ -91,4 +91,15 @@ internal object StrategistAssets {
     /** 红线命中判定：claim/稿件文本包含任一死清单词条（子串匹配，宁严勿松）。 */
     fun redlineHit(text: String): String? =
         REDLINE_WORDS.firstOrNull { text.contains(it) }
+
+    /**
+     * 我方隐私自曝语标记（Gatekeeper 越许可检测第三行，裁量层方案 §五）：
+     * disclosure 未批而稿件出现「我住在/我工资…」式自曝 → 拦截降级起草。
+     * 只收第一人称 + 强隐私字段组合，正向闲聊（「我最近在忙」）不误伤。
+     */
+    val DISCLOSURE_MARKERS: List<String> = listOf(
+        "我住在", "我家住在", "我家在", "我的身份证", "我身份证", "我工资", "我月薪",
+        "我月收入", "我收入", "我存款", "我的银行卡", "我银行卡", "我卡里", "我的定位",
+        "我家的地址", "我家庭住址",
+    )
 }
