@@ -742,6 +742,12 @@
     <string name="float_privacy_channel">老参谋隐私知会</string>
     <string name="float_privacy_bypass_title">%1$s 话题已绕行</string>
     <string name="float_privacy_bypass_text">对方问到【%1$s】：%2$s 已继续聊天但未正面回答，点击查看回合与台账。</string>
+    <!-- T1-d 聊天策略裁量层通报（float_tactic_*） -->
+    <string name="float_tactic_use_title">%1$s 已按策略动用敏感手段</string>
+    <string name="float_tactic_use_text">动用【%1$s】：%2$s。点击查看回合与台账。</string>
+    <string name="float_tactic_human_title">%1$s 需要你确认一个承诺</string>
+    <string name="float_tactic_human_text">代言者想动用【%1$s】：%2$s，超出授权范围，已挂起等待你处理。</string>
+    <string name="float_tactic_reason_none">未说明理由</string>
     <string name="float_persona_privacy_policy">隐私策略</string>
     <string name="float_persona_privacy_policy_handoff">交给主人回复</string>
     <string name="float_persona_privacy_policy_bypass">绕行并汇报</string>

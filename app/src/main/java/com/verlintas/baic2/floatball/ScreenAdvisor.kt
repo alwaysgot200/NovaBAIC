@@ -96,7 +96,10 @@ import com.verlintas.baic2.floatball.experts.privacy.PrivacyDomain
 import com.verlintas.baic2.floatball.experts.strategist.RuledPermit
 import com.verlintas.baic2.floatball.experts.strategist.Strategist
 import com.verlintas.baic2.floatball.experts.strategist.StrategistPrompt
+import com.verlintas.baic2.floatball.experts.strategist.TALKER_ASSESS
+import com.verlintas.baic2.floatball.experts.strategist.TalkerStrategy
 import com.verlintas.baic2.floatball.experts.strategist.TalkerStrategyCodec
+import com.verlintas.baic2.floatball.experts.strategist.normalizeTalkerLevel
 import com.verlintas.baic2.floatball.notify.EscalationNotifier
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -1581,6 +1584,42 @@ class ScreenAdvisor @Inject constructor(
         return (System.currentTimeMillis() - state.enteredAt) / DAY_MS
     }
 
+    /**
+     * T1-d 敏感动用通报（裁量层方案 §六）：许可单批准的 assess 档维 → 轻通报
+     * 知会主人（free 档用户已明确放开，不报）；needsHuman（许愿超授权）→
+     * E1 挂起 + 铃声问主人。调用方 runCatching 包裹，失败绝不影响回合。
+     */
+    private suspend fun notifyTacticSides(
+        contact: ContactRef,
+        conversationId: Long,
+        ruled: RuledPermit,
+        strategy: TalkerStrategy,
+        privacyPolicy: String?,
+    ) {
+        val p = ruled.permit
+        if (p.disclosure.use && privacyPolicy == PRIVACY_POLICY_ASSESS) {
+            escalationNotifier.notifyTacticUse(
+                contact, conversationId, "disclosure", p.disclosure.why.ifBlank { p.disclosure.claim },
+            )
+        }
+        if (p.lying.use && normalizeTalkerLevel(strategy.lying) == TALKER_ASSESS) {
+            escalationNotifier.notifyTacticUse(
+                contact, conversationId, "lying", p.lying.why.ifBlank { p.lying.claim },
+            )
+        }
+        if (p.promising.use && normalizeTalkerLevel(strategy.promising) == TALKER_ASSESS) {
+            escalationNotifier.notifyTacticUse(
+                contact, conversationId, "promising", p.promising.why.ifBlank { p.promising.claim },
+            )
+        }
+        if (ruled.needsHuman) {
+            escalationNotifier.notifyTacticHumanNeeded(
+                contact, conversationId, "promising",
+                p.promising.claim.ifBlank { p.promising.why },
+            )
+        }
+    }
+
     /** 自动屏幕消息与上一条屏幕消息的正文相似度判定（前缀行不参与）。 */
     private suspend fun isDuplicateScreen(conversationId: Long, content: String): Boolean {
         if (!content.startsWith(screenLabel)) return false
@@ -1993,6 +2032,21 @@ class ScreenAdvisor @Inject constructor(
                 tacticCommand = StrategistPrompt.commandSection(ruled)
             } else if (outcome?.triggered == true) {
                 tacticFallback = StrategistPrompt.fallbackSection(strategy, tacticProfile.privacyPolicy)
+            }
+            // T1-d 台账/通报（裁量层方案 §六，全程旁路绝不阻断回合）：
+            // ok_<approach>/cached/skip 三态 + assess 动用轻通报 + needsHuman 问主人。
+            if (outcome?.triggered == true) {
+                runCatching {
+                    val ledgerKey = when {
+                        ruled == null -> "tactic_permit_skip"
+                        outcome.fromCache -> "tactic_permit_cached"
+                        else -> "tactic_permit_ok_" + ruled.permit.approach
+                    }
+                    escalationNotifier.logTacticPermit(contact.contactId, conversationId, ledgerKey)
+                    if (ruled != null) {
+                        notifyTacticSides(contact, conversationId, ruled, strategy, tacticProfile.privacyPolicy)
+                    }
+                }
             }
         }
         // 规约总纲置 system prompt 首位（v4 §8.1）：renderSystemPrompt 会把

@@ -81,6 +81,8 @@ class EscalationNotifier @Inject constructor(
     private val lastHandoffAt = HashMap<Long, Long>()
     private val lastGoalHitAt = HashMap<Long, Long>()
     private val lastPrivacyAt = HashMap<Long, Long>()
+    private val lastTacticUseAt = HashMap<Long, Long>()
+    private val lastTacticHumanAt = HashMap<Long, Long>()
 
     fun isAwaitingHuman(contactId: Long): Boolean = _awaitingHuman.value.contains(contactId)
 
@@ -179,6 +181,79 @@ class EscalationNotifier @Inject constructor(
         val body = context.getString(R.string.float_privacy_bypass_text, domain.label, incoming)
         postLight(contact, conversationId, title, body)
     }.getOrDefault(false)
+
+    /**
+     * T1-d 策略动用轻通报（裁量层方案 §六）：军师批准、assess 档敏感维实际
+     * 生效后知会主人（静音渠道同 F1 bypass——「汇报」不打断）。free 档动用
+     * 不通报（用户已明确放开）。30min 节流同口径；台账 tactic_used_<维>
+     * （周报 startsWith 聚合动用分布）。
+     */
+    suspend fun notifyTacticUse(
+        contact: ContactRef,
+        conversationId: Long,
+        dim: String,
+        why: String,
+    ): Boolean = runCatching {
+        val now = System.currentTimeMillis()
+        synchronized(lastTacticUseAt) {
+            lastTacticUseAt[contact.contactId]?.let { last ->
+                if (now - last < THROTTLE_MS) return@runCatching false
+            }
+            lastTacticUseAt[contact.contactId] = now
+        }
+        logLedger(contact.contactId, conversationId, ROUTE_REPLY, "tactic_used_$dim")
+        val reason = why.trim().ifEmpty { context.getString(R.string.float_tactic_reason_none) }
+        val title = context.getString(R.string.float_tactic_use_title, contact.displayName)
+        val body = context.getString(
+            R.string.float_tactic_use_text,
+            tacticDimLabel(dim),
+            reason.take(CLAIM_CLIP_CHARS),
+        )
+        postLight(contact, conversationId, title, body)
+    }.getOrDefault(false)
+
+    /**
+     * T1-d 问主人（needsHuman）：许愿超出授权承受范围（within=false 或硬承诺
+     * 词命中）→ E1 通报链同款处置：铃声通报 + await-human 挂起 + 台账
+     * tactic_human_needed；主人在分屏发出一条消息即解除。该维草稿本回合另由
+     * Gatekeeper 越许可检测拦截（双保险），绝不自动发送。
+     */
+    suspend fun notifyTacticHumanNeeded(
+        contact: ContactRef,
+        conversationId: Long,
+        dim: String,
+        claim: String,
+    ): Boolean = runCatching {
+        // 已挂起时静默跳过（同联系人连续多回合超授权只报一次）。
+        if (isAwaitingHuman(contact.contactId)) return@runCatching false
+        val now = System.currentTimeMillis()
+        synchronized(lastTacticHumanAt) {
+            lastTacticHumanAt[contact.contactId]?.let { last ->
+                if (now - last < THROTTLE_MS) return@runCatching false
+            }
+            lastTacticHumanAt[contact.contactId] = now
+        }
+        _awaitingHuman.value = _awaitingHuman.value + contact.contactId
+        logLedger(contact.contactId, conversationId, ROUTE_NOOP, REASON_TACTIC_HUMAN_NEEDED)
+        val claimOrWhy = claim.trim().ifEmpty { context.getString(R.string.float_tactic_reason_none) }
+        val title = context.getString(R.string.float_tactic_human_title, contact.displayName)
+        val body = context.getString(
+            R.string.float_tactic_human_text,
+            tacticDimLabel(dim),
+            claimOrWhy.take(CLAIM_CLIP_CHARS),
+        )
+        postEscalation(contact, conversationId, title, body)
+    }.getOrDefault(false)
+
+    /**
+     * T1-d 许可单台账（裁量层方案 §六）：每回合军师通道形态——
+     * tactic_permit_ok_<approach>（新产许可单，附方针）/ tactic_permit_cached
+     * （90s 缓存复用）/ tactic_permit_skip（已触发但无产物，禁令段兜底）。
+     * 未触发（零成本通道）不落，避免常态噪音。回放据此对账军师触发率。
+     */
+    suspend fun logTacticPermit(contactId: Long, conversationId: Long, reason: String) {
+        logLedger(contactId, conversationId, ROUTE_REPLY, reason)
+    }
 
     /**
      * 高优铃声通知：floatball_escalation 渠道（IMPORTANCE_HIGH + 默认通知声 +
@@ -320,6 +395,21 @@ class EscalationNotifier @Inject constructor(
 
         /** F1 隐私绕行台账 reason 键前缀（周报对账 startsWith 聚合域分布）。 */
         const val REASON_PRIVACY_BYPASS = "privacy_bypass"
+
+        /** T1-d 问主人台账 reason 键（needsHuman 挂起行）。 */
+        const val REASON_TACTIC_HUMAN_NEEDED = "tactic_human_needed"
+
+        /** T1-d 通知/台账里敏感维 → 中文标签（exemplifying 非通报对象）。 */
+        private val TACTIC_DIM_LABELS = mapOf(
+            "disclosure" to "隐私披露",
+            "lying" to "不实陈述",
+            "promising" to "许诺",
+        )
+
+        fun tacticDimLabel(dim: String): String = TACTIC_DIM_LABELS[dim] ?: dim
+
+        /** 通知正文里 why/claim 的截断长度（即取即用，不整段搬运）。 */
+        private const val CLAIM_CLIP_CHARS = 60
 
         /** 通知 id 派生基座：与起草通道 2_000_000 不撞。 */
         private const val NOTIFICATION_ID_BASE = 2_100_000L
