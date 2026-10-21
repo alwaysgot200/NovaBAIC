@@ -130,6 +130,10 @@ class FloatSettingsActivity : ComponentActivity() {
     @Inject
     lateinit var readinessGate: com.verlintas.baic2.floatball.auto.ReadinessGate
 
+    /** 投影免弹窗授权（Shizuku + appops，docs/2026-10-21 方案）。 */
+    @Inject
+    lateinit var shizukuGate: com.verlintas.baic2.floatball.shizuku.ShizukuGate
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -168,6 +172,7 @@ class FloatSettingsActivity : ComponentActivity() {
                     proactiveCheckpoint = proactiveCheckpoint,
                     contactRepository = contactRepository,
                     readinessGate = readinessGate,
+                    shizukuGate = shizukuGate,
                     onClose = { finish() },
                 )
             }
@@ -185,10 +190,14 @@ private fun AdvisorSettingsScreen(
     proactiveCheckpoint: com.verlintas.baic2.floatball.director.ProactiveCheckpoint,
     contactRepository: ContactRepository,
     readinessGate: ReadinessGate,
+    shizukuGate: com.verlintas.baic2.floatball.shizuku.ShizukuGate,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
     val a11yConnected by advisor.a11yConnected.collectAsState()
+    val projectionSilentGranted by androidx.compose.runtime.produceState(initialValue = false) {
+        value = shizukuGate.projectionSilentGranted()
+    }
     var clearArmed by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scheme = MaterialTheme.colorScheme
@@ -348,6 +357,25 @@ private fun AdvisorSettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = scheme.onSurfaceVariant,
                 )
+                PermissionRow(
+                    title = stringResource(R.string.float_settings_perm_projection_silent),
+                    granted = projectionSilentGranted,
+                    actionLabel = stringResource(R.string.float_shizuku_action_grant),
+                    onRowClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(context, com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity::class.java),
+                            )
+                        }
+                    },
+                ) {
+                    runCatching {
+                        context.startActivity(
+                            Intent(context, com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity::class.java),
+                        )
+                    }
+                }
+
                 // M2-a 起草档：总开关 + 通知读取权限跳转 + 白名单说明。
                 SectionLabel(stringResource(R.string.float_settings_draft_section))
                 ToggleRow(
@@ -1467,6 +1495,7 @@ private fun PermissionRow(
     title: String,
     granted: Boolean,
     actionLabel: String,
+    onRowClick: (() -> Unit)? = null,
     onAction: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -1475,7 +1504,14 @@ private fun PermissionRow(
         color = scheme.surfaceContainer,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 4.dp)
+            .then(
+                if (onRowClick != null) {
+                    Modifier.clickable(onClick = onRowClick)
+                } else {
+                    Modifier
+                },
+            ),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

@@ -110,6 +110,12 @@
             android:exported="false"
             android:label="@string/float_profile_title" />
 
+        <!-- 投影免弹窗授权（docs/2026-10-21-投影免弹窗授权方案.md）：Shizuku + appops，设置页权限分区入口 -->
+        <activity
+            android:name=".floatball.shizuku.ShizukuGrantActivity"
+            android:exported="false"
+            android:label="@string/float_shizuku_title" />
+
         <activity
             android:name=".floatball.StyleCardActivity"
             android:exported="false"
