@@ -33,6 +33,7 @@ import android.view.ViewConfiguration
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -522,8 +523,9 @@ internal object FloatUi {
     /**
      * 底部锚定的分屏问答面板。顶部是 **38dp 单行 headerRow**（同时作为拖动
      * 调高热区）：握把 │「老参谋」│「方向 ▾」chip │ 弹性空白 │「自动」
-     * （本期置灰占位）│「✕」；其下是压缩到 24dp 的联系人状态条；正文区由
-     * 服务层挂载 [TranscriptView]，底部是「新对话」同款输入行。
+     * （本期置灰占位）│「✕」；其下是压缩到 24dp 的联系人状态条（未绑定
+     * 点击展开内嵌快速绑定条 [BindSheet]，§1.5 最快关联/新建联系人）；正文区
+     * 由服务层挂载 [TranscriptView]，底部是「新对话」同款输入行。
      */
     fun buildSplitPanel(
         context: Context,
@@ -533,6 +535,7 @@ internal object FloatUi {
         onSmalltalk: () -> Unit,
         inputCallbacks: InputBarCallbacks,
         draftCallbacks: DraftStripCallbacks,
+        bindCallbacks: BindSheetCallbacks,
     ): SplitPanel {
         val transcriptContainer = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -642,6 +645,7 @@ internal object FloatUi {
         val pasteBar = buildPasteBar(context, inputCallbacks, (inputBar.tag as InputBarHandle).field)
         val strategyStrip = buildStrategyStrip(context)
         val draftStrip = buildDraftStrip(context, draftCallbacks)
+        val bindSheet = buildBindSheet(context, bindCallbacks)
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -658,6 +662,7 @@ internal object FloatUi {
             addView(header)
             addView(divider(context))
             addView(statusBar)
+            addView(bindSheet.root)
             addView(strategyStrip.root)
             addView(transcriptContainer)
             addView(draftStrip.root)
@@ -665,7 +670,7 @@ internal object FloatUi {
             addView(inputBar)
         }
         return SplitPanel(
-            root, header, transcriptContainer, inputBar, statusBar, chip, strategyStrip, draftStrip,
+            root, header, transcriptContainer, inputBar, statusBar, bindSheet, chip, strategyStrip, draftStrip,
         )
     }
 
@@ -676,10 +681,238 @@ internal object FloatUi {
         val transcriptContainer: FrameLayout,
         val inputBar: LinearLayout,
         val statusBar: TextView,
+        val bindSheet: BindSheet,
         val directionChip: TextView,
         val strategyStrip: StrategyStrip,
         val draftStrip: DraftStrip,
     )
+
+    // ── 分屏内嵌快速绑定条（术语铁律 §1.5：最快方式关联/新建联系人）──
+
+    /** 绑定条回调：服务层接线，视图不带业务状态。 */
+    interface BindSheetCallbacks {
+        /** 「创建并关联」：当前选中 APP + 输入名（原样传递，空值由服务层校验报因）。 */
+        fun onCreateBind(imPackage: String, rawTitle: String)
+
+        /** 点近用联系人 chip：关联既有档案到当前参谋会话。 */
+        fun onBindExisting(contactId: Long)
+
+        /** 「管理联系人」：进画像管理页（完整增删改查/合并）。 */
+        fun onManage()
+    }
+
+    /**
+     * 内置 IM 清单（§1.5 聊天会话登记的 APP 白名单）：键=包名，值=显示名资源。
+     * 画像页新建对话框共用此单一来源；不在清单的 APP 仍可经识别链自动登记。
+     */
+    val IM_APPS: List<Pair<String, Int>> = listOf(
+        "com.tencent.mm" to R.string.float_im_wechat,
+        "com.tencent.wework" to R.string.float_im_wework,
+        "com.alibaba.android.rimet" to R.string.float_im_dingtalk,
+        "com.ss.android.lark" to R.string.float_im_feishu,
+        "com.tencent.mobileqq" to R.string.float_im_qq,
+        "com.taobao.taobao" to R.string.float_im_taobao,
+        "com.taobao.idlefish" to R.string.float_im_idlefish,
+    )
+
+    /** 快速绑定条句柄：默认 GONE，展开预填/收起由服务层负责。 */
+    class BindSheet(
+        val root: LinearLayout,
+        val nameField: EditText,
+        val appRow: LinearLayout,
+        val createButton: TextView,
+        /** 近用区容器（标签 + 横滑 chips）：空列表整区隐藏。 */
+        val recentBox: LinearLayout,
+        /** 近用 chips 容器（HorizontalScrollView 内）。 */
+        val recentRow: LinearLayout,
+        val manageLink: TextView,
+    ) {
+        /** 当前选中 APP 包名（chip 单选高亮）；null=全不选。 */
+        internal var selectedPkg: String? = null
+            private set
+
+        /** 服务层接线的回调。 */
+        internal var callbacksRef: BindSheetCallbacks? = null
+
+        /** APP chip 单选：高亮选中项；不在清单的包名则全不选（用户手点）。 */
+        internal fun selectApp(imPackage: String?) {
+            selectedPkg = imPackage
+            for (index in 0 until appRow.childCount) {
+                val chip = appRow.getChildAt(index) as? TextView ?: continue
+                val pkg = chip.tag as? String ?: continue
+                val on = pkg == imPackage
+                (chip.background as? GradientDrawable)?.setColor(
+                    if (on) DIRECTION_CHIP_ON else 0x22FFFFFF,
+                )
+                chip.setTextColor(if (on) Color.WHITE else 0xCCFFFFFF.toInt())
+            }
+        }
+    }
+
+    /**
+     * 快速绑定条（§1.5「最快方式」）：一行名称+创建键、一行 APP 单选 chips、
+     * 一行近用联系人横滑点选、一行「管理联系人」直达。纯视觉工厂。
+     */
+    private fun buildBindSheet(context: Context, callbacks: BindSheetCallbacks): BindSheet {
+        val nameField = EditText(context).apply {
+            hint = context.getString(R.string.float_bind_name_hint)
+            setHintTextColor(0x66FFFFFF.toInt())
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 18).toFloat()
+                setColor(0x22FFFFFF.toInt())
+            }
+            setPadding(dp(context, 12), dp(context, 6), dp(context, 12), dp(context, 6))
+            maxLines = 1
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            inputType = InputType.TYPE_CLASS_TEXT
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                gravity = Gravity.CENTER_VERTICAL
+            }
+        }
+        val createButton = TextView(context).apply {
+            text = context.getString(R.string.float_bind_create)
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 16).toFloat()
+                setColor(BALL_COLOR)
+            }
+            setPadding(dp(context, 14), dp(context, 7), dp(context, 14), dp(context, 7))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                marginStart = dp(context, 8)
+                gravity = Gravity.CENTER_VERTICAL
+            }
+        }
+        val nameRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(context, 12), dp(context, 8), dp(context, 12), dp(context, 2))
+            addView(nameField)
+            addView(createButton)
+        }
+
+        // APP 单选 chips（§1.5：登记「哪个 APP 的哪个聊天对象」的 APP 面）。
+        val appRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(context, 12), dp(context, 2), dp(context, 12), dp(context, 4))
+        }
+        IM_APPS.forEach { (pkg, labelRes) ->
+            appRow.addView(
+                TextView(context).apply {
+                    text = context.getString(labelRes)
+                    setTextColor(0xCCFFFFFF.toInt())
+                    textSize = 12f
+                    tag = pkg
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(context, 12).toFloat()
+                        setColor(0x22FFFFFF)
+                    }
+                    setPadding(dp(context, 10), dp(context, 4), dp(context, 10), dp(context, 4))
+                    isClickable = true
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { marginEnd = dp(context, 6) }
+                },
+            )
+        }
+
+        val recentLabel = TextView(context).apply {
+            text = context.getString(R.string.float_bind_recent)
+            setTextColor(0x99FFFFFF.toInt())
+            textSize = 12f
+            setPadding(dp(context, 16), dp(context, 4), dp(context, 16), dp(context, 2))
+        }
+        val recentRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(context, 12), 0, dp(context, 12), dp(context, 2))
+        }
+        val recentBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(recentLabel)
+            addView(
+                HorizontalScrollView(context).apply {
+                    isHorizontalScrollBarEnabled = false
+                    addView(recentRow)
+                },
+            )
+        }
+
+        val manageLink = TextView(context).apply {
+            text = context.getString(R.string.float_bind_manage)
+            setTextColor(MENU_ACCENT)
+            textSize = 12.5f
+            setPadding(dp(context, 16), dp(context, 2), dp(context, 16), dp(context, 6))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.END }
+        }
+
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            background = GradientDrawable().apply { setColor(0x14FFFFFF) }
+            addView(nameRow)
+            addView(appRow)
+            addView(recentBox)
+            addView(manageLink)
+        }
+
+        val sheet = BindSheet(root, nameField, appRow, createButton, recentBox, recentRow, manageLink)
+        sheet.callbacksRef = callbacks
+        createButton.setOnClickListener {
+            sheet.callbacksRef?.onCreateBind(sheet.selectedPkg ?: "", nameField.text.toString())
+        }
+        for (index in 0 until appRow.childCount) {
+            val chip = appRow.getChildAt(index)
+            chip.setOnClickListener { sheet.selectApp(chip.tag as? String) }
+        }
+        manageLink.setOnClickListener { sheet.callbacksRef?.onManage() }
+        // 默认预选微信（首位）；服务层展开时按识别候选覆盖。
+        sheet.selectApp(IM_APPS.first().first)
+        return sheet
+    }
+
+    /**
+     * 渲染近用联系人 chips（服务层展开绑定条时拉取 [ScreenAdvisor.recentContacts]
+     * 后调用）：点击回调 [BindSheetCallbacks.onBindExisting]；空列表整区隐藏。
+     */
+    fun renderBindRecents(sheet: BindSheet, contacts: List<ScreenAdvisor.QuickContact>) {
+        sheet.recentRow.removeAllViews()
+        val context = sheet.recentRow.context
+        contacts.forEach { contact ->
+            sheet.recentRow.addView(
+                TextView(context).apply {
+                    text = contact.displayName
+                    setTextColor(0xCCFFFFFF.toInt())
+                    textSize = 12f
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    background = GradientDrawable().apply {
+                        cornerRadius = dp(context, 12).toFloat()
+                        setColor(0x22FFFFFF)
+                    }
+                    setPadding(dp(context, 10), dp(context, 4), dp(context, 10), dp(context, 4))
+                    isClickable = true
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { marginEnd = dp(context, 6) }
+                    setOnClickListener { sheet.callbacksRef?.onBindExisting(contact.contactId) }
+                },
+            )
+        }
+        sheet.recentBox.visibility = if (contacts.isEmpty()) View.GONE else View.VISIBLE
+    }
 
     /** 策略条回调（P2）：轻确认三键与任务令展开；P3：分叉提议两键 + reroute 三件。服务层接线，视图不带业务。 */
     interface StrategyStripCallbacks {

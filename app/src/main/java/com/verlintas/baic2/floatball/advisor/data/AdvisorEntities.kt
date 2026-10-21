@@ -137,9 +137,36 @@ data class ContactProfileEntity(
     val updatedAt: Long,
 )
 
-/** 风格卡作用域：[STYLE_SCOPE_CONTACT] 按联系人覆盖；[STYLE_SCOPE_MY_DEFAULT] 全局默认（contactId=0）。 */
+/** 说话风格卡作用域：[STYLE_SCOPE_CONTACT] 按联系人覆盖；[STYLE_SCOPE_MY_DEFAULT] 全局默认（contactId=0）。 */
 const val STYLE_SCOPE_MY_DEFAULT = "my_default"
 const val STYLE_SCOPE_CONTACT = "contact"
+
+/**
+ * 聊天会话行（术语铁律 §1.5，2026-10-21）：IM 里「哪个 APP 的哪个聊天对象」的
+ * 记录——**不存聊天内容**，只存 APP 包名 + 对象标识，供 RPA 对口打开与识别
+ * 跨 APP 归档（同一联系人在微信/企微/钉钉…各有一条聊天会话行）。
+ * 唯一键 (imPackage, channelKey)：一个 APP 内同一聊天对象恒归一个联系人；
+ * (imPackage, channelKey) 重复 upsert 时按 REPLACE 更新归属与显示名。
+ */
+@Entity(
+    tableName = "chat_channels",
+    indices = [
+        Index(value = ["contactId"]),
+        Index(value = ["imPackage", "channelKey"], unique = true),
+    ],
+)
+data class ChatChannelEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val contactId: Long,
+    /** IM 包名（com.tencent.mm / com.tencent.wework / com.alibaba.android.rimet…）。 */
+    val imPackage: String,
+    /** 该 APP 内的规范化聊天对象键（ContactNames.normalize(窗口标题/昵称)）。 */
+    val channelKey: String,
+    /** 该 APP 内的显示名（RPA 搜索导航用）。 */
+    val displayName: String,
+    val lastSeenAt: Long,
+    val createdAt: Long = 0L,
+)
 
 /**
  * 说话风格卡（v4，方案 §6.2/§6.5）：基调单选 + 意图多选 + 一句自定义补充。

@@ -96,6 +96,12 @@ interface ContactDirectory {
     suspend fun resolveGroup(imPackage: String?, rawTitle: String?): ContactRef?
 
     /**
+     * 按档案 id 取联系人完整投影（分屏快速绑定既有档案用，§1.5 术语铁律）；
+     * 档案不存在/已合并/已删除返回 null。
+     */
+    suspend fun refOf(contactId: Long): ContactRef?
+
+    /**
      * 会话归属场景落行（v10，方案 §1.2）：非聊天屏孤立会话标记 non_chat；
      * 绑定联系人的会话保持/复位 chat。任何失败由调用方静默降级。
      */

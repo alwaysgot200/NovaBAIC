@@ -26,6 +26,7 @@ import android.content.Context
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.verlintas.baic2.device.api.AccessibilityBridge
 import com.verlintas.baic2.device.api.TextNode
@@ -35,6 +36,7 @@ import com.ven.assists.service.AssistsService
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -58,7 +60,14 @@ class AssistsA11yBridge @Inject constructor(
 
     override val connected = legacy.connected
 
-    override suspend fun tap(x: Int, y: Int): Result<Unit> = legacy.tap(x, y)
+    override suspend fun tap(x: Int, y: Int): Result<Unit> {
+        // 屏幕外坐标直接失败（dispatchGesture 对非法坐标可能挂起不回调——
+        // 2026-10-21 真机实测 (-734,2045) 节点 tap 卡死整条导航链）。
+        if (x < 0 || y < 0) {
+            return Result.failure(IllegalStateException("tap_offscreen: ($x,$y)"))
+        }
+        return legacy.tap(x, y)
+    }
 
     override suspend fun longPress(x: Int, y: Int): Result<Unit> = legacy.longPress(x, y)
 
@@ -75,19 +84,63 @@ class AssistsA11yBridge @Inject constructor(
     override suspend fun typeText(text: String): Result<Unit> = withContext(Dispatchers.Main) {
         val service = AssistsService.getOrNull() ?: return@withContext notEnabled()
         val root = service.rootInActiveWindow
-        val target = root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: root?.let { firstEditable() }
-            ?: return@withContext Result.failure(
+        // 目标候选：焦点输入节点 + 全部可编辑节点（className@bounds 去重）。
+        // 微信 FTS 搜索页的 findFocus 节点可能不是真输入框（SET_TEXT 被静默
+        // 吞掉，2026-10-21 真机实测 performAction=true 但文本不落地），对候选
+        // 逐个 SET_TEXT，以 [inputTextContains] 回读验证为准。
+        val candidates = LinkedHashMap<String, AccessibilityNodeInfo>()
+        fun addTarget(tag: String, node: AccessibilityNodeInfo) {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            val key = "${node.className}@$bounds"
+            if (candidates.containsKey(key)) return
+            candidates[key] = node
+            Log.i(TAG, "typeText candidate[$tag] $key text='${node.text}'")
+        }
+        root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { addTarget("focus", it) }
+        runCatching {
+            AssistsCore.getAllNodes()
+                .filter { it.isEditable && it.isEnabled }
+                .take(EDITABLE_CANDIDATE_MAX)
+                .forEach { addTarget("editable", it) }
+        }
+        if (candidates.isEmpty()) {
+            return@withContext Result.failure(
                 IllegalStateException("no_focused_input: tap a text field first"),
             )
+        }
         val arguments = android.os.Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
-        if (target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) {
-            return@withContext Result.success(Unit)
+        for (target in candidates.values) {
+            if (target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)) {
+                delay(VERIFY_DELAY_MS)
+                if (inputTextContains(text)) return@withContext Result.success(Unit)
+            }
         }
-        pasteFallback(service, target, text)
+        // SET_TEXT 全部未落地 → 焦点节点剪贴板 PASTE 兜底，paste 后同样验证。
+        val pasted = pasteFallback(service, candidates.values.first(), text)
+        if (pasted.isFailure) return@withContext pasted
+        delay(VERIFY_DELAY_MS)
+        if (inputTextContains(text)) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException("set_text_not_applied: the field kept its old text"))
+        }
     }
+
+    /**
+     * 任意可编辑节点当前文本是否包含 [text]——typeText 的落地验证口径。
+     * 焦点节点可能不是文本真正落地的节点（多候选尝试），故扫全部可编辑节点；
+     * hint 占位符不含关键词，可区分「空框」。
+     */
+    fun inputTextContains(text: String): Boolean = runCatching {
+        val service = AssistsService.getOrNull() ?: return@runCatching false
+        val focus = service.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (focus?.text?.toString()?.contains(text) == true) return@runCatching true
+        AssistsCore.getAllNodes()
+            .any { it.isEditable && it.text?.toString()?.contains(text) == true }
+    }.getOrDefault(false)
 
     /** SET_TEXT 拒绝时的剪贴板兜底（直写剪贴板 + 节点 ACTION_PASTE，不经 IME）。 */
     private fun pasteFallback(
@@ -167,13 +220,22 @@ class AssistsA11yBridge @Inject constructor(
     override fun findText(query: String): List<TextNode> {
         val needle = query.trim().lowercase()
         if (needle.isEmpty()) return emptyList()
+        // 匹配口径：大小写不敏感 + 空白无关——IME 候选词常带分词空格
+        // （如「吴瑞曦 topwayricky」，2026-10-21 真机实测），精确子串会 miss。
+        val compactNeedle = needle.filter { !it.isWhitespace() }
         val results = LinkedHashMap<String, TextNode>()
         fun collect(node: AccessibilityNodeInfo) {
             runCatching {
                 val label = node.text?.toString()?.takeIf { it.isNotBlank() }
                     ?: node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
                     ?: return
-                if (!label.lowercase().contains(needle)) return
+                val lower = label.lowercase()
+                val matched = lower.contains(needle) ||
+                    (
+                        compactNeedle.isNotEmpty() &&
+                            lower.filter { !it.isWhitespace() }.contains(compactNeedle)
+                        )
+                if (!matched) return
                 val bounds = Rect()
                 node.getBoundsInScreen(bounds)
                 if (bounds.isEmpty) return
@@ -186,6 +248,13 @@ class AssistsA11yBridge @Inject constructor(
         // 系统级文本查找先行（结构化、覆盖动态补齐节点），再全树兜 contentDescription
         runCatching { AssistsCore.findByText(query).forEach { collect(it) } }
         runCatching { AssistsCore.getAllNodes().forEach { collect(it) } }
+        // 全窗口兜底：IME 候选词在独立输入法窗口，ActiveWindow（FTS 页）扫不到
+        // （2026-10-21 真机实测 ⑦ 轮询全 miss 的根因）。findByText 走系统
+        // 服务端子串匹配，多窗口成本可控。
+        runCatching {
+            AssistsCore.findByText(query, scope = AssistsCore.NodeLookupScope.AllWindows)
+                .forEach { collect(it) }
+        }
         return results.values.toList()
     }
 
@@ -267,5 +336,13 @@ class AssistsA11yBridge @Inject constructor(
 
     private companion object {
         const val RESTORE_DELAY_MS = 120L
+
+        /** typeText 落地验证前的等待（控件刷新文本快照，协程挂起不阻塞主线程）。 */
+        const val VERIFY_DELAY_MS = 150L
+
+        /** typeText 多候选注入的最多可编辑节点数（防大列表全扫）。 */
+        const val EDITABLE_CANDIDATE_MAX = 5
+
+        const val TAG = "AssistsA11yBridge"
     }
 }

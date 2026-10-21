@@ -299,45 +299,94 @@ class FloatBallService : Service() {
     }
 
     /**
-     * 联系人状态条按场景渲染（v10 §1.3，VA-2 U3 修订）：NON_CHAT 分屏不出现
-     * 「未绑定联系人」的人设暗示，显示纯问答标识；但**保留点击入口**——场景
-     * 误判（OCR 漏认结构标记）时用户仍可单击进画像页手动关联/建档（§4.5
-     * 严禁静默失效，2026-10-21 退步修复）。CHAT 屏绑定显示主名、未绑定保留
-     * 手动关联入口（点击进画像管理页）。transcript 与 activeContact 双流的
-     * 汇合点：任一发射都重读双流现值，两个收集器并发时以最后一次渲染为准
-     * （幂等）。
+     * 快速绑定条回调（§1.5 最快关联/新建）：三条全走 [ScreenAdvisor] 门面，
+     * 服务层不直接碰仓库；失败 Toast 报因（§4.5 严禁静默失效）。
+     */
+    private val bindCallbacks = object : FloatUi.BindSheetCallbacks {
+        override fun onCreateBind(imPackage: String, rawTitle: String) {
+            scope.launch {
+                when (screenAdvisor.quickBind(imPackage, rawTitle)) {
+                    null -> {
+                        split?.bindSheet?.root?.visibility = View.GONE
+                        applyStatusBarScene()
+                    }
+                    "empty_title" -> toast(R.string.float_bind_empty)
+                    else -> toast(R.string.float_bind_ambiguous)
+                }
+            }
+        }
+
+        override fun onBindExisting(contactId: Long) {
+            scope.launch {
+                if (screenAdvisor.bindExisting(contactId) != null) {
+                    split?.bindSheet?.root?.visibility = View.GONE
+                    applyStatusBarScene()
+                } else {
+                    toast(R.string.float_bind_failed)
+                }
+            }
+        }
+
+        override fun onManage() {
+            val candidate = screenAdvisor.lastChatCandidate
+            openProfileManager(
+                contactId = -1L,
+                candidateTitle = candidate?.second,
+                candidatePkg = candidate?.first,
+            )
+        }
+    }
+
+    /**
+     * 联系人状态条按场景渲染（v10 §1.3，VA-2 U3 修订 → §1.5 快速绑定）：
+     * NON_CHAT 分屏不出现「未绑定联系人」的人设暗示，显示纯问答标识；CHAT 屏
+     * 绑定显示主名、未绑定提示点此关联。点击统一走 [onStatusBarClick]——
+     * 已绑定进画像详情，未绑定展开/收起分屏内嵌快速绑定条（场景误判时
+     * 用户仍可手动建档纠正，§4.5 严禁静默失效）。transcript 与
+     * activeContact 双流的汇合点：任一发射都重读双流现值，两个收集器并发时
+     * 以最后一次渲染为准（幂等）。
      */
     private fun applyStatusBarScene() {
         val panel = split ?: return
-        if (screenAdvisor.transcript.value.isNonChat) {
-            panel.statusBar.text = getString(R.string.float_profile_status_nonchat)
-            // 纯问答屏不透传识别候选（此回合未跑识别，旧候选有张冠李戴
-            // 风险）：进画像页列表手动搜/建，误判可由用户在此纠正。
-            panel.statusBar.setOnClickListener {
-                openProfileManager(contactId = -1L)
-            }
-            panel.statusBar.isClickable = true
+        panel.statusBar.isClickable = true
+        panel.statusBar.setOnClickListener { onStatusBarClick() }
+        panel.statusBar.text = if (screenAdvisor.transcript.value.isNonChat) {
+            getString(R.string.float_profile_status_nonchat)
         } else {
             val contact = screenAdvisor.activeContact.value
-            panel.statusBar.text = if (contact != null) {
+            if (contact != null) {
                 getString(R.string.float_profile_status_bound, contact.displayName)
             } else {
                 getString(R.string.float_profile_status_unbound)
             }
-            panel.statusBar.setOnClickListener {
-                val active = screenAdvisor.activeContact.value
-                if (active == null) {
-                    // 未绑定：带识别候选进画像页，列表页顶部出现快速绑定卡片。
-                    val candidate = screenAdvisor.lastChatCandidate
-                    openProfileManager(
-                        contactId = -1L,
-                        candidateTitle = candidate?.second,
-                        candidatePkg = candidate?.first,
-                    )
-                } else {
-                    openProfileManager(active.contactId)
-                }
-            }
+        }
+    }
+
+    /**
+     * 状态条点击（§1.5 最快入口）：已绑定 → 进画像详情；未绑定 → 展开/收起
+     * 内嵌快速绑定条。展开时预填识别候选（哪个 APP 的谁）；纯问答屏不透传
+     * 候选（此回合未跑识别，旧候选有张冠李戴风险），仅保留默认选中 APP。
+     */
+    private fun onStatusBarClick() {
+        val active = screenAdvisor.activeContact.value
+        if (active != null) {
+            openProfileManager(active.contactId)
+            return
+        }
+        val panel = split ?: return
+        val sheet = panel.bindSheet
+        if (sheet.root.visibility == View.VISIBLE) {
+            sheet.root.visibility = View.GONE
+            return
+        }
+        if (!screenAdvisor.transcript.value.isNonChat) {
+            val (pkg, title) = screenAdvisor.lastChatCandidate ?: (null to null)
+            if (pkg != null) sheet.selectApp(pkg)
+            if (!title.isNullOrBlank()) sheet.nameField.setText(title)
+        }
+        sheet.root.visibility = View.VISIBLE
+        scope.launch {
+            FloatUi.renderBindRecents(sheet, screenAdvisor.recentContacts())
         }
     }
 
@@ -957,6 +1006,7 @@ class FloatBallService : Service() {
             onSmalltalk = { screenAdvisor.requestSmalltalk() },
             inputCallbacks = inputCallbacks,
             draftCallbacks = draftCallbacks,
+            bindCallbacks = bindCallbacks,
         )
         panel.handle.setOnTouchListener(makeResizeListener())
         excludeSystemGestures(panel.handle)
@@ -1009,27 +1059,8 @@ class FloatBallService : Service() {
         splitParams = params
         // StateFlow 无新值不发射: 新视图创建后立即喂当前转录快照。
         transcript.render(screenAdvisor.transcript.value)
-        val active = screenAdvisor.activeContact.value
-        panel.statusBar.text = if (active != null) {
-            getString(R.string.float_profile_status_bound, active.displayName)
-        } else {
-            getString(R.string.float_profile_status_unbound)
-        }
-        panel.statusBar.setOnClickListener {
-            val active = screenAdvisor.activeContact.value
-            if (active == null) {
-                val candidate = screenAdvisor.lastChatCandidate
-                openProfileManager(
-                    contactId = -1L,
-                    candidateTitle = candidate?.second,
-                    candidatePkg = candidate?.first,
-                )
-            } else {
-                openProfileManager(active.contactId)
-            }
-        }
-        // 场景化覆写（VA-2 U3 修订）：NON_CHAT 时上一段的未绑定文案/候选点击
-        // 被纯问答标识+进画像页列表的点击替换（保留手动关联入口）。
+        // 状态条场景化渲染 + 点击接线（§1.5：未绑定点击展开内嵌快速绑定条；
+        // NON_CHAT 显示纯问答标识但保留手动关联入口）统一在 applyStatusBarScene。
         applyStatusBarScene()
         renderDirectionChip(panel.directionChip, screenAdvisor.direction.value)
         FloatUi.renderStrategyStrip(

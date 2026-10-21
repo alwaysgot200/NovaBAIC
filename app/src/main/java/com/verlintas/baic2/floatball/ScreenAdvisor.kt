@@ -260,6 +260,56 @@ class ScreenAdvisor @Inject constructor(
     var lastChatCandidate: Pair<String?, String>? = null
         private set
 
+    // ---- 分屏快速绑定（术语铁律 §1.5：最快关联/新建联系人）----
+
+    /** 快速绑定的最小联系人投影（分屏绑定条近用列表用）。 */
+    data class QuickContact(val contactId: Long, val displayName: String)
+
+    /**
+     * 快速绑定：以手输/候选名走 [ContactDirectory.resolve]（allowStub=true——
+     * 精确/别名命中即绑既有，否则新建 Stub），识别链内自动登记聊天会话行
+     * （哪个 APP 的哪个聊天对象），再把当前参谋会话改绑到该联系人（孤立
+     * 会话 scene 校正回 chat）。返回 null=成功；非 null=失败原因码
+     * （empty_title / resolve_failed / ambiguous），展示层映射文案。
+     */
+    suspend fun quickBind(imPackage: String, rawTitle: String): String? {
+        val title = rawTitle.trim()
+        if (title.isEmpty() || imPackage.isBlank()) return "empty_title"
+        val ref = runCatching {
+            contactDirectory.resolve(imPackage, title, allowStub = true)
+        }.getOrNull() ?: return "ambiguous"
+        _activeContact.value = ref
+        val conversationId = activeConversationId
+        if (conversationId > 0) {
+            runCatching { contactRepository.rebindConversation(conversationId, ref.contactId) }
+        }
+        return null
+    }
+
+    /**
+     * 绑既有档案（分屏绑定条点近用联系人）：改绑当前参谋会话；有识别候选时
+     * 同步登记聊天会话行（无候选不猜 APP 对象）。返回投影供状态条刷新。
+     */
+    suspend fun bindExisting(contactId: Long): ContactRef? {
+        val ref = runCatching { contactDirectory.refOf(contactId) }.getOrNull() ?: return null
+        val (pkg, title) = lastChatCandidate ?: (null to null)
+        if (!pkg.isNullOrBlank() && !title.isNullOrBlank()) {
+            runCatching { contactRepository.recordChannel(contactId, pkg, title) }
+        }
+        val conversationId = activeConversationId
+        if (conversationId > 0) {
+            runCatching { contactRepository.rebindConversation(conversationId, contactId) }
+        }
+        _activeContact.value = ref
+        return ref
+    }
+
+    /** 近用联系人（分屏绑定条横向点选；按 updatedAt 新→旧）。 */
+    suspend fun recentContacts(limit: Int = 8): List<QuickContact> =
+        runCatching { contactRepository.listAlive().take(limit) }
+            .getOrDefault(emptyList())
+            .map { QuickContact(it.id, it.displayName) }
+
     private val _turnCompletions = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
     val turnCompletions: SharedFlow<Unit> = _turnCompletions.asSharedFlow()
 

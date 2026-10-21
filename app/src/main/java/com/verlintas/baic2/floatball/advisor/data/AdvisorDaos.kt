@@ -171,6 +171,37 @@ interface ContactAliasDao {
     suspend fun insertAll(aliases: List<ContactAliasEntity>)
 }
 
+/**
+ * 聊天会话行 DAO（术语铁律 §1.5）：识别命中/手动绑定时 upsert（记录「哪个
+ * APP 的哪个聊天对象」），画像页按联系人列出全部 IM 聊天，RPA 按行打开。
+ */
+@Dao
+interface ChatChannelDao {
+
+    /** (imPackage, channelKey) 唯一索引触发 REPLACE：归属改指即改绑成功。 */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(channel: ChatChannelEntity)
+
+    @Query("SELECT * FROM chat_channels WHERE imPackage = :imPackage AND channelKey = :channelKey")
+    suspend fun find(imPackage: String, channelKey: String): ChatChannelEntity?
+
+    @Query("SELECT * FROM chat_channels WHERE contactId = :contactId ORDER BY lastSeenAt DESC")
+    suspend fun listForContact(contactId: Long): List<ChatChannelEntity>
+
+    /** 合并联系人：聊天会话行整体改指主档；(imPackage, channelKey) 撞车由 REPLACE 兜底。 */
+    @Query("UPDATE chat_channels SET contactId = :to WHERE contactId = :from")
+    suspend fun reassign(from: Long, to: Long)
+
+    /** 合并前清 from 与 to 重复的 (imPackage, channelKey) 行（reassign 唯一索引防撞）。 */
+    @Query(
+        """
+        DELETE FROM chat_channels WHERE contactId = :from AND (imPackage, channelKey) IN
+            (SELECT imPackage, channelKey FROM chat_channels WHERE contactId = :to)
+        """,
+    )
+    suspend fun deleteDuplicatesWith(from: Long, to: Long)
+}
+
 @Dao
 interface PersonaFieldDao {
 

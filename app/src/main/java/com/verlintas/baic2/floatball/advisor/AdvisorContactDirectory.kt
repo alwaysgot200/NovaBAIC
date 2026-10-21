@@ -68,6 +68,13 @@ class AdvisorContactDirectory @Inject constructor(
         return toRef(matched.profile)
     }
 
+    override suspend fun refOf(contactId: Long): ContactRef? {
+        val profile = contacts.profile(contactId)
+            ?.takeIf { it.mergedInto == null && it.deletedAt == null }
+            ?: return null
+        return toRef(profile)
+    }
+
     override suspend fun markScene(conversationId: Long, scene: String) {
         contacts.markScene(conversationId, scene)
     }

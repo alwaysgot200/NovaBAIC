@@ -90,6 +90,7 @@ import com.verlintas.baic2.floatball.advisor.StyleCardRepository
 import com.verlintas.baic2.floatball.advisor.StyleResolver
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_GROUP
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_PERSON
+import com.verlintas.baic2.floatball.advisor.data.ChatChannelEntity
 import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.data.GroupMemberEntity
 import com.verlintas.baic2.floatball.advisor.data.MY_PERSONA_CONTACT_ID
@@ -397,7 +398,16 @@ private fun ContactListScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        // 手动新建（2026-10-21 退步修复补充）：无论有无识别候选、无论场景判定
+        // 结果，用户都能手动建档并绑到当前会话——纯问答误判屏的兜底入口。
+        // 新建即登记聊天会话行（§1.5：选「哪个 APP 的哪个聊天对象」）。
+        var showCreate by remember { mutableStateOf(false) }
+        var createName by remember { mutableStateOf("") }
+        var createPkg by remember { mutableStateOf(candidatePkg ?: "com.tencent.mm") }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 8.dp)) {
+            OutlinedButton(onClick = { createName = ""; showCreate = true }) {
+                Text(stringResource(R.string.float_profile_create_contact))
+            }
             OutlinedButton(onClick = onMine) {
                 Text(stringResource(R.string.float_profile_mine))
             }
@@ -410,6 +420,66 @@ private fun ContactListScreen(
             }) {
                 Text(stringResource(R.string.float_playbook_entry))
             }
+        }
+        if (showCreate) {
+            AlertDialog(
+                onDismissRequest = { showCreate = false },
+                title = { Text(stringResource(R.string.float_profile_create_contact)) },
+                text = {
+                    OutlinedTextField(
+                        value = createName,
+                        onValueChange = { createName = it },
+                        label = { Text(stringResource(R.string.float_profile_create_name_hint)) },
+                        singleLine = true,
+                    )
+                    // 所属 APP 单选（§1.5：聊天会话记录「哪个 APP 的什么人」，
+                    // 清单与分屏绑定条共用 FloatUi.IM_APPS 单一来源）。
+                    FlowChips(
+                        options = FloatUi.IM_APPS,
+                        selected = createPkg,
+                        onSelect = { createPkg = it },
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = createName.isNotBlank(),
+                        onClick = {
+                            val name = createName.trim()
+                            showCreate = false
+                            if (name.isEmpty()) return@TextButton
+                            scope.launch {
+                                runCatching {
+                                    val outcome = contacts.resolve(
+                                        // 建档即按所选 APP 登记聊天会话行（resolve 内
+                                        // match/stub 均会 recordChannel）。
+                                        imPackage = createPkg,
+                                        rawTitle = name,
+                                        source = "user",
+                                        createStub = true,
+                                    )
+                                    if (outcome is com.verlintas.baic2.floatball.advisor.ResolveOutcome.Matched) {
+                                        if (currentConversationId > 0) {
+                                            contacts.rebindConversation(currentConversationId, outcome.profile.id)
+                                        }
+                                        refresh()
+                                        onOpen(outcome.profile.id)
+                                    } else {
+                                        // Ambiguous/FuzzyNear/Unknown：不猜不重复
+                                        // 建档，提示后由用户从列表选择或换名。
+                                        refresh()
+                                        toast(context, R.string.float_profile_create_exists)
+                                    }
+                                }
+                            }
+                        },
+                    ) { Text(stringResource(R.string.float_profile_create_confirm)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCreate = false }) {
+                        Text(stringResource(R.string.float_profile_create_cancel))
+                    }
+                },
+            )
         }
 
         merges.forEach { record ->
@@ -425,19 +495,27 @@ private fun ContactListScreen(
             )
         }
         filtered.forEach { profile ->
-            val bindCandidate: (() -> Unit)? = candidateName?.takeIf { currentConversationId > 0 }?.let { name ->
+            // 绑定入口不再依赖识别候选（2026-10-21）：只要带着当前会话进来
+            // （分屏状态条 → 画像页），任何档案都可一键绑到本会话；有候选
+            // 名时同步骤登记别名，无候选时只改绑（用户点按即明确归属）。
+            val bindCandidate: (() -> Unit)? = if (currentConversationId > 0) {
                 {
                     scope.launch {
                         runCatching {
-                            contacts.addAlias(profile.id, name)
+                            candidateName?.let { contacts.addAlias(profile.id, it) }
                             contacts.rebindConversation(currentConversationId, profile.id)
                         }
                         candidate = null
                         refresh()
                     }
                 }
+            } else null
+            val bindText = if (candidateName != null && currentConversationId > 0) {
+                stringResource(R.string.float_profile_bind_as_this)
+            } else {
+                stringResource(R.string.float_profile_bind_current_session)
             }
-            ContactCard(profile, bindCandidate = bindCandidate) { onOpen(profile.id) }
+            ContactCard(profile, bindCandidate = bindCandidate, bindText = bindText) { onOpen(profile.id) }
         }
     }
 }
@@ -446,6 +524,7 @@ private fun ContactListScreen(
 private fun ContactCard(
     profile: ContactProfileEntity,
     bindCandidate: (() -> Unit)? = null,
+    bindText: String = "",
     onClick: () -> Unit,
 ) {
     Surface(
@@ -476,7 +555,7 @@ private fun ContactCard(
             }
             if (bindCandidate != null) {
                 TextButton(onClick = bindCandidate, modifier = Modifier.padding(top = 2.dp)) {
-                    Text(stringResource(R.string.float_profile_bind_as_this))
+                    Text(bindText.ifBlank { stringResource(R.string.float_profile_bind_as_this) })
                 }
             }
         }
@@ -556,12 +635,15 @@ private fun ContactDetailScreen(
     var editing by remember { mutableStateOf<PersonaFieldDef?>(null) }
     var mergeOpen by remember { mutableStateOf(false) }
     var boundTitles by remember { mutableStateOf<List<Pair<Long, String>>>(emptyList()) }
+    // 聊天会话行（§1.5：一人可关联多个 APP 的聊天对象，不存内容只存归属）。
+    var channels by remember { mutableStateOf<List<ChatChannelEntity>>(emptyList()) }
 
     suspend fun refreshBindings() {
         boundTitles = contacts.conversationIdsFor(contactId).mapNotNull { id ->
             val title = conversationRepo.get(id)?.title ?: return@mapNotNull null
             id to title
         }
+        channels = contacts.channelsOf(contactId)
     }
     LaunchedEffect(contactId) { refreshBindings() }
 
@@ -680,44 +762,62 @@ private fun ContactDetailScreen(
                 }
             }
 
-            // 关联会话（对方 IM）：a11y 自动搜索导航到具体联系人聊天页；
-            // 无 a11y 或中途失败 → Toast 报原因并指引手动操作（§4.5 铁律：
-            // 硬前置必须显式提示，绝不静默只开 App）。
-            if (!current.imPackage.isNullOrBlank()) {
-                SectionTitle(stringResource(R.string.float_profile_open_im))
-                val imNavigator = advisorActivity().imNavigator
+            // 聊天会话（§1.5 术语铁律）：不存 IM 聊天内容，只记录「哪个 APP 的
+            // 哪个聊天对象」；一人多 APP 各一行，点击由 ImChatNavigator 直达
+            // 该 APP 的该聊天页（RPA 打开的正确目标）。a11y 未开/中途失败 →
+            // Toast 报原因并指引手动操作（§4.5 铁律：硬前置必须显式提示，
+            // 绝不静默只开 App）。
+            SectionTitle(stringResource(R.string.float_profile_open_im))
+            if (channels.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.float_bind_channels_empty),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            val imNavigator = activity.imNavigator
+            channels.forEach { channel ->
+                val appLabelRes = FloatUi.IM_APPS.firstOrNull { it.first == channel.imPackage }?.second
                 TextButton(onClick = {
-                    val pkg = current.imPackage
-                    val displayName = current.displayName
-                    if (!pkg.isNullOrBlank()) {
-                        scope.launch {
-                            val result = imNavigator.openChat(pkg, displayName)
-                            imNavigator.toastResult(result, displayName)
-                        }
+                    scope.launch {
+                        val result = imNavigator.openChat(channel.imPackage, channel.displayName)
+                        imNavigator.toastResult(result, channel.displayName)
                     }
                 }) {
-                    Text(stringResource(R.string.float_profile_open_im_hint, current.displayName))
+                    Text(
+                        text = "· " + (appLabelRes?.let { stringResource(it) } ?: channel.imPackage) +
+                            "：" + channel.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             }
 
             // 参谋会话（本系统中与该联系人关联的老参谋对话）+ 按人搜索
             SectionTitle(stringResource(R.string.float_profile_advisor_sessions))
             boundTitles.forEach { (conversationId, title) ->
-                Text(
-                    text = "· $title",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            // 直达主 App 会话（extra 口径 mirror RunService）。
-                            context.startActivity(
-                                android.content.Intent(context, com.verlintas.baic2.MainActivity::class.java)
-                                    .putExtra("open_conversation_id", conversationId)
-                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        },
-                )
-            }
+                    Text(
+                        text = "· $title",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                // 直达主 App 会话（extra 口径 mirror RunService）。
+                                // MainActivity=singleTop 且 task 顶通常是本画像页：必须
+                                // CLEAR_TOP 把覆盖层清掉让 MainActivity 回栈顶，否则系统
+                                // START_DELIVERED_TO_TOP 只投 Intent 不切界面（表现为
+                                // "点了没反应"，2026-10-21 真机实测）。
+                                context.startActivity(
+                                    android.content.Intent(context, com.verlintas.baic2.MainActivity::class.java)
+                                        .putExtra("open_conversation_id", conversationId)
+                                        .addFlags(
+                                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                                android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                                android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                                        ),
+                                )
+                            },
+                    )
+                }
             PersonHistorySearch(contactId)
 
             // 画像字段（schema 驱动分组）；P3：群实体字段按 contactType 显隐。

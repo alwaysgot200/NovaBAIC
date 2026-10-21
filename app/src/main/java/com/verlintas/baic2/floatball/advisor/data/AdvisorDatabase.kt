@@ -54,8 +54,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PersonalMaterialEntity::class,
         SelfPersonaEntity::class,
         TopicPlanEntity::class,
+        ChatChannelEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -103,6 +104,8 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun selfPersonaDao(): SelfPersonaDao
 
     abstract fun topicPlanDao(): TopicPlanDao
+
+    abstract fun chatChannelDao(): ChatChannelDao
 }
 
 /**
@@ -554,6 +557,50 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
         ensureColumn(
             db, "contact_profiles", "stageIntent",
             "stageIntent TEXT NOT NULL DEFAULT ''",
+        )
+    }
+}
+
+/**
+ * v12 → v13（术语铁律 §1.5，2026-10-21）：新表 chat_channels（聊天会话行：
+ * 哪个 APP 的哪个聊天对象，不存聊天内容）。存量迁移：每个存活档案的
+ * (imPackage, contactKey, displayName) 生成一条聊天会话行——主 IM 自动
+ * 在册；此后识别/手动绑定 upsert，跨 APP（企微/钉钉/飞书…）的同一人
+ * 追加行即归并到同一联系人。建表 IF NOT EXISTS，不搬不删既有数据。
+ */
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `chat_channels` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `imPackage` TEXT NOT NULL,
+                `channelKey` TEXT NOT NULL,
+                `displayName` TEXT NOT NULL,
+                `lastSeenAt` INTEGER NOT NULL,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_chat_channels_contactId` ON `chat_channels` (`contactId`)",
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_chat_channels_imPackage_channelKey` " +
+                "ON `chat_channels` (`imPackage`, `channelKey`)",
+        )
+        // 存量搬运：contact_profiles.contactKey 是「pkg:规范化名」复合键，剥掉
+        // 「pkg:」前缀才是该 APP 内的 channelKey（substr 跳过 imPackage 长度+1）。
+        db.execSQL(
+            """
+            INSERT OR IGNORE INTO `chat_channels`
+                (`contactId`, `imPackage`, `channelKey`, `displayName`, `lastSeenAt`, `createdAt`)
+            SELECT `id`, `imPackage`, substr(`contactKey`, length(`imPackage`) + 2),
+                   `displayName`, `updatedAt`, `createdAt`
+            FROM `contact_profiles`
+            WHERE `mergedInto` IS NULL AND `deletedAt` IS NULL
+            """.trimIndent(),
         )
     }
 }

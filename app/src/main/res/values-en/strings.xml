@@ -233,7 +233,7 @@
         <item>Keep the relationship warm</item>
     </string-array>
     <string name="float_profile_status_bound">当前联系人：%1$s ▾</string>
-    <string name="float_profile_status_unbound">未绑定联系人 ▸ 点此管理画像</string>
+    <string name="float_profile_status_unbound">未绑定联系人 ▸ 点此快速关联</string>
     <string name="float_profile_status_nonchat">Screen Advisor · Q&amp;A only</string>
     <string name="float_persona_card_title">Dual persona &amp; engagement</string>
     <string name="float_persona_theirs">Their tags</string>
@@ -292,6 +292,29 @@
     <string name="float_profile_rebind_current">把当前参谋会话绑定到此人（切人修正）</string>
     <string name="float_profile_bound_current">当前参谋会话已绑定此人</string>
     <string name="float_profile_bind">绑定</string>
+    <string name="float_profile_create_contact">New contact</string>
+    <string name="float_profile_create_name_hint">Name / nickname</string>
+    <string name="float_profile_create_confirm">Create</string>
+    <string name="float_profile_create_cancel">Cancel</string>
+    <string name="float_profile_create_exists">A similar profile already exists or the name is invalid. Tap "Bind to current chat" on a profile, or try another name.</string>
+    <string name="float_profile_bind_current_session">Bind to current chat</string>
+    <!-- 分屏内嵌快速绑定条（§1.5 最快关联/新建联系人） -->
+    <string name="float_bind_name_hint">Name / nickname</string>
+    <string name="float_bind_create">Create &amp; link</string>
+    <string name="float_bind_recent">Recent contacts (tap to link)</string>
+    <string name="float_bind_manage">Manage contacts ▸</string>
+    <string name="float_bind_empty">Enter a contact name and pick the chat app first</string>
+    <string name="float_bind_ambiguous">This name matches multiple profiles. Pick one in Contacts, or try another name.</string>
+    <string name="float_bind_failed">Linking failed. Please retry from Contacts.</string>
+    <string name="float_bind_channels_empty">No chat channels yet. They are registered automatically when you run the advisor from a chat screen or link from the split panel.</string>
+    <!-- 内置 IM 清单（聊天会话登记的 APP 白名单，与 FloatUi.IM_APPS 单一来源） -->
+    <string name="float_im_wechat">WeChat</string>
+    <string name="float_im_wework">WeCom</string>
+    <string name="float_im_dingtalk">DingTalk</string>
+    <string name="float_im_feishu">Feishu</string>
+    <string name="float_im_qq">QQ</string>
+    <string name="float_im_taobao">Taobao</string>
+    <string name="float_im_idlefish">Xianyu</string>
     <string name="float_profile_conversations">关联会话</string>
     <string name="float_conversations_title">Conversations with this contact</string>
     <string name="float_conversations_empty">No linked conversations yet. Start one screen advisor session from a chat screen and it is created automatically.</string>

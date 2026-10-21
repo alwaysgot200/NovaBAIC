@@ -25,6 +25,7 @@ import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_PERSON
 import com.verlintas.baic2.floatball.advisor.data.SCENE_CHAT
 import com.verlintas.baic2.floatball.advisor.data.SCENE_NON_CHAT
 import com.verlintas.baic2.floatball.advisor.data.ContactAliasEntity
+import com.verlintas.baic2.floatball.advisor.data.ChatChannelEntity
 import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.ExtractionHoldEntity
@@ -93,11 +94,22 @@ class ContactRepository @Inject constructor(
         if (normalized.isBlank()) return ResolveOutcome.Unknown(normalized)
         val variants = titleRules.matchVariants(normalized)
 
+        // 聊天会话行命中（术语铁律 §1.5，先于主档精确键）：(imPackage, 规范化名)
+        // 已登记过归属即直接返回——跨 APP 归档由此成立（微信档的张三在企微/
+        // 钉钉同首次识别也命中同人）；同时把本次窗口标题刷进 lastSeen/显示名。
+        db.chatChannelDao().find(imPackage, normalized)?.let { channel ->
+            db.contactProfileDao().findById(channel.contactId)
+                ?.takeIf { it.mergedInto == null && it.deletedAt == null }
+                ?.let { profile ->
+                    return match(imPackage, profile, normalized, rawTitle, source, newStub = false)
+                }
+        }
+
         for (norm in variants) {
             // 列存的是「包名:规范化名」复合键（与建档时 ContactNames.contactKey 一致），
             // 必须传复合键，裸 norm 永远不命中、精确路径形同虚设。
             db.contactProfileDao().findByKey(imPackage, ContactNames.contactKey(imPackage, norm))
-                ?.let { return match(it, norm, rawTitle, source, newStub = false) }
+                ?.let { return match(imPackage, it, norm, rawTitle, source, newStub = false) }
         }
 
         // 别名：任何变体唯一命中即归属；全部变体合计多档案才判重名。
@@ -105,7 +117,7 @@ class ContactRepository @Inject constructor(
         for (norm in variants) {
             val byAlias = db.contactProfileDao().findByAlias(imPackage, norm)
             if (byAlias.size == 1 && aliasHits.isEmpty()) {
-                return match(byAlias.first(), norm, rawTitle, source, newStub = false)
+                return match(imPackage, byAlias.first(), norm, rawTitle, source, newStub = false)
             }
             byAlias.forEach { aliasHits[it.id] = it }
         }
@@ -144,10 +156,12 @@ class ContactRepository @Inject constructor(
             newId
         }
         val stub = db.contactProfileDao().findById(id)!!
+        recordChannel(stub.id, imPackage, rawTitle)
         return ResolveOutcome.Matched(stub, newStub = true)
     }
 
     private suspend fun match(
+        imPackage: String,
         profile: ContactProfileEntity,
         normalized: String,
         rawTitle: String,
@@ -155,8 +169,39 @@ class ContactRepository @Inject constructor(
         newStub: Boolean,
     ): ResolveOutcome.Matched {
         recordAliasHit(profile.id, normalized, rawTitle, source)
+        // 命中即登记聊天会话行（哪个 APP 的哪个聊天对象，§1.5）。
+        recordChannel(profile.id, imPackage, rawTitle)
         return ResolveOutcome.Matched(profile, newStub)
     }
+
+    /**
+     * 聊天会话行登记（术语铁律 §1.5）：识别/绑定命中即记录「哪个 APP 的哪个
+     * 聊天对象」——不存聊天内容，只存包名 + 规范化键 + 显示名。(imPackage,
+     * channelKey) 唯一索引 REPLACE：同 APP 同对象重新归属即改绑。失败静默
+     * （登记面不阻断识别主链）。
+     */
+    suspend fun recordChannel(contactId: Long, imPackage: String, rawTitle: String) {
+        if (imPackage.isBlank()) return
+        val key = ContactNames.normalize(rawTitle)
+        if (key.isBlank()) return
+        runCatching {
+            val now = System.currentTimeMillis()
+            db.chatChannelDao().upsert(
+                ChatChannelEntity(
+                    contactId = contactId,
+                    imPackage = imPackage,
+                    channelKey = key,
+                    displayName = rawTitle.trim(),
+                    lastSeenAt = now,
+                    createdAt = now,
+                ),
+            )
+        }
+    }
+
+    /** 该联系人名下全部聊天会话（新→旧；详情页 IM 聊天区与 RPA 打开共用）。 */
+    suspend fun channelsOf(contactId: Long): List<ChatChannelEntity> =
+        db.chatChannelDao().listForContact(contactId)
 
     /** 命中后登记别名热度；标题是新变体则追加 alias（改名续档）。 */
     suspend fun recordAliasHit(contactId: Long, normalized: String, rawTitle: String, source: String) {
@@ -704,6 +749,10 @@ class ContactRepository @Inject constructor(
             // 2) 别名去重后整体改指（tags 式并集：一个名字都不丢）。
             db.contactAliasDao().deleteDuplicatesWith(fromId, targetId)
             db.contactAliasDao().reassign(fromId, targetId)
+
+            // 2.5) 聊天会话行同样去重后改指（§1.5：多 APP 聊天随档案合并）。
+            db.chatChannelDao().deleteDuplicatesWith(fromId, targetId)
+            db.chatChannelDao().reassign(fromId, targetId)
 
             // 3) 会话绑定迁移（上游会话零搬运；各自游标保留）。
             db.sessionBindingDao().reassign(fromId, targetId)

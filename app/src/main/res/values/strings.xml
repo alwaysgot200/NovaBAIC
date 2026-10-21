@@ -260,12 +260,36 @@
 
     <!-- 悬浮球 · 联系人画像（§7） -->
     <string name="float_profile_status_bound">当前联系人：%1$s ▾</string>
-    <string name="float_profile_status_unbound">未绑定联系人 ▸ 点此管理画像</string>
+    <string name="float_profile_status_unbound">未绑定联系人 ▸ 点此快速关联</string>
     <!-- 快速绑定（分屏未绑定 → 画像列表一键建档/绑到已有档案） -->
     <string name="float_profile_candidate_title">将「%1$s」绑为联系人</string>
     <string name="float_profile_candidate_hint">识别自当前聊天窗口；绑定后本会话归入该联系人，下次自动识别命中。</string>
     <string name="float_profile_candidate_create">创建新档案并绑定</string>
     <string name="float_profile_bind_as_this">就是此人 ▸ 绑到这条会话</string>
+    <!-- 手动关联兜底（2026-10-21）：无候选/纯问答屏也能新建档案并绑到当前会话 -->
+    <string name="float_profile_create_contact">新建联系人</string>
+    <string name="float_profile_create_name_hint">对方姓名/昵称</string>
+    <string name="float_profile_create_confirm">创建</string>
+    <string name="float_profile_create_cancel">取消</string>
+    <string name="float_profile_create_exists">已有相似档案或名字无效，请从列表点「绑到当前会话」，或换一个名字再试</string>
+    <string name="float_profile_bind_current_session">绑到当前会话</string>
+    <!-- 分屏内嵌快速绑定条（§1.5 最快关联/新建联系人） -->
+    <string name="float_bind_name_hint">对方姓名/昵称</string>
+    <string name="float_bind_create">创建并关联</string>
+    <string name="float_bind_recent">近期联系人（点选关联）</string>
+    <string name="float_bind_manage">管理联系人 ▸</string>
+    <string name="float_bind_empty">请输入联系人名称并选择所属 App</string>
+    <string name="float_bind_ambiguous">该名称匹配到多个已有档案，请进画像页选择，或换一个名字再试</string>
+    <string name="float_bind_failed">关联失败，请进画像页重试</string>
+    <string name="float_bind_channels_empty">暂无聊天会话记录；在聊天屏使用老参谋或分屏关联后自动登记</string>
+    <!-- 内置 IM 清单（聊天会话登记的 APP 白名单，与 FloatUi.IM_APPS 单一来源） -->
+    <string name="float_im_wechat">微信</string>
+    <string name="float_im_wework">企业微信</string>
+    <string name="float_im_dingtalk">钉钉</string>
+    <string name="float_im_feishu">飞书</string>
+    <string name="float_im_qq">QQ</string>
+    <string name="float_im_taobao">淘宝</string>
+    <string name="float_im_idlefish">闲鱼</string>
     <!-- 详情页两分区：「关联会话」= 跳对方 IM；「参谋会话」= 本系统老参谋对话 -->
     <string name="float_profile_open_im">关联会话</string>
     <string name="float_profile_open_im_hint">打开聊天 App，进入与 %1$s 的对话</string>
