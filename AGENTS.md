@@ -337,3 +337,11 @@ git mergetool / 手工解决
    截图函数就落在这里并被 `.gitignore` 忽略；手动 adb pull、证据图、像素分析
    中转 png 一律同址。曾因随手把一批 evidence-*.png 放进 `dev/` 污染开发脚本
    目录，已全部迁移——别再犯。
+10. **Windows 构建诡异失败的终极排查顺序**（2026-10-21 实战教训）：构建中途
+   文件锁（如 `dirty-sources.txt` 被占用）之后，可能出现「compileDebugKotlin
+   报成功/UP-TO-DATE/FROM-CACHE 但产物目录为空，javac 找不到连
+   `Baic2Application` 在内的全部自有类」的假象。层层清缓存都无效时，根因是
+   **全局构建缓存**（本机 `GRADLE_USER_HOME=D:\programfiles\Android\gradlepro`，
+   非默认 `~/.gradle`）缓存了残缺产物。修复顺序：`gradlew --stop` → 删项目
+   `.gradle` 与各模块 `build` → **删 `D:\programfiles\Android\gradlepro\caches\build-cache-1`**
+   → 冷重建。只清项目级缓存解决不了 FROM-CACHE 毒条目。
