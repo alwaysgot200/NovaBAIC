@@ -39,6 +39,10 @@ import com.verlintas.baic2.floatball.director.NotificationGate
  * - IM 包名命中但结构识别失败（截图时机不佳/a11y 噪声）→ [Scene.UNCERTAIN]，
  *   调用方走轻 LLM 一问兜底（≤80tok「这是聊天界面吗」，放 ScreenAdvisor 接线层）；
  *   LLM 失败/超时保守判 NON_CHAT。
+ *
+ * 五岗归属（2026-10-21 五岗子代理架构整合方案 §二/§五）：本对象=**哨官 Sentry**
+ * 的场景兜底判定资产（UNCERTAIN 才轻 LLM），随 ExpertPanel 一并归哨官门面编排；
+ * 归属声明零代码行为变化。
  */
 internal object SceneGate {
 
