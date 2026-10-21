@@ -23,11 +23,17 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.util.Log
 import android.widget.Toast
+import com.verlintas.baic2.device.api.OcrLine
 import com.verlintas.baic2.device.api.OcrProvider
 import com.verlintas.baic2.device.api.TextNode
+import com.verlintas.baic2.floatball.shizuku.ShizukuGate
+import com.verlintas.baic2.floatball.shizuku.ShizukuGrantResult
+import com.ven.assists.mp.MPManager
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -35,9 +41,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * 画像页「关联会话」的 IM 直达导航器：拉起 IM → a11y 点搜索 → 输入联系人名 →
- * 点进具体聊天页（双模铁律 §4.5：无 a11y 时失败返回明确原因码，由 UI 层
- * Toast 告知用户并指引手动操作，绝不静默失效）。
+ * 画像页「关联会话」的 IM 直达导航器（双模铁律 §4.5）：
+ *
+ * - 模式 1（a11y 开）：拉起 IM → a11y 点搜索 → 输入联系人名 → 点进具体聊天页；
+ * - 模式 2（a11y 关）：Shizuku shell 注入（tap/剪贴板粘贴）+ 静默 MediaProjection
+ *   投影抽帧 + OCR 验证 + 以图找图——完整的第二套执行面（openChatByVision）。
+ *
+ * 两套执行面都不可用（a11y 关且 Shizuku 未就绪）时失败返回明确原因码，
+ * 由 UI 层 Toast 告知用户并指引手动操作，绝不静默失效。
  *
  * 流程各步全部轮询等待界面就绪（微信启动慢/转场动画），任一步超时返回
  * REASON_* 码——微信已被拉起的失败（搜索按钮没找到/联系人没搜到等）仍算
@@ -48,6 +59,9 @@ class ImChatNavigator @Inject constructor(
     private val bridge: AssistsA11yBridge,
     private val shizuku: ShizukuInjector,
     private val ocr: OcrProvider,
+    private val frameSource: FrameSource,
+    private val shizukuGate: ShizukuGate,
+    private val imageMatcher: ImageMatcher,
     @ApplicationContext private val context: Context,
 ) {
 
@@ -61,8 +75,11 @@ class ImChatNavigator @Inject constructor(
     companion object {
         private const val TAG = "ImChatNavigator"
 
-        /** 无障碍服务未开启（双模铁律：必须显式提示，不许静默只开 App）。 */
+        /** 无障碍服务未开启且 Shizuku 未就绪（双模执行面均不可用，显式提示）。 */
         const val REASON_A11Y_OFF = "im_nav_a11y_off"
+
+        /** a11y 关且 Shizuku 通道不可用：两套执行面都没有，须指引任开其一。 */
+        const val REASON_SHIZUKU_OFF = "im_nav_shizuku_off"
 
         /** 目标 IM 未安装或无法拉起。 */
         const val REASON_APP_MISSING = "im_nav_app_missing"
@@ -81,6 +98,9 @@ class ImChatNavigator @Inject constructor(
 
         /** 结果节点点击失败。 */
         const val REASON_TAP_FAILED = "im_nav_tap_failed"
+
+        /** 静默投影建立失败（模式 2 感知面无源，须引导用户检查 Shizuku/重试）。 */
+        const val REASON_PROJECTION_UNAVAILABLE = "im_nav_projection_unavailable"
 
         private const val POLL_INTERVAL_MS = 300L
         private const val FOREGROUND_POLLS = 15
@@ -133,6 +153,21 @@ class ImChatNavigator @Inject constructor(
 
         /** 前缀匹配阈值：公共前缀 ≥ 名长的该比例即算命中（OCR 漏尾缀容错）。 */
         private const val PREFIX_MATCH_RATIO = 0.67f
+
+        /** 模式 2 ⑤ 搜索图标找图模板（assets/rpa_templates/search.png）。 */
+        private const val TEMPLATE_SEARCH = "search"
+
+        /** 模式 2 ⑤ 找图轮询次数（冷启动主列表图标渲染慢，miss 重试）。 */
+        private const val IMAGE_FIND_POLLS = 3
+
+        /** 模式 2 ⑤-1 归位 back 上限（微信 task 残留搜索页/聊天页多层）。 */
+        private const val BACK_ROUNDS = 3
+
+        /** 模式 2 ⑥-0 后的键盘弹起稳定等待（FTS 转场+IME 就绪，800ms 实测不足）。 */
+        private const val FTS_INPUT_SETTLE_MS = 1_500L
+
+        /** 模式 2 ⑦-0 搜索结果渲染轮询次数（paste 上屏→FTS 联想刷新为异步）。 */
+        private const val RESULT_RENDER_POLLS = 6
     }
 
     /**
@@ -145,11 +180,17 @@ class ImChatNavigator @Inject constructor(
             if (name.isEmpty()) return@withContext NavResult.Fail(REASON_CONTACT_NOT_FOUND)
             Log.i(TAG, "openChat pkg=$imPackage name=$name a11y=${bridge.connected.value}")
 
-            // ① a11y 前置（§4.5 硬前置显式提示）：未开启时报因并尽力拉起 App
-            //（用户至少能手动点进联系人），绝不静默无动作。
+            // ① 双模门面（§4.5 执行面双模铁律）：a11y 关不是失败，而是切换到
+            // 视觉通道（Shizuku 注入 + 静默投影抽帧 + OCR + 以图找图）；只有
+            // 两套执行面都不可用时才报因（尽力拉起 App，用户至少能手动点进
+            // 联系人），绝不静默无动作。
             if (!bridge.connected.value) {
+                if (shizuku.available) {
+                    return@withContext openChatByVision(imPackage, name)
+                }
+                Log.w(TAG, "① a11y off & shizuku unavailable (${shizuku.unavailableReason})")
                 launchBestEffort(imPackage)
-                return@withContext NavResult.Fail(REASON_A11Y_OFF)
+                return@withContext NavResult.Fail(REASON_SHIZUKU_OFF)
             }
 
             // ② 已在该联系人的聊天页？标题即联系人名，直接成功（重复点击场景）。
@@ -402,12 +443,291 @@ class ImChatNavigator @Inject constructor(
             else NavResult.Fail(REASON_CONTACT_NOT_FOUND)
         }
 
+    // ========================= 模式 2：视觉通道（a11y 关） =========================
+
+    /**
+     * 静默投影建立（模式 2 感知面前置）：appops PROJECT_MEDIA allow（Shizuku
+     * 一键授权，未授权先补）→ [MPManager.request]（appops allow 时系统授权框
+     * 静默通过，HyperOS 真机实测见 docs/2026-10-21-投影免弹窗授权方案.md）。
+     * 已建立（isEnable）直接热复用；失败返回 false 由调用方报因。
+     * 投影不主动释放——MPManager 常驻投影是既有基础设施（与找图/WebRTC
+     * 共用），导航器不自作主张停。
+     */
+    private suspend fun ensureProjection(): Boolean {
+        if (MPManager.isEnable) {
+            Log.i(TAG, "[v2] ① projection already enabled")
+            return true
+        }
+        if (!shizukuGate.projectionSilentGranted()) {
+            val grant = runCatching { shizukuGate.grantProjectionSilent() }.getOrNull()
+            Log.i(TAG, "[v2] ① appops grant=$grant")
+        }
+        val ok = runCatching { MPManager.request(autoAllow = false) }.getOrDefault(false)
+        Log.i(TAG, "[v2] ① projection request=$ok isEnable=${MPManager.isEnable}")
+        return ok && MPManager.isEnable
+    }
+
+    /**
+     * 模式 2 主流程（a11y 关，§4.5 完整第二套执行面）：Shizuku shell tap
+     * 注入执行 + 静默投影抽帧感知（OCR 验证 + 以图找图）。步骤编号与模式 1
+     * 对齐（③拉起→⑤搜索→⑥输入→⑦结果→⑧验证）；跳过 ②④④½⑤½ 快捷路径
+     * （依赖 a11y 窗口标题/节点树，a11y 关时无从谈起，每次都走搜索全链是
+     * 预期行为）。每步失败即报因返回（REASON_*），绝不静默。
+     */
+    private suspend fun openChatByVision(imPackage: String, name: String): NavResult {
+        Log.i(TAG, "[v2] openChat pkg=$imPackage name=$name (vision mode)")
+        // ①-2 感知面：Shizuku screencap 主源（原生分辨率清晰帧——HyperOS
+        // 投影帧 ~2× 下采样模糊、OCR 无法识别，2026-10-21 真机实测）；投影
+        // 降级为兜底帧源（FrameSource 阶梯内自动降级）。screencap 通道探测
+        // 失败才建立投影会话；两者皆不可用 → 显式报因（§4.5.2 不静默）。
+        if (runCatching { shizuku.screencap() }.getOrNull() == null) {
+            Log.i(TAG, "[v2] ①-2 screencap unavailable, fallback to projection")
+            if (!ensureProjection()) {
+                return NavResult.Fail(REASON_PROJECTION_UNAVAILABLE)
+            }
+        }
+        // ②½ 剪贴板 priming（与模式 1 同款：自家仍前台，写入合法；IM 前台
+        // 后 Android 10+ 后台写剪贴板被拒）。
+        val clipPrimed = runCatching {
+            val clipboard =
+                context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            clipboard?.setPrimaryClip(ClipData.newPlainText("baic2", name))
+            clipboard != null
+        }.getOrDefault(false)
+        Log.i(TAG, "[v2] ②½ clipboard primed=$clipPrimed")
+
+        // ③ 拉起 IM 并等前台（dumpsys 轮询，节奏与模式 1 一致）。
+        val launch = runCatching {
+            context.packageManager.getLaunchIntentForPackage(imPackage)
+        }.getOrNull() ?: run {
+            Log.w(TAG, "[v2] ③ launch intent null (app missing)")
+            return NavResult.Fail(REASON_APP_MISSING)
+        }
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(launch) }
+            .onFailure {
+                Log.w(TAG, "[v2] ③ startActivity failed", it)
+                return NavResult.Fail(REASON_APP_MISSING)
+            }
+        if (!awaitForegroundByShell(imPackage)) {
+            Log.w(TAG, "[v2] ③ awaitForeground timeout fg=${shizuku.foregroundPackage()}")
+            return NavResult.Fail(REASON_LAUNCH_TIMEOUT)
+        }
+        delay(POST_TAP_DELAY_MS)
+
+        // ④' 当前页预检（模式 2 无窗口标题可读，用「dumpsys 类名门 + 投影帧
+        // OCR」替代模式 1 的 ④ titleMatches）：微信拉起后恢复上次停留页，
+        // 若恰为目标聊天页（重复点击/最近聊过场景）直接成功，跳过搜索全链。
+        if (chatPageVisibleByVision(name)) {
+            Log.i(TAG, "[v2] ④' already on target chat page")
+            return NavResult.Ok
+        }
+        Log.i(TAG, "[v2] ④' not on target page, continue to search")
+
+        // ⑤-1 非主列表态归位：微信 task 栈可能残留多层（搜索页/聊天页，
+        // ④'-R2 真机实测栈=[主列表, FTSMainUI, ChattingUI]），搜索图标坐标
+        //（⑤）只在主列表有效——back 逐层退出直到 LauncherUI（主列表 back=
+        //「再按退出」不真退，模式 1 实测）。
+        backToMainList()
+
+        // ⑤ 搜索入口：以图找图优先（search 模板 + 投影帧，多尺度），坐标
+        // 比例兜底——双模铁律的「以图找图」主路径；冷启动图标渲染慢，
+        // miss 时轮询重试（[IMAGE_FIND_POLLS]）。tap 后必须验证 FTS 真的
+        // 开了（R3 真机实测：冷启动 activity 已就绪但像素还是启动态，帧里
+        // 无真图标 → 误匹配点在随机位置、FTS 从未打开而链路继续走空）；
+        // 未开则归位后重试，ratio 兜底同样验证，全失败即报因。
+        var searchTapped = false
+        var poll = 0
+        while (!searchTapped && poll < IMAGE_FIND_POLLS) {
+            poll++
+            val match = runCatching { imageMatcher.find(TEMPLATE_SEARCH).getOrNull() }.getOrNull()
+            if (match != null) {
+                val tapped = shizuku.tap(match.centerX, match.centerY).isSuccess
+                Log.i(
+                    TAG,
+                    "[v2] ⑤ search by image poll=$poll " +
+                        "(${match.centerX},${match.centerY}) score=${match.score} tapped=$tapped",
+                )
+                if (tapped) {
+                    delay(POST_TAP_DELAY_MS)
+                    searchTapped = ftsOpened()
+                    if (!searchTapped) {
+                        Log.i(TAG, "[v2] ⑤ fts not open after image tap, retry poll=$poll")
+                    }
+                }
+            } else {
+                Log.i(TAG, "[v2] ⑤ image match miss poll=$poll")
+            }
+            if (!searchTapped) {
+                backToMainList()
+                delay(POST_TAP_DELAY_MS)
+            }
+        }
+        if (!searchTapped) {
+            val size = screenSizeByMetrics()
+            val sx = (size.first * SEARCH_ICON_X_RATIO).toInt()
+            val sy = (size.second * SEARCH_ICON_Y_RATIO).toInt()
+            Log.i(TAG, "[v2] ⑤ image miss, tap search icon by ratio ($sx,$sy)")
+            if (shizuku.tap(sx, sy).isSuccess) {
+                delay(POST_TAP_DELAY_MS)
+                searchTapped = ftsOpened()
+            }
+        }
+        if (!searchTapped) {
+            Log.w(TAG, "[v2] ⑤ tap search FAILED (fts never opened)")
+            return NavResult.Fail(REASON_TAP_FAILED)
+        }
+        delay(POST_TAP_DELAY_MS)
+
+        // ⑥ 输入（与模式 1 同构，执行器全换 Shizuku）。
+        // ⑥ 防呆：必须仍在 IM 前台（防注入落进自家输入框改用户数据）。
+        if (shizuku.foregroundPackage() != imPackage) {
+            Log.w(TAG, "[v2] ⑥ not in IM foreground, abort")
+            return NavResult.Fail(REASON_LAUNCH_TIMEOUT)
+        }
+        // ⑥-0 坐标 tap FTS 输入框（比例位置与模式 1 同款，让真实焦点落框）。
+        val size = screenSizeByMetrics()
+        val ix = (size.first * FTS_INPUT_X_RATIO).toInt()
+        val iy = (size.second * FTS_INPUT_Y_RATIO).toInt()
+        Log.i(TAG, "[v2] ⑥-0 tap fts input ($ix,$iy)")
+        shizuku.tap(ix, iy)
+        delay(FTS_INPUT_SETTLE_MS)
+        // ⑥-1 清残留 + KEYCODE_PASTE（模式 1 已真机验证的 shell 通道）。
+        val cleared = runCatching { shizuku.clearInput() }.getOrNull()
+        Log.i(TAG, "[v2] ⑥-1 clearInput=${cleared?.isSuccess}")
+        delay(CLEAR_SETTLE_MS)
+        val pasted = shizuku.paste()
+        Log.i(TAG, "[v2] ⑥-1 shizuku KEYCODE_PASTE=${pasted.isSuccess}")
+        if (!pasted.isSuccess) {
+            Log.w(TAG, "[v2] ⑥-1 paste failed", pasted.exceptionOrNull())
+            return NavResult.Fail(REASON_INPUT_FAILED)
+        }
+        delay(POST_INPUT_DELAY_MS)
+
+        // ⑦-0 等搜索结果渲染：paste 上屏后 FTS 联想搜索异步刷新（R2 真机实测
+        // 固定 1.2s 不够——tap 落在起始页「按住说出你的问题」语音按钮上，
+        // y=0.197h 恰与其重合）。screencap + OCR 全帧轮询直到联系人名出现
+        // （FTS 起始页无名字文本）再 tap 结果条目；超时兜底维持原坐标直点。
+        var resultReady = false
+        repeat(RESULT_RENDER_POLLS) {
+            if (!resultReady) {
+                resultReady = ocrSeesName(name)
+                if (!resultReady) delay(POLL_INTERVAL_MS)
+            }
+        }
+        Log.i(TAG, "[v2] ⑦-0 result rendered=$resultReady")
+
+        // ⑦ 结果条目：坐标比例兜底唯一通道（FTS 全页 a11y 黑洞，节点通道
+        // 不存在；paste 直接上屏，无 IME 候选多跳问题，单跳）。
+        val entryX = size.first / 2
+        val entryY = (size.second * RESULT_ENTRY_Y_RATIO).toInt()
+        Log.i(TAG, "[v2] ⑦ tap result entry ($entryX,$entryY)")
+        if (shizuku.tap(entryX, entryY).isFailure) {
+            return NavResult.Fail(REASON_TAP_FAILED)
+        }
+
+        // ⑧ 投影抽帧 OCR 验证（chatPageVisibleByOcr 三层名字匹配 + 类名门）；
+        // 转场 ~1s 后再开 OCR（poll≥2），每 2 轮一次。
+        var entered = false
+        repeat(RESULT_POLLS) { poll ->
+            if (!entered) {
+                entered = poll >= 2 && poll % 2 == 0 &&
+                    chatPageVisibleByVision(name)
+            }
+            if (!entered) delay(POLL_INTERVAL_MS)
+        }
+        Log.i(TAG, "[v2] ⑧ entered=$entered")
+        return if (entered) NavResult.Ok else NavResult.Fail(REASON_CONTACT_NOT_FOUND)
+    }
+
+    /** dumpsys 前台包名轮询（模式 2 的 awaitForeground；节奏同模式 1）。 */
+    private suspend fun awaitForegroundByShell(pkg: String): Boolean {
+        repeat(FOREGROUND_POLLS) {
+            delay(POLL_INTERVAL_MS)
+            if (shizuku.foregroundPackage() == pkg) return true
+        }
+        return false
+    }
+
+    /** 归位到微信主列表：back 逐层退出非 LauncherUI 态（搜索页/聊天页/弹层）。 */
+    private suspend fun backToMainList() {
+        for (round in 1..BACK_ROUNDS) {
+            val activity = runCatching { shizuku.foregroundActivity() }.getOrNull()
+            if (activity?.contains("LauncherUI") == true) {
+                Log.i(TAG, "[v2] ⑤-1 on main list (round=$round)")
+                break
+            }
+            val backed = runCatching { shizuku.back() }.getOrNull()
+            Log.i(TAG, "[v2] ⑤-1 back round=$round ok=${backed?.isSuccess} activity=$activity")
+            delay(POST_TAP_DELAY_MS)
+        }
+    }
+
+    /** ⑤ tap 后验证 FTS 搜索页真的打开（防误匹配点空/点到弹层后链路走空）。 */
+    private suspend fun ftsOpened(): Boolean =
+        runCatching { shizuku.foregroundActivity() }.getOrNull()
+            ?.contains("FTSMainUI") == true
+
+    /**
+     * ⑦-0 结果区 OCR 找联系人名：只看搜索框以下（centerY ≥ 0.12h）的行——
+     * 粘贴上屏后搜索框恒含名字（全帧检查立即假阳性），结果条目（≈0.197h）
+     * 渲染出来才算就绪。
+     */
+    private suspend fun ocrSeesName(name: String): Boolean {
+        val frame = runCatching { shizuku.screencap() }.getOrNull() ?: return false
+        val lines = ocr.recognize(bitmapToPng(frame)).getOrNull() ?: return false
+        val minCy = (frame.height * HEADER_STRIP_RATIO).toInt()
+        return nameInOcrLines(lines.filter { it.centerY >= minCy }, name)
+    }
+
+    /** 名字三层匹配（精确/CJK 段/前缀 2/3，⑧ 顶部条与 ⑦-0 全帧共用）。 */
+    private fun nameInOcrLines(lines: List<OcrLine>, name: String): Boolean {
+        val compactName = name.lowercase().filter { !it.isWhitespace() }
+        if (compactName.isEmpty()) return false
+        val cjkName = compactName.filter { it.code in CJK_RANGE }
+        val prefixLen = (compactName.length * PREFIX_MATCH_RATIO).toInt()
+        return lines.any { line ->
+            val ocr = line.text.lowercase().filter { !it.isWhitespace() }
+            ocr.contains(compactName) ||
+                (cjkName.length >= CJK_MIN && ocr.filter { it.code in CJK_RANGE }.contains(cjkName)) ||
+                commonPrefixLen(ocr, compactName) >= prefixLen
+        }
+    }
+
+    /**
+     * 模式 2 聊天页判别（④'/⑧ 共用）：dumpsys Activity 类名门 + 帧 OCR。
+     * 聊天页有两种宿主：ChattingUI activity（从 FTS 搜索结果进入）或
+     * LauncherUI 内嵌 fragment（从主列表直点进入——此时 task 栈仅
+     * LauncherUI、无 ChattingUI 记录，2026-10-22 真机实测），两者都放行；
+     * FTSMainUI（搜索页）仍排除——其搜索框文本=名字会诱导 OCR 误报，而
+     * 「取消」小字 ML Kit 偶发漏识不可单独依赖。主列表态的 LauncherUI 由
+     * [chatPageVisibleByOcr] 顶部条把关：主列表标题「微信(N)」不含联系人名，
+     * 聊天页顶部条才是名字——类名只证明「在微信」，名字证明「跟谁的页」。
+     */
+    private suspend fun chatPageVisibleByVision(name: String): Boolean {
+        val activity = runCatching { shizuku.foregroundActivity() }.getOrNull()
+        val chatHost = activity?.contains("ChattingUI") == true ||
+            activity?.contains("LauncherUI") == true
+        if (!chatHost) return false
+        return chatPageVisibleByOcr(name, frameSource.grabFrame().getOrNull())
+    }
+
+    /**
+     * 屏幕尺寸（模式 2 坐标系）：application context 的 displayMetrics 即
+     * 真实屏幕（1080×2460），与 a11y 无关、无窗口裁剪。
+     */
+    private fun screenSizeByMetrics(): Pair<Int, Int> =
+        context.resources.displayMetrics.let { it.widthPixels to it.heightPixels }
+
     /** 便捷 Toast：结果码 → 用户文案（画像页调用方用，避免每处手写 when）。 */
     fun toastResult(result: NavResult, contactName: String) {
         val res = when (result) {
             is NavResult.Ok -> com.verlintas.baic2.R.string.float_im_nav_ok
             is NavResult.Fail -> when (result.reason) {
                 REASON_A11Y_OFF -> com.verlintas.baic2.R.string.float_im_nav_a11y_off
+                REASON_SHIZUKU_OFF -> com.verlintas.baic2.R.string.float_im_nav_shizuku_off
+                REASON_PROJECTION_UNAVAILABLE ->
+                    com.verlintas.baic2.R.string.float_im_nav_projection_fail
                 REASON_APP_MISSING -> com.verlintas.baic2.R.string.float_im_nav_app_missing
                 else -> com.verlintas.baic2.R.string.float_im_nav_generic_fail
             }
@@ -512,33 +832,38 @@ class ImChatNavigator @Inject constructor(
 
     /**
      * ⑧ 视觉验证兜底：微信全页 a11y 黑洞（节点零暴露、窗口标题恒为「微信」，
-     * 2026-10-21 真机实测），标题/节点通道天然失效——改走 a11y 截图（API 30+，
-     * 免投影授权）+ OCR 验证聊天页特征：顶部条（[HEADER_STRIP_RATIO] 高）含
-     * 联系人名（聊天页头部居中）且无「取消」——FTS 搜索页顶部条是搜索框
-     * （文本恰为名字）+右上角「取消」，仅凭名字无法区分两页，取消是判别键。
-     * 调用方须先确认 IM 在前台（a11y 截图截的是当前屏）。
+     * 2026-10-21 真机实测），标题/节点通道天然失效——改走截图 + OCR 验证
+     * 聊天页特征：顶部条（[HEADER_STRIP_RATIO] 高）含联系人名（聊天页头部
+     * 居中）且无「取消」——FTS 搜索页顶部条是搜索框（文本恰为名字）+右上角
+     * 「取消」，仅凭名字无法区分两页，取消是判别键。
+     *
+     * 帧来源双模：[visionFrame] 非空（模式 2 投影抽帧）直接用；否则模式 1
+     * 走 a11y 截图（API 30+，免投影授权）。
      *
      * 名字匹配三层放宽（ML Kit 对小字号拉丁尾缀偶发漏字符，真机实测
      * 「ricky」被识成「ricy」；中文段识别稳定）：精确包含 → 名字的 CJK
      * 字符序列包含（拉丁噪声全忽略）→ 公共前缀 ≥ 名长的 2/3。
      */
-    private suspend fun chatPageVisibleByOcr(name: String): Boolean {
-        val png = bridge.captureScreen().getOrNull() ?: return false
+    private suspend fun chatPageVisibleByOcr(name: String, visionFrame: Bitmap? = null): Boolean {
+        val png = visionFrame?.let(::bitmapToPng)
+            ?: bridge.captureScreen().getOrNull()
+            ?: return false
         val lines = ocr.recognize(png).getOrNull() ?: return false
-        val height = bridge.screenSize()?.second ?: return false
+        // 顶部条高度：模式 2 用投影帧自身高度（全屏帧即屏幕），模式 1 用
+        // a11y screenSize（a11y 关时为 null，模式 2 必须给帧）。
+        val height = visionFrame?.height ?: bridge.screenSize()?.second ?: return false
         val stripBottom = (height * HEADER_STRIP_RATIO).toInt()
         val strip = lines.filter { it.centerY < stripBottom }
-        val compactName = name.lowercase().filter { !it.isWhitespace() }
-        if (compactName.isEmpty()) return false
-        val cjkName = compactName.filter { it.code in CJK_RANGE }
-        val prefixLen = (compactName.length * PREFIX_MATCH_RATIO).toInt()
-        val nameHit = strip.any { line ->
-            val ocr = line.text.lowercase().filter { !it.isWhitespace() }
-            ocr.contains(compactName) ||
-                (cjkName.length >= CJK_MIN && ocr.filter { it.code in CJK_RANGE }.contains(cjkName)) ||
-                commonPrefixLen(ocr, compactName) >= prefixLen
-        }
+        val nameHit = nameInOcrLines(strip, name)
         val cancelHit = strip.any { it.text.contains("取消") }
+        if (lines.isEmpty()) {
+            // 诊断（黑帧/尺寸异常线索）：帧到手但一个字都没识别到。
+            Log.w(
+                TAG,
+                "⑧-ocr zero lines, frame=" +
+                    (visionFrame?.let { "${it.width}x${it.height}" } ?: "a11y-capture"),
+            )
+        }
         Log.i(TAG, "⑧-ocr nameHit=$nameHit cancelHit=$cancelHit lines=${strip.size}")
         return nameHit && !cancelHit
     }
@@ -549,4 +874,11 @@ class ImChatNavigator @Inject constructor(
         while (i < a.length && i < b.length && a[i] == b[i]) i++
         return i
     }
+
+    /** 投影帧 → PNG bytes（OCR 接口口径；OcrSendLocator 同款压缩）。 */
+    private fun bitmapToPng(frame: Bitmap): ByteArray =
+        ByteArrayOutputStream().use { sink ->
+            frame.compress(Bitmap.CompressFormat.PNG, 100, sink)
+            sink.toByteArray()
+        }
 }

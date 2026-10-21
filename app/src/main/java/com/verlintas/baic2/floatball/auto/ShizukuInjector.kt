@@ -22,6 +22,8 @@ package com.verlintas.baic2.floatball.auto
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -29,10 +31,13 @@ import com.verlintas.baic2.device.api.ShellBridge
 import com.verlintas.baic2.device.api.ShellResult
 import com.verlintas.baic2.device.api.ShellState
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * 模式 B 执行通道（方案 §17.2：Shizuku 免 a11y 托管）：shell 层注入，目标 App
@@ -63,6 +68,9 @@ class ShizukuInjector @Inject constructor(
     override suspend fun tap(x: Int, y: Int): Result<Unit> =
         exec("input tap $x $y")
 
+    /** 系统返回键（KEYCODE_BACK=4）：页面回退（如聊天页→IM 主列表）。 */
+    suspend fun back(): Result<Unit> = exec("input keyevent $KEYCODE_BACK")
+
     override suspend fun type(text: String): Result<Unit> {
         if (viaInputText(text)) return exec("input text ${shellQuote(text)}")
         // 中文/含空白子路径：剪贴板写入 + KEYCODE_PASTE（方案 §17.2 默认①）。
@@ -90,14 +98,53 @@ class ShizukuInjector @Inject constructor(
         return exec("input keyevent $KEYCODE_DEL")
     }
 
-    override suspend fun foregroundPackage(): String? {
+    override suspend fun foregroundPackage(): String? =
+        parseResumedPackage(dumpResumedLine() ?: "")
+
+    /** 前台 Activity 全名（形如 pkg/.ui.chatting.ChattingUI）：页面级判别用。 */
+    suspend fun foregroundActivity(): String? =
+        parseResumedActivity(dumpResumedLine() ?: "")
+
+    /**
+     * 清晰帧通道（模式 2 感知面主源，2026-10-21 真机实测定案）：shell uid 有
+     * screencap 权限，产出原生分辨率帧——HyperOS 投影帧 ~2× 下采样模糊
+     * （拉普拉斯方差 225 vs 硬件截图 714，ML Kit OCR lines=0），screencap 无此
+     * 问题。通道：App 读 shell 写的文件在 /sdcard/Android/data 下被 FUSE 拒，
+     * /data/local/tmp + chmod 666 的文件 App uid 可完整读取。文件名带
+     * nanoTime 防并发串写；用完即删不留痕。解码走 [Dispatchers.Default]
+     * （AGENTS §8 教训 3：主线程禁位图解码）。null = 通道失败，调用方降级。
+     */
+    suspend fun screencap(): Bitmap? = withContext(Dispatchers.Default) {
+        val path = "$SCREENCAP_DIR/baic2_frame_${System.nanoTime()}.png"
+        try {
+            val shot = shell.exec(
+                "screencap -p $path && chmod 666 $path",
+                timeoutMs = SCREENCAP_TIMEOUT_MS,
+                maxOutputChars = 1_000,
+            )
+            if ((shot as? ShellResult.Output)?.exitCode != 0) return@withContext null
+            val bytes = runCatching { File(path).readBytes() }.getOrNull()
+            if (bytes == null || bytes.isEmpty()) return@withContext null
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } finally {
+            runCatching {
+                shell.exec("rm -f $path", timeoutMs = SHELL_TIMEOUT_MS, maxOutputChars = 200)
+            }
+        }
+    }
+
+    /** dumpsys 前台 Activity 行（[foregroundPackage]/[foregroundActivity] 共用）。 */
+    private suspend fun dumpResumedLine(): String? {
+        // 前台键名三格式兼容（2026-10-21 真机实测 HyperOS 无 mResumedActivity）：
+        // topResumedActivity=（新 AOSP/HyperOS）/ ResumedActivity:（HyperOS task
+        // 区块）/ mResumedActivity:（旧 AOSP——本模式作为 ResumedActivity: 的
+        // 子串一并命中）。
         val result = shell.exec(
-            "dumpsys activity activities | grep -m1 'mResumedActivity:'",
+            "dumpsys activity activities | grep -m1 -E 'topResumedActivity=|ResumedActivity:'",
             timeoutMs = SHELL_TIMEOUT_MS,
             maxOutputChars = 2_000,
         )
-        val stdout = (result as? ShellResult.Output)?.takeIf { it.exitCode == 0 }?.stdout
-        return parseResumedPackage(stdout ?: "")
+        return (result as? ShellResult.Output)?.takeIf { it.exitCode == 0 }?.stdout
     }
 
     /** 粘贴后延迟恢复原剪贴板（PASTE 异步生效，立即恢复会抢在读取之前——F2 同款时序）。 */
@@ -144,6 +191,13 @@ class ShizukuInjector @Inject constructor(
         private const val CLIP_LABEL = "baic2"
 
         // input/keyevent 关键码（仅此处使用，不引 android.view.KeyEvent 常量歧义）。
+        private const val KEYCODE_BACK = 4
+
+        /** screencap 临时文件目录（真机实测：/sdcard FUSE 拒 App 读 shell 写文件，此目录 chmod 666 后可读）。 */
+        private const val SCREENCAP_DIR = "/data/local/tmp"
+
+        /** screencap 单次超时（1080×2460 PNG 编码+写文件，比 input 注入慢）。 */
+        private const val SCREENCAP_TIMEOUT_MS = 10_000L
         private const val KEYCODE_PASTE = 279
         private const val KEYCODE_DEL = 67
         private const val KEYCODE_A = 29
@@ -157,10 +211,14 @@ class ShizukuInjector @Inject constructor(
         internal fun shellQuote(arg: String): String = "'" + arg.replace("'", "'\\''") + "'"
 
         /**
-         * 解析 `dumpsys activity` 的 mResumedActivity 行（grep 已单行截取）。
+         * 解析 `dumpsys activity` 的前台 Activity 行（grep 已单行截取）。
          * 形如 `mResumedActivity: ActivityRecord{6c55ff6 u0 com.tencent.mm/...UI t1234}`。
          */
         internal fun parseResumedPackage(stdout: String): String? =
             Regex("""\bu\d+ (\S+)/""").find(stdout)?.groupValues?.get(1)
+
+        /** 同 [parseResumedPackage]，但提取完整 Activity 全名（pkg/.Activity）。 */
+        internal fun parseResumedActivity(stdout: String): String? =
+            Regex("""\bu\d+ (\S+) """).find(stdout)?.groupValues?.get(1)
     }
 }

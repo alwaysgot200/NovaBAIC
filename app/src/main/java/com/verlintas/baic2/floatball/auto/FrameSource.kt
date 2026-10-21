@@ -30,8 +30,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 找图帧源阶梯（方案 §17.3）：
- * a11y 免授权截图（API 30+，首选）→ assists-mp 投影抽帧（免 a11y 模式兜底）。
+ * 找图帧源阶梯（方案 §17.3）：a11y 免授权截图（API 30+，首选）→ Shizuku
+ * screencap（原生分辨率清晰帧，模式 2 主源）→ assists-mp 投影抽帧（兜底）。
  *
  * [ImageMatcher] 只认本类产出的 Bitmap，不关心来源；自家 [com.verlintas.baic2.floatball.FloatCaptureBridge]
  * 保留于屏幕参谋投影读屏链路，两套投影各守领地（参谋=自家链，自动托管找图=assists-mp）。
@@ -40,9 +40,10 @@ import kotlinx.coroutines.withContext
 @Singleton
 class FrameSource @Inject constructor(
     private val a11y: AndroidAccessibilityBridge,
+    private val shizuku: ShizukuInjector,
 ) {
 
-    /** 当前帧；两级阶梯都失败时返回 actionable 失败。 */
+    /** 当前帧；三级阶梯都失败时返回 actionable 失败。 */
     suspend fun grabFrame(): Result<Bitmap> = withContext(Dispatchers.Default) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val viaA11y = a11y.captureScreen().mapCatching { bytes ->
@@ -51,14 +52,18 @@ class FrameSource @Inject constructor(
             }
             if (viaA11y.isSuccess) return@withContext viaA11y
         }
+        // Shizuku screencap：原生分辨率清晰帧——HyperOS 投影帧 ~2× 下采样
+        // 模糊（ML Kit OCR lines=0，2026-10-21 真机实测），可用时优先于投影。
+        val viaScreencap = runCatching { shizuku.screencap() }.getOrNull()
+        if (viaScreencap != null) return@withContext Result.success(viaScreencap)
         val viaProjection = runCatching { MPManager.takeScreenshot2Bitmap() }
         if (viaProjection.isSuccess && viaProjection.getOrNull() != null) {
             return@withContext Result.success(viaProjection.getOrNull()!!)
         }
         Result.failure(
             IllegalStateException(
-                "frame_unavailable: a11y capture and projection are both unavailable " +
-                    "(模式 B 需先完成投影授权，见就绪门)",
+                "frame_unavailable: a11y capture, shizuku screencap and projection " +
+                    "are all unavailable (模式 B 需先完成投影授权，见就绪门)",
             ),
         )
     }
