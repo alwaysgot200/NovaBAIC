@@ -92,8 +92,10 @@ class ImChatNavigator @Inject constructor(
             val name = contactName.trim()
             if (name.isEmpty()) return@withContext NavResult.Fail(REASON_CONTACT_NOT_FOUND)
 
-            // ① a11y 前置（§4.5 硬前置显式提示）：未开启直接报因，不瞎跑。
+            // ① a11y 前置（§4.5 硬前置显式提示）：未开启时报因并尽力拉起 App
+            //（用户至少能手动点进联系人），绝不静默无动作。
             if (!bridge.connected.value) {
+                launchBestEffort(imPackage)
                 return@withContext NavResult.Fail(REASON_A11Y_OFF)
             }
 
@@ -164,6 +166,15 @@ class ImChatNavigator @Inject constructor(
         }
         val message = context.getString(res, contactName)
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+    }
+
+    /** 尽力拉起 IM（失败静默——结果码已带原因，Toast 会说明）。 */
+    private fun launchBestEffort(imPackage: String) {
+        runCatching {
+            context.packageManager.getLaunchIntentForPackage(imPackage)
+                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                ?.let(context::startActivity)
+        }
     }
 
     private suspend fun awaitForeground(pkg: String): Boolean {

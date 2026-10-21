@@ -348,6 +348,7 @@ private fun ContactListScreen(
                     ) {
                         Button(onClick = {
                             scope.launch {
+                                var consumed = true
                                 runCatching {
                                     val outcome = contacts.resolve(
                                         imPackage = candidatePkg ?: "com.tencent.mm",
@@ -355,13 +356,33 @@ private fun ContactListScreen(
                                         source = "user",
                                         createStub = true,
                                     )
-                                    val profile =
-                                        (outcome as? com.verlintas.baic2.floatball.advisor.ResolveOutcome.Matched)?.profile
-                                    if (profile != null) {
-                                        contacts.rebindConversation(currentConversationId, profile.id)
+                                    when (outcome) {
+                                        is com.verlintas.baic2.floatball.advisor.ResolveOutcome.Matched ->
+                                            contacts.rebindConversation(currentConversationId, outcome.profile.id)
+
+                                        // FuzzyNear（标题与既有档案差 ≤renameDistance，常见于 a11y/OCR
+                                        // 少个字母）：唯一候选按「改名续档」登别名+绑定（用户点卡片
+                                        // 即确认同一人，§11.1 决策表的用户确认入口）；静默跳过会
+                                        // 卡片消失但什么都没做（真机踩坑 2026-10-21）。多候选不猜，
+                                        // 卡片保留由用户点列表「就是此人」明确选择。
+                                        is com.verlintas.baic2.floatball.advisor.ResolveOutcome.FuzzyNear -> {
+                                            val near = outcome.candidates.singleOrNull()
+                                            if (near != null) {
+                                                contacts.addAlias(near.id, candidateName)
+                                                contacts.rebindConversation(currentConversationId, near.id)
+                                            } else {
+                                                consumed = false
+                                            }
+                                        }
+
+                                        // 重名（Ambiguous）同多候选：不猜，卡片保留待用户选择。
+                                        is com.verlintas.baic2.floatball.advisor.ResolveOutcome.Ambiguous ->
+                                            consumed = false
+
+                                        else -> Unit
                                     }
                                 }
-                                candidate = null
+                                if (consumed) candidate = null
                                 refresh()
                             }
                         }) { Text(stringResource(R.string.float_profile_candidate_create)) }

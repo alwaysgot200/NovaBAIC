@@ -352,17 +352,18 @@ class FloatBallService : Service() {
                 putExtra(AdvisorProfileActivity.EXTRA_CONTACT_ID, contactId)
                 if (tab != null) putExtra(AdvisorProfileActivity.EXTRA_TAB, tab)
                 if (goalId > 0) putExtra(AdvisorProfileActivity.EXTRA_GOAL_ID, goalId)
-                val conversationId = screenAdvisor.transcript.value.conversationId
-                if (conversationId > 0) {
-                    putExtra(AdvisorProfileActivity.EXTRA_CONVERSATION_ID, conversationId)
-                }
                 // 快速绑定（未绑定 → 一键建档/绑到已有档案）：把识别候选透传给
-                // 画像列表页，用户不必手抄微信昵称。
+                // 画像列表页，用户不必手抄微信昵称。会话 ID 读 activeConversationId
+                //（回合落库的真值；transcript UiState.conversationId 恒 0 不可用）。
                 if (candidateTitle != null) {
                     putExtra(AdvisorProfileActivity.EXTRA_CANDIDATE_TITLE, candidateTitle)
                 }
                 if (candidatePkg != null) {
                     putExtra(AdvisorProfileActivity.EXTRA_CANDIDATE_PKG, candidatePkg)
+                }
+                val activeConv = screenAdvisor.activeConversationId
+                if (activeConv > 0) {
+                    putExtra(AdvisorProfileActivity.EXTRA_CONVERSATION_ID, activeConv)
                 }
             },
         )

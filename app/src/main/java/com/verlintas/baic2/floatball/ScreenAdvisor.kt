@@ -1218,11 +1218,16 @@ class ScreenAdvisor @Inject constructor(
         screenBody: String? = null,
     ): ContactRef? {
         val pkg = perceiver.foregroundPackage()
-        // 桌面/系统壳不是聊天窗口：不建档、不识别，整轮回落到共享老参谋会话（方案 §6.8④）。
-        if (!isChatWindow(pkg)) return null
         val l1 = perceiver.windowTitle()?.takeUnless { isShellTitle(pkg, it) }
         val l2 = titleFallback?.takeUnless { it.isBlank() || isShellTitle(pkg, it) }
+        // 候选记录先行（pkg 可空）：无 a11y 感知降级（投影路径）拿不到前台包名，
+        // 但 OCR 标题带/窗口标题仍可用——快速绑定卡片靠它预填，绝不因缺 pkg 静默
+        // 失效（§4.5 双模铁律）。建档时 pkg 由 UI 层兜底（默认微信）。
         if (l1 != null) lastChatCandidate = pkg to l1 else if (l2 != null) lastChatCandidate = pkg to l2
+        // 桌面/系统壳不是聊天窗口：不建档、不识别，整轮回落到共享老参谋会话（方案 §6.8④）。
+        // pkg=null（无 a11y）同样到此为止：候选已记录，识别管线不进（防误建档案），
+        // 归属交给快速绑定卡片手动确认。
+        if (!isChatWindow(pkg)) return null
         // 实体判别（v10 §2.1）：正文多发言人先判群——群标题若先走个人
         // resolve 会误建个人 stub，故 Group 分支优先。F7：judge 携标题带判别，
         // 标题显示名与正文唯一发言人不一致（群内一人发言+我插话形态）降 NONE，
