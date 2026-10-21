@@ -439,8 +439,13 @@ class CompanionWindowController @Inject constructor(
         }.getOrNull() ?: return
         val draftMessage = messages.lastOrNull { it.role == com.verlintas.baic2.core.model.ChatRole.ASSISTANT }
             ?: return
-        val draft = draftMessage.content.trim()
-        if (draft.isEmpty()) return
+        // 托管方案 §四.A.1：落库全文（分析+编号+reply 块）确定性抽取「实际回复」，
+        // 发送/降级通知只带纯回复；来源码入台账（dispatch/degrade reason:src=）。
+        val sendable = SendableDraftExtractor.extract(
+            draftMessage.content,
+            prefs.state.value.answerTargetChars,
+        ) ?: return
+        val draft = sendable.text
         synchronized(processedMessageIds) {
             if (!processedMessageIds.add(draftMessage.id)) return
             while (processedMessageIds.size > PROCESSED_CAP) {
@@ -461,6 +466,7 @@ class CompanionWindowController @Inject constructor(
             imPackage = fetchImPackage(active.contactId) ?: return,
             draft = draft,
             turnMessageId = draftMessage.id,
+            draftSource = sendable.source,
         )
 
         // 1) 单窗口发送上限：达上限后其余草稿走起草通知降级（方案 §8.2）。

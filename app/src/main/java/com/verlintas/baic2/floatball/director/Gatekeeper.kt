@@ -239,6 +239,19 @@ object GateRules {
             "不提出见面、约会、送礼、上门等超阶段动作。" +
             "只写自然、轻松、低风险的日常回应。"
 
+    /**
+     * `<reply>` 标记协议规约段（托管方案 §四.A.1 主路径）：与 [autoForbiddenSection]
+     * 同为自动档激活时由调用方拼进系统提示词的生成端约束。模型在回复末尾用
+     * <reply>…</reply> 包住一条可直接发送的纯回复；标记之外禁止自评展开
+     * （「这样回复会…」式），从源头减少需要修剪的稿子——与发送侧
+     * SendableDraftExtractor 的确定性抽取构成双保险。
+     */
+    fun replyProtocolSection(): String =
+        "【发送格式约定】本条回复可能由系统自动发送。请在回复正文的最末尾，" +
+            "另起一行用 <reply> 和 </reply> 标记包住一条可直接发送给对方的纯回复：" +
+            "只写回复本身（一到三句自然口语），不带编号、不带称呼客套、不带分析解释、" +
+            "不带 Markdown；<reply> 标记之外不要写任何「这样回复会…」式的自我点评。"
+
     /** 自动档 forbidden 台账追加项（落 talk_missions.forbiddenJson 前合并，供分屏红线展示）。 */
     val AUTO_FORBIDDEN_ITEMS: List<String> = listOf(
         "不报价、不谈转账与付款话题",

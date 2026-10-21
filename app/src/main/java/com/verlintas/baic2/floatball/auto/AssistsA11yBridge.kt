@@ -227,6 +227,37 @@ class AssistsA11yBridge @Inject constructor(
     private fun firstEditable(): AccessibilityNodeInfo? =
         AssistsCore.getAllNodes().firstOrNull { it.isEditable && it.isEnabled }
 
+    // ── 聚焦步（托管方案 §四.A.4，模式 A 专用能力，不进上游接口契约） ──
+
+    /**
+     * 输入框真实持有焦点（仅 findFocus 口径）。与 [editableFocused] 的差异：
+     * 后者「存在可编辑节点即真」，不能作为聚焦步判据——多可编辑节点界面
+     * （电商客服页顶部搜索框等）按它判定会跳过聚焦，注入落错节点。
+     */
+    fun inputFocused(): Boolean = runCatching {
+        val root = AssistsService.getOrNull()?.rootInActiveWindow
+            ?: return@runCatching false
+        root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) != null
+    }.getOrDefault(false)
+
+    /** 首个可编辑节点的屏幕中心（聚焦步 tap 目标）；无可编辑节点/空 bounds 返回 null。 */
+    fun firstEditableCenter(): Pair<Int, Int>? = runCatching {
+        val node = firstEditable() ?: return@runCatching null
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        if (bounds.isEmpty) null else bounds.centerX() to bounds.centerY()
+    }.getOrNull()
+
+    /**
+     * 聚焦步：无真实焦点先 tap 首个可编辑节点中心。best-effort——失败返回
+     * false 不阻断注入（SET_TEXT/节点动作可自选目标注入）。
+     */
+    suspend fun focusFirstEditable(): Boolean = withContext(Dispatchers.Main) {
+        if (inputFocused()) return@withContext true
+        val center = firstEditableCenter() ?: return@withContext false
+        tap(center.first, center.second).isSuccess
+    }
+
     private fun notEnabled(): Result<Unit> = Result.failure(
         IllegalStateException(
             "accessibility_not_enabled: ask the user to enable the BAIC2 accessibility service " +

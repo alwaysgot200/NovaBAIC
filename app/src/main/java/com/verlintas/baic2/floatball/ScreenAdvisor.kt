@@ -2760,9 +2760,17 @@ class ScreenAdvisor @Inject constructor(
         return settings.autoModeEnabled && contactId in settings.autoWhitelistIds
     }
 
-    /** 生成端红线段（规约总纲之后条件拼接，见 GateRules.autoForbiddenSection）。 */
+    /** 生成端红线段（规约总纲之后条件拼接，见 GateRules.autoForbiddenSection）；
+     *  自动档同时下发 `<reply>` 标记协议（SendableDraftExtractor 主路径的生成端）。 */
     private fun autoDirectiveSection(): String? =
-        if (autoModeActive()) GateRules.autoForbiddenSection() else null
+        if (autoModeActive()) {
+            listOf(
+                GateRules.autoForbiddenSection(),
+                GateRules.replyProtocolSection(),
+            ).joinToString("\n\n")
+        } else {
+            null
+        }
 
     /** 任务令 forbidden 台账合并：自动档激活时追加三条固定红线（distinct 去重）。 */
     private fun autoForbiddenMerged(planForbidden: List<String>): List<String> =

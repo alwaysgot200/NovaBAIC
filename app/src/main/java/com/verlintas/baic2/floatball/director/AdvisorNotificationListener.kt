@@ -35,6 +35,7 @@ import com.verlintas.baic2.floatball.FloatBallService
 import com.verlintas.baic2.floatball.ScreenAdvisor
 import com.verlintas.baic2.floatball.advisor.EngagementRules
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
+import com.verlintas.baic2.floatball.auto.ImNavigator
 import com.verlintas.baic2.floatball.contact.ContactDirectory
 import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.AndroidEntryPoint
@@ -76,6 +77,9 @@ class AdvisorNotificationListener : NotificationListenerService() {
     @Inject
     lateinit var gate: NotificationGate
 
+    @Inject
+    lateinit var imNavigator: ImNavigator
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** 单飞：同一时刻只跑一个通知回合（turnMutex 已串行，这里防排队堆积）。 */
@@ -95,6 +99,10 @@ class AdvisorNotificationListener : NotificationListenerService() {
         val body = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
             ?: extras.getCharSequence(Notification.EXTRA_TEXT)
         val parsed = gate.parse(pkg, title, body) ?: return
+        // contentIntent 捕获（托管方案 §四.A.2）：点通知直达会话的 PendingIntent
+        // 是 ImNavigator 拉起会话的钥匙，即取即用只进内存缓存（隐私红线：不落盘
+        // 不序列化不进日志）。联系人解析成功后在 handleDraftTurn 补挂 contactId 键。
+        imNavigator.remember(pkg, parsed.contactTitle, notification.notification?.contentIntent)
         // 节流在解析之后、建档查询之前：重复通知连 DB 都不打。
         if (!gate.shouldDispatch(Throttle.keyOf(parsed), System.currentTimeMillis())) return
         scope.launch { handleDraftTurn(parsed) }
@@ -108,6 +116,8 @@ class AdvisorNotificationListener : NotificationListenerService() {
                 rawTitle = parsed.contactTitle,
                 allowStub = false,
             ) ?: return // 未建档联系人：静默忽略，不创建会话不落库（M0 同款纪律）。
+            // 导航缓存补挂 contactId 键（§四.A.2）：回合成败与否，键先就位。
+            imNavigator.bindContact(parsed.packageName, contact.contactId, parsed.contactTitle)
             // 维持度第一手开关（v10 方案 §2.6）：mute 档静默丢弃（不起草不出稿），
             // reactive/proactive 照常参谋；与白名单过滤同层前置，ProactivePolicy
             // 的 enabled 是第二层频控开关。

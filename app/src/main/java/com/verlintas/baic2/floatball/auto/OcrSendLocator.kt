@@ -45,13 +45,26 @@ class OcrSendLocator @Inject constructor(
 ) : SendLocator {
 
     override suspend fun locate(): SendTarget? = withContext(Dispatchers.Default) {
-        val frame = frameSource.grabFrame().getOrNull() ?: return@withContext null
+        pickSend(frameLines() ?: return@withContext null)
+    }
+
+    /**
+     * 发送后上屏回读（方案 §四.A.3，模式 B 证据源）：当前帧 OCR 文本是否包含
+     * [clip]。取帧失败按「未包含」处理（调用方判负降级——宁降级不假成功）。
+     */
+    suspend fun frameContains(clip: String): Boolean = withContext(Dispatchers.Default) {
+        val lines = frameLines() ?: return@withContext false
+        lines.any { it.text.contains(clip) }
+    }
+
+    /** 取当前帧并 OCR（locate/frameContains 共用）；任一环节失败返回 null。 */
+    private suspend fun frameLines(): List<OcrLine>? {
+        val frame = frameSource.grabFrame().getOrNull() ?: return null
         val bytes = ByteArrayOutputStream().use { sink ->
             frame.compress(Bitmap.CompressFormat.PNG, 100, sink)
             sink.toByteArray()
         }
-        val lines = ocr.recognize(bytes).getOrNull() ?: return@withContext null
-        pickSend(lines)
+        return ocr.recognize(bytes).getOrNull()
     }
 
     internal companion object {

@@ -54,6 +54,9 @@ data class AutoSendRequest(
     val imPackage: String,
     val draft: String,
     val turnMessageId: Long? = null,
+
+    /** 草稿来源码（SendableDraftExtractor.SOURCE_*，入台账 reason 供回放兜底触发率）。 */
+    val draftSource: String? = null,
 )
 
 /** 派发结果：Sent=三步全部成功；DegradedToDraft=执行失败已降级起草通知；Rejected=总闸/白名单拒绝。 */
@@ -138,17 +141,23 @@ internal object SendSequence {
     const val REASON_SEND_NOT_FOUND = "send_button_not_found"
     const val REASON_SEND_TAP_FAILED = "send_tap_failed"
 
-    /** 执行完整序列（解耦形态）：返回 null = 发送成功，否则为失败原因码。 */
+    /** 执行完整序列（解耦形态）：返回 null = 发送成功，否则为失败原因码。
+     *  [evidence] 提供时发送后回读上屏（§四.A.3），失败按 SEND_TAP_FAILED 处理；
+     *  [focusStep] 为注入前聚焦步（§四.A.4，best-effort，失败不阻断注入）。 */
     suspend fun run(
         injector: InputInjector,
         locator: SendLocator,
         foregroundPackage: String?,
         imPackage: String,
         draft: String,
+        evidence: SendEvidenceFinder? = null,
+        focusStep: (suspend () -> Boolean)? = null,
     ): String? {
         if (!injector.available) return injector.unavailableReason
         // 前台包名校验：不在目标 IM 的会话界面绝不注入（防错发到别的 App）。
         if (foregroundPackage != imPackage) return REASON_WRONG_FOREGROUND
+        // 聚焦步（best-effort）：失败不阻断——SET_TEXT/节点注入可自选目标。
+        runCatching { focusStep?.invoke() }
         // 第 1 步：注入文本（实现方自决 SET_TEXT / input text / 剪贴板+粘贴）；
         // 失败重试一次（界面可能尚未就绪）。
         if (!injectWithRetry(injector, draft)) return REASON_INPUT_FAILED
@@ -159,6 +168,14 @@ internal object SendSequence {
             val relocated = locator.locate()
             if (relocated == null || !tap(injector, relocated)) {
                 // best effort 清空输入框残留，避免降级后人肉档面对半成品。
+                runCatching { injector.clearInput() }
+                return REASON_SEND_TAP_FAILED
+            }
+        }
+        // 第 4 步：发送后上屏回读（§四.A.3）——宁降级不假成功。
+        if (evidence != null) {
+            val clip = PostSendVerifier.clipOf(draft)
+            if (!PostSendVerifier.verify(evidence, clip)) {
                 runCatching { injector.clearInput() }
                 return REASON_SEND_TAP_FAILED
             }
@@ -210,9 +227,11 @@ internal object SendSequence {
 @Singleton
 class ActionDispatcher @Inject constructor(
     private val bridge: AccessibilityBridge,
+    private val assists: AssistsA11yBridge,
     private val a11yInjector: A11yInjector,
     private val shizukuInjector: ShizukuInjector,
     private val ocrSendLocator: OcrSendLocator,
+    private val imNavigator: ImNavigator,
     private val prefs: AdvisorPrefs,
     private val db: AdvisorDatabase,
     @ApplicationContext private val context: Context,
@@ -240,30 +259,63 @@ class ActionDispatcher @Inject constructor(
                 a11yReady = bridge.connected.value,
                 shizukuReady = shizukuInjector.available,
             )
+            // 发送后上屏回读证据源（§四.A.3）：A=a11y 节点树；B=当前帧 OCR。
+            val evidence: SendEvidenceFinder? = when (channel) {
+                InjectorChannel.A11y -> SendEvidenceFinder { clip -> bridge.findText(clip).isNotEmpty() }
+                InjectorChannel.Shizuku -> SendEvidenceFinder { clip -> ocrSendLocator.frameContains(clip) }
+                InjectorChannel.DraftFallback -> null
+            }
+            // 聚焦步（§四.A.4）：A 期仅模式 A 接（无真实焦点先 tap 首个可编辑
+            // 节点）；模式 B 的输入框坐标定位随 B 期找图落地，A 期 no-op。
+            val focusStep: (suspend () -> Boolean)? = if (channel == InjectorChannel.A11y) {
+                { assists.focusFirstEditable() }
+            } else {
+                null
+            }
+            // 会话导航（§四.A.2）：前台不在目标 IM → 通知 contentIntent 拉起 +
+            // 双确认；失败按 REASON_NAV_FAILED 系降级起草（人肉档现状不变）。
+            val foregroundPackage = probeForeground(channel)
+            val effectiveForeground = if (foregroundPackage == request.imPackage) {
+                foregroundPackage
+            } else {
+                val nav = imNavigator.navigate(
+                    imPackage = request.imPackage,
+                    contactId = request.contactId,
+                    rawTitleHint = request.contactName,
+                )
+                if (nav.outcome != ImNavigator.NavOutcome.NAVIGATED) {
+                    return@withContext "${ImNavigator.REASON_NAV_FAILED}:${nav.outcome.name.lowercase()}"
+                }
+                probeForeground(channel)
+            }
             runCatching {
                 when (channel) {
                     InjectorChannel.A11y -> SendSequence.run(
                         injector = a11yInjector,
                         locator = A11ySendLocator(bridge),
-                        foregroundPackage = bridge.foregroundPackage(),
+                        foregroundPackage = effectiveForeground,
                         imPackage = request.imPackage,
                         draft = request.draft,
+                        evidence = evidence,
+                        focusStep = focusStep,
                     )
                     InjectorChannel.Shizuku -> SendSequence.run(
                         injector = shizukuInjector,
                         locator = ocrSendLocator,
-                        foregroundPackage = shizukuInjector.foregroundPackage(),
+                        foregroundPackage = effectiveForeground,
                         imPackage = request.imPackage,
                         draft = request.draft,
+                        evidence = evidence,
+                        focusStep = focusStep,
                     )
                     // C（起草档）不算「托管」：无可用注入通道，直接挂起草通知。
                     InjectorChannel.DraftFallback -> REASON_NO_EXECUTOR
                 }
             }.getOrElse { REASON_DISPATCH_ERROR }
         }
-        val reason = if (failure == null) "auto_sent:$fingerprint" else "$REASON_DISPATCH_FAILED:$failure:$fingerprint"
-        logSend(request, reason)
-        ledger.record(request.contactId, fingerprint, reason, System.currentTimeMillis())
+        val base = if (failure == null) "auto_sent:$fingerprint" else "$REASON_DISPATCH_FAILED:$failure:$fingerprint"
+        logSend(request, withDraftSource(base, request.draftSource))
+        ledger.record(request.contactId, fingerprint, base, System.currentTimeMillis())
         return if (failure == null) {
             AutoSendResult.Sent(fingerprint)
         } else {
@@ -275,7 +327,10 @@ class ActionDispatcher @Inject constructor(
     /** Gatekeeper 硬审拒绝的台账记录（调用方审稿后调用；只落库绝不发送）。 */
     suspend fun logGateBlocked(request: AutoSendRequest, gateReason: String) {
         val fingerprint = SendFingerprint.of(request.draft)
-        logSend(request, "$REASON_GATE_BLOCKED:$gateReason:$fingerprint")
+        logSend(
+            request,
+            withDraftSource("$REASON_GATE_BLOCKED:$gateReason:$fingerprint", request.draftSource),
+        )
         ledger.record(request.contactId, fingerprint, REASON_GATE_BLOCKED, System.currentTimeMillis())
     }
 
@@ -286,10 +341,21 @@ class ActionDispatcher @Inject constructor(
      */
     suspend fun degradeToDraft(request: AutoSendRequest, reason: String): AutoSendResult.DegradedToDraft {
         val fingerprint = SendFingerprint.of(request.draft)
-        logSend(request, "$REASON_DEGRADED:$reason:$fingerprint")
+        logSend(request, withDraftSource("$REASON_DEGRADED:$reason:$fingerprint", request.draftSource))
         ledger.record(request.contactId, fingerprint, reason, System.currentTimeMillis())
         postDraftFallback(request)
         return AutoSendResult.DegradedToDraft(reason, fingerprint)
+    }
+
+    /** 台账 reason 追加草稿来源码（兜底触发率回放；无来源不追加）。 */
+    private fun withDraftSource(reason: String, source: String?): String =
+        if (source.isNullOrBlank()) reason else "$reason:src=$source"
+
+    /** 前台包名探针（通道自选）：A=a11y 桥；B=Shizuku dumpsys；C=null（拒注入）。 */
+    private suspend fun probeForeground(channel: InjectorChannel): String? = when (channel) {
+        InjectorChannel.A11y -> bridge.foregroundPackage()
+        InjectorChannel.Shizuku -> shizukuInjector.foregroundPackage()
+        InjectorChannel.DraftFallback -> null
     }
 
     /** 发送事件落 director_logs（旁路，任何持久化失败只 Log 不上抛）。 */
