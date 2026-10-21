@@ -625,10 +625,12 @@ class FloatBallService : Service() {
                             }
                         }
                         is ScreenAdvisor.Event.TurnStarted -> ensureSplit()
-                        // 与上一屏几乎相同：不展开面板，仅轻提示；flow 结束后
-                        // finishOneShot 立即结束单次模式、恢复蓝球。
+                        // 与上一屏几乎相同：不再重复 OCR/LLM，但分屏面板必须弹出——
+                        // 用户单击就是要看参谋结果，转录仍带着上次回合的内容；
+                        // 面板已关时 reattach 是 no-op（真机踩坑：只 toast 不弹窗），
+                        // 改走 ensureSplit 两条路都覆盖（复用/重建）。
                         ScreenAdvisor.Event.Unchanged -> {
-                            reattachSplitWindow() // 摘窗采集后原样恢复面板
+                            ensureSplit()
                             toast(R.string.float_screen_unchanged)
                         }
                         is ScreenAdvisor.Event.Failed -> ensureSplit() // 错误也要可见
