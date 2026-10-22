@@ -214,15 +214,42 @@
    提示用户**（前置就绪检查不满足即禁用开关并展示缺项与操作指引；
    运行中 a11y 断连即降级+通知）——**严禁静默失效**（功能点了没反应、
    或悄悄走空）。
-3. **RPA 执行面双模架构（2026-10-21 定版，此后所有 RPA 功能一律照此自检）**：
+3. **两条线、各自的前置校验门（2026-10-22 再次强调定法）**：所有自动化
+   一律按「a11y 开 / a11y 关」**两条独立完整的线**设计交付；执行前先过
+   **本线的就绪校验门**（a11y 线查无障碍连接；无 a11y 线查 Shizuku 存活 +
+   投影句柄 + appops），条件不满足→**提示缺项与操作指引**（禁用入口或
+   toast 报因），条件满足→才执行。**严禁**不校验就执行、执行失败不报因、
+   或悄悄静默切到另一条线。
+4. **RPA 执行面双模架构（2026-10-21 定版，此后所有 RPA 功能一律照此自检）**：
    a11y 关闭不是「功能受限」而是**完整的第二套执行面**，两种模式都必须可交付：
    - **a11y 开**：无障碍节点读写 / 手势通道（毫秒级、零弹框）——首选。
    - **a11y 关**：`Shizuku`（shell 注入 `input tap`/`appops`）+ **静默 MediaProjection**
      （`appops set <pkg> PROJECT_MEDIA allow` 后授权框静默通过，HyperOS 真机实测，
      见 `docs/2026-10-21-投影免弹窗授权方案.md`）+ OCR + 以图找图。
    感知（抓帧/OCR/找图）与执行（注入/粘贴）都要能独立走通，且失败必须报因（§4.5.2）。
-4. 参考架构：三模执行面与就绪校验门
-   见 `docs/2026-10-19-自动聊天托管执行面方案.md` §17.2/§20。
+5. **无 a11y 感知链（2026-10-22 定版，标准套路）**：
+   `Shizuku + 自动授权常驻录屏 + 差分式抽帧 + OCR + 以图找图`，
+   代码级链条（全部已真机验证，新功能直接复用勿另造）：
+   - **授权编排**（`floatball/auto/ScreenCapture.ensureProjection`，唯一入口）：
+     投影已活→直接复用；a11y 开→`MPManager.request(autoAllow=true)` 由无障碍
+     自动点「立即开始」；Shizuku 活→先 `appops PROJECT_MEDIA` 静默授权再 request；
+     皆无→手动授权（超时 60s）。幂等，失败报因。
+   - **常驻投影取帧**：`acquireProjectionFrame`/`takeScreenshot2Bitmap` 毫秒级；
+     画面静止时 `acquireLatestImage` 返回 null＝无新帧，**≠会话死亡**——必须用
+     句柄判活 `MPManager.isEnable && getMediaProjection() != null`（`isEnable` 单看
+     是假活：onStop 后不置空）。投影**常驻不 release**，跨会话复用。
+   - **差分循环**（`FrameDiffEngine`）：运动检测→静默稳定→掩膜（自身浮窗+底部带
+     位图涂黑）→OCR→与上次内容去重→串行入队 LLM；静止自适应降频。
+   - **执行注入**：Shizuku `input tap`/剪贴板粘贴；找图走 `FrameSource` 阶梯。
+   - **兜底与报因**：投影拿不到帧→Shizuku `screencap` 兜底；空白帧（FLAG_SECURE/
+     黑屏）质检重采后仍黑→`REASON_*` 报因，绝不吞错。
+   - **无人值守休憩**：不能不停录——`workMs/restMs`（默认工作 10 分钟歇 10 分钟，
+     AdvisorPrefs 可调）工作段到点停歇再自动继续，投影保持常驻。
+   - **禁令**：不许绕过 `ScreenCapture` 直接调 `MPManager`（仅两处例外：
+     `Baic2Application` 的 SDK init 与 `FrameSource` 找图阶梯）。
+6. 参考架构：三模执行面与就绪校验门
+   见 `docs/2026-10-19-自动聊天托管执行面方案.md` §17.2/§20；
+   无 a11y 感知链全貌见 `docs/2026-10-22-连续模式录屏优化与免无障碍截屏方案.md`。
 
 ---
 
