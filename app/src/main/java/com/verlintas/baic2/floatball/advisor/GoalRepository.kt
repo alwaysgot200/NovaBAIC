@@ -119,6 +119,18 @@ class GoalRepository @Inject constructor(
         _l1CompletionHints.update { hints -> hints.filterNot { it.goalId == goalId } }
     }
 
+    // ── F2 目标漂移提醒（2026-10-22 方案）：与 dismissedL1Completions 同款进程内抑制 ──
+
+    private val _driftDismissals = MutableStateFlow<Set<Long>>(emptySet())
+
+    /** 已被用户「忽略」的漂移提醒 L1 集合（进程内抑制，重启后按新证据可再提示）。 */
+    val driftDismissals = _driftDismissals.asStateFlow()
+
+    /** 用户在漂移黄条点「忽略」：本进程生命周期内该 L1 不再提示；不自动改目标。 */
+    fun dismissDrift(l1Id: Long) {
+        _driftDismissals.update { it + l1Id }
+    }
+
     // ── 新建 ───────────────────────────────────────────────────────────────
 
     /**

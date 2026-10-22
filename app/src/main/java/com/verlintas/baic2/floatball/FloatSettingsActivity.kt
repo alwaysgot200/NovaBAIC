@@ -609,7 +609,7 @@ private fun AdvisorSettingsScreen(
         }
     }
 }
-/** P2「我的聊天策略」：模式三档（增强档置灰）+ 默认策略卡入口与手动编译。 */
+/** P2「我的聊天策略」：模式三档（P3 §七 增强档已解锁）+ 默认策略卡入口与手动编译。 */
 @Composable
 private fun StrategySettingsSection(
     mode: Int,

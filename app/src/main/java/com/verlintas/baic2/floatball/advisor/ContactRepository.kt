@@ -83,12 +83,18 @@ class ContactRepository @Inject constructor(
      * 原规范化键与 title_rules 的壳后缀剥离键；精确/别名未命中再做编辑距离
      * 模糊近邻（[ResolveOutcome.FuzzyNear]，不自动合并）；全未命中且
      * [createStub]=true 时懒创建 Stub（首次发起参谋）。
+     *
+     * 墓碑（2026-10-22）：聊天会话登记行命中但名下档案已被删除时，直接返回
+     * [ResolveOutcome.Unknown]——自动归档到此为止，不再重建档案（修复「删除
+     * 联系人后再次参谋同名档案复活、看似要删两次」）；仅显式新建入口传
+     * [bypassTombstone]=true 穿透重建。
      */
     suspend fun resolve(
         imPackage: String,
         rawTitle: String,
         source: String = "a11y",
         createStub: Boolean = false,
+        bypassTombstone: Boolean = false,
     ): ResolveOutcome {
         val normalized = ContactNames.normalize(rawTitle)
         if (normalized.isBlank()) return ResolveOutcome.Unknown(normalized)
@@ -98,11 +104,20 @@ class ContactRepository @Inject constructor(
         // 已登记过归属即直接返回——跨 APP 归档由此成立（微信档的张三在企微/
         // 钉钉同首次识别也命中同人）；同时把本次窗口标题刷进 lastSeen/显示名。
         db.chatChannelDao().find(imPackage, normalized)?.let { channel ->
-            db.contactProfileDao().findById(channel.contactId)
-                ?.takeIf { it.mergedInto == null && it.deletedAt == null }
-                ?.let { profile ->
-                    return match(imPackage, profile, normalized, rawTitle, source, newStub = false)
-                }
+            val owner = db.contactProfileDao().findById(channel.contactId)
+            if (owner != null && owner.mergedInto == null && owner.deletedAt == null) {
+                return match(imPackage, owner, normalized, rawTitle, source, newStub = false)
+            }
+            // 墓碑（2026-10-22）：登记行仍在但名下档案已被删除——自动归档到此
+            // 为止，返回 Unknown（参谋照常进行，仅不再自动重建档案）。显式新建
+            // （bypassTombstone=true：画像页新建弹窗/候选建档卡/分屏快速绑定）
+            // 才穿透重建；重建或手动改绑命中即 recordChannel REPLACE 改指新
+            // 档案，墓碑自然解除。仅「已删除」触发墓碑——合并档案的登记行由
+            // 合并流程 reassign 改指主档，异常残留时继续走下方键/别名路径找
+            // 主档，行为与改动前一致。
+            if (owner != null && owner.deletedAt != null && !bypassTombstone) {
+                return ResolveOutcome.Unknown(normalized)
+            }
         }
 
         for (norm in variants) {

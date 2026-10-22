@@ -273,6 +273,24 @@
     <string name="float_ask_regen_failed">重写失败，请重试</string>
     <string name="float_basis_label">依据：</string>
     <string name="float_basis_wrong">记错了</string>
+    <!-- 策略体系功能最大化（2026-10-22 方案）：增强档战术约束分屏可见 + 效果统计 + 目标漂移 -->
+    <string name="float_tactical_brief_label">战术约束（增强档）</string>
+    <string name="float_tactical_avoid">避免：%1$s</string>
+    <string name="float_tactical_must">必须回应：%1$s</string>
+    <string name="float_tactical_do">必须做到：%1$s</string>
+    <string name="float_tactical_tone">语气：%1$s</string>
+    <string name="float_tactical_expand">展开</string>
+    <string name="float_stats_recent_line">近%1$d回合 · 采纳 %2$d%% · 成功 %3$d%%</string>
+    <string name="float_stats_adopt_rate">采纳率</string>
+    <string name="float_stats_success_rate">成功率</string>
+    <string name="float_stats_fail_streak">当前连挫</string>
+    <string name="float_stats_recap_good">近期建议执行顺利，保持当前节奏与分寸</string>
+    <string name="float_stats_recap_mixed">近期建议约半数被执行，注意更贴合对方状态</string>
+    <string name="float_stats_recap_bad">近期多番受挫，建议收敛主张、先共情再表达、降低推进强度</string>
+    <string name="float_stats_recap_title">近期复盘</string>
+    <string name="float_drift_title">目标漂移提醒</string>
+    <string name="float_drift_hint">任务令疑似偏离该目标：连续 %1$d 回合未指向目标判据，考虑修订目标或判据</string>
+    <string name="float_drift_fix">调整目标</string>
     <string name="float_basis_correct_hint">正确的说法是什么？</string>
     <string name="float_basis_correct_save">保存</string>
     <string name="float_basis_correct_cancel">取消</string>

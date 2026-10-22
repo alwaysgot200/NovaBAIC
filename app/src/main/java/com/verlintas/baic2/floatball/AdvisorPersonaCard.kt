@@ -329,7 +329,9 @@ internal fun AdvisorPersonaCard(
                     Text(
                         text = stringResource(labelRes),
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f),
+                        // 与右侧 FilterChip 交叉轴居中（2026-10-22：标签与档位
+                        // 按钮高度不同，不声明 align 会顶对齐观感差）。
+                        modifier = Modifier.weight(1f).align(Alignment.CenterVertically),
                     )
                     listOf(TALKER_NEVER, TALKER_ASSESS, TALKER_FREE).forEach { level ->
                         FilterChip(

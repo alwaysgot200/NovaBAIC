@@ -369,6 +369,8 @@ private fun ContactListScreen(
                                         rawTitle = candidateName,
                                         source = "user",
                                         createStub = true,
+                                        // 候选建档卡=用户显式确认建档：穿透墓碑。
+                                        bypassTombstone = true,
                                     )
                                     when (outcome) {
                                         is com.verlintas.baic2.floatball.advisor.ResolveOutcome.Matched ->
@@ -469,11 +471,13 @@ private fun ContactListScreen(
                                 runCatching {
                                     val outcome = contacts.resolve(
                                         // 建档即按所选 APP 登记聊天会话行（resolve 内
-                                        // match/stub 均会 recordChannel）。
+                                        // match/stub 均会 recordChannel）。显式新建
+                                        // 穿透墓碑（该名下档案删除后仍可重建）。
                                         imPackage = createPkg,
                                         rawTitle = name,
                                         source = "user",
                                         createStub = true,
+                                        bypassTombstone = true,
                                     )
                                     if (outcome is com.verlintas.baic2.floatball.advisor.ResolveOutcome.Matched) {
                                         if (currentConversationId > 0) {

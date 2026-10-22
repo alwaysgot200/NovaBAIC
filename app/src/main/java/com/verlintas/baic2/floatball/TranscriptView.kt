@@ -44,6 +44,7 @@ import com.verlintas.baic2.R
 import com.verlintas.baic2.core.model.ChatMessage
 import com.verlintas.baic2.core.model.ChatRole
 import com.verlintas.baic2.floatball.advisor.strategy.ReplySuggestions
+import com.verlintas.baic2.floatball.advisor.strategy.TacticalBrief
 
 /**
  * 分屏浮窗的转录视图：渲染「老参谋」会话的消息流（与主界面同一会话、
@@ -261,10 +262,11 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         val pendingMission = state.missions.firstOrNull { it.pending }
         val regenUsed = lastUserId != null && lastUserId in state.regeneratedTurns
         val basis = state.basisByMessage[message.id].orEmpty()
-        // 指纹短路：内容/任务令态/依据都没变（典型：流式 token 触发的重渲染）
+        val tactical = state.tacticalBriefs[message.id]
+        // 指纹短路：内容/任务令态/依据/战术约束都没变（典型：流式 token 触发的重渲染）
         // 时跳过整块重建，避免每个 token 都 removeAllViews + 重建 Span。
         val signature = "${message.content.hashCode()}|$isLastAssistant|" +
-            "${pendingMission != null}|${pendingMission?.adoptedIndex}|$regenUsed|$basis"
+            "${pendingMission != null}|${pendingMission?.adoptedIndex}|$regenUsed|$basis|$tactical"
         if (bubble.bindSignature == signature) return
         bubble.bindSignature = signature
         box.removeAllViews()
@@ -294,8 +296,57 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
                 )
             }
         }
+        tactical?.let { box.addView(buildTacticalFooter(it)) }
         basis.takeIf { it.isNotEmpty() }?.let { box.addView(buildBasisFooter(box, it)) }
         box.addView(buildCopyFooter(message, bubble))
+    }
+
+    /**
+     * F3（2026-10-22 方案）：气泡下「战术约束（增强档）」折叠小字——增强档预分析
+     * 的四段硬约束对用户可见（原来只注入提示词，不可感知）。默认单行省略摘要，
+     * 点击展开完整段（避免/必须回应/必须做到/语气）；再点收起。智能档与回退
+     * 回合无此 footer，天然区分增强档差异。
+     */
+    private fun buildTacticalFooter(brief: TacticalBrief): View {
+        val lines = buildList {
+            if (brief.donts.isNotEmpty()) {
+                add(context.getString(R.string.float_tactical_avoid, brief.donts.joinToString("；")))
+            }
+            if (brief.mustAnswer.isNotEmpty()) {
+                add(context.getString(R.string.float_tactical_must, brief.mustAnswer.joinToString("；")))
+            }
+            if (brief.hardActions.isNotEmpty()) {
+                add(context.getString(R.string.float_tactical_do, brief.hardActions.joinToString("；")))
+            }
+            if (brief.toneGuard.isNotEmpty()) {
+                add(context.getString(R.string.float_tactical_tone, brief.toneGuard))
+            }
+        }.takeIf { it.isNotEmpty() } ?: return View(context)
+        val label = context.getString(R.string.float_tactical_brief_label)
+        val collapsed = SpannableStringBuilder(label).append("：").append(lines.joinToString("；"))
+        val expandedText = buildString {
+            appendLine(label)
+            lines.forEach { appendLine(it) }
+        }.trimEnd()
+        val footer = newAssistantText(12f, BASIS_COLOR)
+        footer.tag = TAG_TACTICAL_FOOTER
+        footer.text = collapsed
+        footer.maxLines = 1
+        footer.ellipsize = TextUtils.TruncateAt.END
+        var expanded = false
+        footer.setOnClickListener {
+            expanded = !expanded
+            if (expanded) {
+                footer.text = expandedText
+                footer.maxLines = Int.MAX_VALUE
+                footer.ellipsize = null
+            } else {
+                footer.text = collapsed
+                footer.maxLines = 1
+                footer.ellipsize = TextUtils.TruncateAt.END
+            }
+        }
+        return footer
     }
 
     /**
@@ -655,6 +706,7 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         /** P3 §九：行内交互的视图 tag 与配色。 */
         const val TAG_CORRECTION_BAR = "p3_correction_bar"
         const val TAG_BASIS_FOOTER = "p3_basis_footer"
+        const val TAG_TACTICAL_FOOTER = "f3_tactical_footer"
         val LINK_COLOR = 0xFF9EC9FF.toInt()
         val ADOPTED_COLOR = 0x99FFFFFF.toInt()
         val BASIS_COLOR = 0xB3FFFFFF.toInt()

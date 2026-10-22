@@ -83,9 +83,16 @@ interface ContactDirectory {
     /**
      * 解析当前前台页面对应的已绑定联系人；未绑定、无法识别或不是 IM
      * 聊天页时返回 null（调用方据此回退共享会话，不阻断参谋）。
-     * [allowStub]=false 时只认既有键/别名（内容级兜底），绝不懒建新档案。
+     * [allowStub]=false 时只认既有键/别名（内容级兜底），绝不懒建新档案；
+     * 聊天会话登记行名下档案已删除（墓碑）时不自动重建，[bypassTombstone]
+     * =true 供显式新建入口（快速绑定/新建弹窗/候选建档卡）穿透。
      */
-    suspend fun resolve(imPackage: String?, rawTitle: String?, allowStub: Boolean = true): ContactRef?
+    suspend fun resolve(
+        imPackage: String?,
+        rawTitle: String?,
+        allowStub: Boolean = true,
+        bypassTombstone: Boolean = false,
+    ): ContactRef?
 
     /**
      * 群档案解析（v10，方案 §2.1 GROUP 态）：键匹配/去重与 [resolve] 同径；

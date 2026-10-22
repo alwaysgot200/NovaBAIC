@@ -66,6 +66,8 @@ import com.verlintas.baic2.floatball.advisor.strategy.EdgeDef
 import com.verlintas.baic2.floatball.advisor.strategy.PlanStreamFilter
 import com.verlintas.baic2.floatball.advisor.strategy.StageGraph
 import com.verlintas.baic2.floatball.advisor.strategy.StrategyPrompt
+import com.verlintas.baic2.floatball.advisor.strategy.StrategyStatsCalculator
+import com.verlintas.baic2.floatball.advisor.strategy.TacticalBrief
 import com.verlintas.baic2.floatball.advisor.strategy.Tactician
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
 import kotlinx.serialization.encodeToString
@@ -187,6 +189,8 @@ class ScreenAdvisor @Inject constructor(
         val missions: List<MissionMark> = emptyList(),
         /** P3 §九：assistant 消息 id → 本回合依据关键词（内存态，随会话切换清空）。 */
         val basisByMessage: Map<Long, List<String>> = emptyMap(),
+        /** 增强档战术约束（2026-10-22 方案 F3）：assistant 消息 id → 本回合预分析（内存态）。 */
+        val tacticalBriefs: Map<Long, TacticalBrief> = emptyMap(),
         /** P3 §九：已用过一次长按重写的「被修正回合」触发消息 id（每回合限一次）。 */
         val regeneratedTurns: Set<Long> = emptySet(),
         /**
@@ -274,7 +278,8 @@ class ScreenAdvisor @Inject constructor(
         val title = rawTitle.trim()
         if (title.isEmpty() || imPackage.isBlank()) return "empty_title"
         val ref = runCatching {
-            contactDirectory.resolve(imPackage, title, allowStub = true)
+            // 显式建档入口（用户点分屏绑定条）：穿透墓碑，允许重建已删除档案。
+            contactDirectory.resolve(imPackage, title, allowStub = true, bypassTombstone = true)
         }.getOrNull() ?: return "ambiguous"
         _activeContact.value = ref
         val conversationId = activeConversationId
@@ -2041,8 +2046,30 @@ class ScreenAdvisor @Inject constructor(
         } else {
             null
         }
+        // F1c（2026-10-22 方案 F1）：增强档近期复盘反哺——仅增强档注入（智能档保持
+        // 纯净控噪声），本地即时统计（60 条窗口，零网络零 LLM 成本，轻通道也生效）；
+        // 样本 <10（tier=null）不注入；连挫取当前在玩目标（active L1/L2）的
+        // goals.failStreak；任何失败静默回退（行为与智能档一致）。
+        val recapTier = if (
+            settings.strategyMode == AdvisorPrefs.STRATEGY_ENHANCED &&
+            strategySnapshot != null &&
+            contact != null
+        ) {
+            runCatching {
+                val missions = goalRepository.recentMissions(contact.contactId, GoalRepository.MISSION_KEEP)
+                val streak = maxOf(
+                    strategySnapshot.context.activeL2?.failStreak ?: 0,
+                    strategySnapshot.context.activeL1?.failStreak ?: 0,
+                )
+                StrategyStatsCalculator.calculate(missions, streak).tier
+            }.onFailure {
+                android.util.Log.d(TAG, "recap stats failed", it)
+            }.getOrNull()
+        } else {
+            null
+        }
         val strategySection = strategySnapshot?.let { snap ->
-            runCatching { StrategyPrompt.strategySection(snap.context, tacticalBrief) }
+            runCatching { StrategyPrompt.strategySection(snap.context, tacticalBrief, recapTier) }
                 .onFailure { android.util.Log.d(TAG, "strategySection render failed", it) }
                 .getOrNull()
         }
@@ -2199,6 +2226,16 @@ class ScreenAdvisor @Inject constructor(
                                     st.copy(
                                         basisByMessage = st.basisByMessage +
                                             (outcome.assistantMessageId to basis),
+                                    )
+                                }
+                            }
+                            // F3（2026-10-22 方案）：增强档战术约束挂到本回合参谋气泡，
+                            // 分屏折叠小字可见；回退（brief=null）与智能档天然不出现。
+                            tacticalBrief?.let { brief ->
+                                _transcript.update { st ->
+                                    st.copy(
+                                        tacticalBriefs = st.tacticalBriefs +
+                                            (outcome.assistantMessageId to brief),
                                     )
                                 }
                             }
@@ -2796,6 +2833,7 @@ class ScreenAdvisor @Inject constructor(
                 messages = emptyList(),
                 missions = emptyList(),
                 basisByMessage = emptyMap(),
+                tacticalBriefs = emptyMap(),
                 regeneratedTurns = emptySet(),
             )
         }

@@ -111,11 +111,13 @@ import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_REROUTE
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_RETREAT
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_SKIP
 import com.verlintas.baic2.floatball.advisor.data.StrategyCardEntity
+import com.verlintas.baic2.floatball.advisor.strategy.GoalDriftDetector
 import com.verlintas.baic2.floatball.advisor.strategy.OutcomesPayload
 import com.verlintas.baic2.floatball.advisor.strategy.RerouteRules
 import com.verlintas.baic2.floatball.advisor.strategy.RoadmapPayload
 import com.verlintas.baic2.floatball.advisor.strategy.StageGraph
 import com.verlintas.baic2.floatball.advisor.strategy.StagePolicy
+import com.verlintas.baic2.floatball.advisor.strategy.StrategyStatsCalculator
 import com.verlintas.baic2.floatball.advisor.strategy.TemplateFill
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
 import com.verlintas.baic2.floatball.brief.BriefCompiler
@@ -165,6 +167,10 @@ internal fun GoalsTab(
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val missions by goals.observeRecentMissions(contactId)
         .collectAsStateWithLifecycle(initialValue = emptyList())
+    // F1b（2026-10-22 方案 F1）：统计源独立于台账展示流（20 条）——取全量保留
+    // 窗口（60 条），避免 pending/ignored 混行挤占统计分母。
+    val statMissions by goals.observeRecentMissions(contactId, GoalRepository.MISSION_KEEP)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     val latestCard by cards.observeLatest(contactId)
         .collectAsStateWithLifecycle(initialValue = null)
 
@@ -184,6 +190,38 @@ internal fun GoalsTab(
     val l3Goals = allGoals.filter { it.horizon == HORIZON_L3 && it.status in visibleStatuses }
     val l2Goals = allGoals.filter { it.horizon == HORIZON_L2 && it.status in visibleStatuses }
     val l1Goals = allGoals.filter { it.horizon == HORIZON_L1 && it.status in visibleStatuses }
+
+    // F1b（2026-10-22 方案 F1）：策略效果统计——本地即时算，不落库不出端；
+    // 「当前连挫」取可见目标（active/provisional/review）的 goals.failStreak 最大值。
+    val strategyStats = remember(statMissions, allGoals) {
+        StrategyStatsCalculator.calculate(
+            statMissions,
+            allGoals.filter { it.status in visibleStatuses }.maxOfOrNull { it.failStreak } ?: 0,
+        )
+    }
+
+    // F2（2026-10-22 方案）：目标漂移检测——只判当前 active L1（取景口径与
+    // StrategyBrief 一致：首个 active L2 下的首个 active L1）；判据空/创建未满 3 天/
+    // 样本不足 6 条不判（纯函数保证）；「忽略」走进程内抑制集（重启后按新证据可再提示）。
+    val driftDismissals by goals.driftDismissals
+        .collectAsStateWithLifecycle(initialValue = emptySet())
+    val driftBanner = run {
+        val parent = l2Goals.firstOrNull { it.status == GOAL_ACTIVE }
+        val target = parent?.let { p ->
+            l1Goals.firstOrNull { it.status == GOAL_ACTIVE && it.parentId == p.id }
+        }
+        target?.takeIf { it.id !in driftDismissals }?.let { l1 ->
+            l1.successCriteria?.takeIf { it.isNotBlank() }?.let { criteria ->
+                val verdict = GoalDriftDetector.detect(
+                    l1Criteria = criteria,
+                    missionTexts = statMissions.map { it.mission },
+                    l1CreatedAt = l1.createdAt,
+                    now = System.currentTimeMillis(),
+                )
+                if (verdict.drifted) DriftBanner(l1.id, verdict.consecutive) else null
+            }
+        }
+    }
 
     // F7 action_hint 消费（方案 §5.6：UI 只在用户打开 GoalTab 时消费）：查新鲜度
     // 窗口内最近一条 actionHint 决策行，命中则出行动建议横幅并滚动定位到下方
@@ -327,7 +365,12 @@ internal fun GoalsTab(
         )
     }
     l1Goals.forEach { goal ->
-        L1GoalCard(goal = goal, goals = goals)
+        L1GoalCard(
+            goal = goal,
+            goals = goals,
+            drift = driftBanner?.takeIf { it.goalId == goal.id },
+            onAdjustGoal = { editingGoal = goal },
+        )
     }
 
     // ⑤ 任务令台账
@@ -385,6 +428,19 @@ internal fun GoalsTab(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // F1b：近期执行统计小字（样本 <10 整行隐藏）。
+                if (strategyStats.tier != null) {
+                    Text(
+                        text = stringResource(
+                            R.string.float_stats_recent_line,
+                            strategyStats.total,
+                            strategyStats.adopted * 100 / strategyStats.total,
+                            strategyStats.succeeded * 100 / strategyStats.total,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Text(
                 text = stringResource(R.string.float_goal_edit),
@@ -958,8 +1014,16 @@ private fun relativeTime(at: Long): String {
 
 // ------------------------------------------------------------ L1
 
+/** F2（2026-10-22 方案）：漂移黄条展示态（目标 id + 连续未指向判据回合数）。 */
+private data class DriftBanner(val goalId: Long, val consecutive: Int)
+
 @Composable
-private fun L1GoalCard(goal: GoalEntity, goals: GoalRepository) {
+private fun L1GoalCard(
+    goal: GoalEntity,
+    goals: GoalRepository,
+    drift: DriftBanner? = null,
+    onAdjustGoal: () -> Unit = {},
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val isProvisional = goal.status == GOAL_PROVISIONAL
@@ -973,6 +1037,14 @@ private fun L1GoalCard(goal: GoalEntity, goals: GoalRepository) {
                 evidence = hint.evidence,
                 onComplete = { scope.launch { goals.completeSuggestedL1(goal.id) } },
                 onDismiss = { scope.launch { goals.dismissL1Completion(goal.id) } },
+            )
+        }
+        // F2（2026-10-22 方案）：漂移黄条（仅当前 active L1 判定，命中且未被忽略时出现）。
+        if (drift != null) {
+            GoalDriftBar(
+                consecutive = drift.consecutive,
+                onFix = onAdjustGoal,
+                onDismiss = { goals.dismissDrift(goal.id) },
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1057,6 +1129,46 @@ private fun L1CompletionHintBar(
                 }
                 OutlinedButton(onClick = onDismiss) {
                     Text(stringResource(R.string.float_l1_complete_not_yet))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * F2（2026-10-22 方案）：目标漂移黄条——任务令连续多回合未指向 L1 判据的观察性
+ * 提醒；【调整目标】打开既有编辑对话框，【忽略】进程内抑制（绝不自动改目标）。
+ */
+@Composable
+private fun GoalDriftBar(consecutive: Int, onFix: () -> Unit, onDismiss: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Text(
+                text = stringResource(R.string.float_drift_title),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            Text(
+                text = stringResource(R.string.float_drift_hint, consecutive),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 6.dp),
+            ) {
+                Button(onClick = onFix) {
+                    Text(stringResource(R.string.float_drift_fix))
+                }
+                OutlinedButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.float_goal_ignore))
                 }
             }
         }

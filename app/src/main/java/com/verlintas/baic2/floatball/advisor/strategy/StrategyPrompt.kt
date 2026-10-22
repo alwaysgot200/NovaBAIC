@@ -23,8 +23,8 @@ import com.verlintas.baic2.floatball.advisor.PATH_PURSUE
 
 /**
  * 策略提示词段渲染（纯函数，§八）。位于 styleWithLength 与 brief.styleSection 之间，
- * 顺序固定：角色处境 → 当前阶段 → 近期目标 →（P3 战术硬约束）→ 红线 → 自我约束
- * → 话题素材 → 本轮态势。
+ * 顺序固定：角色处境 → 当前阶段 → 近期目标 →（P3 战术硬约束）→（F1c 近期复盘）
+ * → 红线 → 自我约束 → 话题素材 → 本轮态势。
  */
 object StrategyPrompt {
 
@@ -33,8 +33,10 @@ object StrategyPrompt {
 
     /**
      * @param tactical P3 §七增强档预分析结论；非空时物理插在策略卡内容之后、红线之前。
+     * @param recapTier F1c（2026-10-22 方案 F1）近期复盘档位；仅增强档传入（智能档
+     *   null 保持纯净控噪声），样本 <10 时调用方不传；插在战术约束之后、红线之前。
      */
-    fun strategySection(ctx: StrategyContext, tactical: TacticalBrief? = null): String {
+    fun strategySection(ctx: StrategyContext, tactical: TacticalBrief? = null, recapTier: RecapTier? = null): String {
         val sections = mutableListOf<String>()
 
         ctx.card?.roleLine?.takeIf { it.isNotBlank() }?.let {
@@ -62,6 +64,18 @@ object StrategyPrompt {
             it.hardActions.isNotEmpty() || it.donts.isNotEmpty() ||
                 it.mustAnswer.isNotEmpty() || it.toneGuard.isNotEmpty()
         }?.let { sections.add(TacticalBriefRules.promptBlock(it)) }
+
+        // F1c（2026-10-22 方案 F1）：近期复盘反哺——三档固定模板（不做自由文本，
+        // 防提示词污染），仅增强档注入；与红线冲突时以红线为准。
+        recapTier?.let { tier ->
+            sections.add(
+                "【近期复盘】" + when (tier) {
+                    RecapTier.GOOD -> "你近期的策略建议整体执行顺利：保持当前节奏与分寸，不必更激进。"
+                    RecapTier.MIXED -> "你近期的策略建议约半数被接纳：先更贴合对方当前状态与情绪，再谈推进。"
+                    RecapTier.BAD -> "你近期的策略建议多番受挫：收敛主张、先共情再表达、降低推进强度，优先修复互动氛围。"
+                },
+            )
+        }
 
         val reds = StageGate.redLines(ctx.pack, ctx.myTabooLines, ctx.theirTabooLines).toMutableList()
         StageGate.actionConstraint(ctx.pack.code, ctx.pack.pathKind, ctx.stage.stageCode)

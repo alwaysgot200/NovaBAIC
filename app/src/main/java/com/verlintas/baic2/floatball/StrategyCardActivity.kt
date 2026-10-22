@@ -67,15 +67,22 @@ import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
 import com.verlintas.baic2.floatball.advisor.CardCompiler
 import com.verlintas.baic2.floatball.advisor.ContactRepository
+import com.verlintas.baic2.floatball.advisor.GoalRepository
 import com.verlintas.baic2.floatball.advisor.PATH_PURSUE
 import com.verlintas.baic2.floatball.advisor.StyleAssets
 import com.verlintas.baic2.floatball.advisor.StrategyCardRepository
 import com.verlintas.baic2.floatball.advisor.data.CARD_DRAFT
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_GROUP
+import com.verlintas.baic2.floatball.advisor.data.GOAL_ACTIVE
+import com.verlintas.baic2.floatball.advisor.data.GOAL_PROVISIONAL
+import com.verlintas.baic2.floatball.advisor.data.GOAL_REVIEW
 import com.verlintas.baic2.floatball.advisor.data.StrategyCardEntity
 import com.verlintas.baic2.floatball.advisor.strategy.CardItem
 import com.verlintas.baic2.floatball.advisor.strategy.CardPayloads
+import com.verlintas.baic2.floatball.advisor.strategy.RecapTier
 import com.verlintas.baic2.floatball.advisor.strategy.StrategyCardPayload
+import com.verlintas.baic2.floatball.advisor.strategy.StrategyStats
+import com.verlintas.baic2.floatball.advisor.strategy.StrategyStatsCalculator
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -98,6 +105,10 @@ class StrategyCardActivity : ComponentActivity() {
 
     @Inject
     lateinit var contacts: ContactRepository
+
+    /** F1b（2026-10-22 方案 F1）：统计卡数据源（任务令 + 目标连挫）。 */
+    @Inject
+    lateinit var goals: GoalRepository
 
     @Inject
     lateinit var assets: StyleAssets
@@ -160,6 +171,19 @@ private fun StrategyCardScreen(contactId: Long, onClose: () -> Unit) {
     val card by cards.observeLatest(contactId)
         .collectAsStateWithLifecycle(initialValue = null)
 
+    // F1b（2026-10-22 方案 F1）：策略效果统计——全量保留窗口（60 条）本地即时算；
+    // 「当前连挫」取可见目标（active/provisional/review）的 goals.failStreak 最大值。
+    val statMissions by activity.goals.observeRecentMissions(contactId, GoalRepository.MISSION_KEEP)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val allGoals by activity.goals.observeGoals(contactId)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val strategyStats = remember(statMissions, allGoals) {
+        val streak = allGoals
+            .filter { it.status in setOf(GOAL_ACTIVE, GOAL_PROVISIONAL, GOAL_REVIEW) }
+            .maxOfOrNull { it.failStreak } ?: 0
+        StrategyStatsCalculator.calculate(statMissions, streak)
+    }
+
     var contactName by remember { mutableStateOf("") }
     var scenarioPathKind by remember { mutableStateOf<String?>(null) }
     // P3：群=单一对方实体，策略卡两处文案切换为群口径。
@@ -206,6 +230,10 @@ private fun StrategyCardScreen(contactId: Long, onClose: () -> Unit) {
             Column(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
                 val current = card
                 val edited = payload
+                // F1b：顶部统计卡（样本 <10 整卡隐藏）。
+                if (strategyStats.tier != null) {
+                    StrategyStatsCard(stats = strategyStats)
+                }
                 if (current == null || edited == null) {
                     Text(
                         text = stringResource(
@@ -392,6 +420,81 @@ private fun StrategyCardScreen(contactId: Long, onClose: () -> Unit) {
         }
     }
 }
+
+/** F1b（2026-10-22 方案 F1）：顶部统计卡——三胶囊 + 复盘句；样本 <10 由调用方隐藏。 */
+@Composable
+private fun StrategyStatsCard(stats: StrategyStats) {
+    Surface(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatPill(
+                    label = stringResource(R.string.float_stats_adopt_rate),
+                    value = "${pct(stats.adopted, stats.total)}%",
+                    modifier = Modifier.weight(1f),
+                )
+                StatPill(
+                    label = stringResource(R.string.float_stats_success_rate),
+                    value = "${pct(stats.succeeded, stats.total)}%",
+                    modifier = Modifier.weight(1f),
+                )
+                StatPill(
+                    label = stringResource(R.string.float_stats_fail_streak),
+                    value = stats.failStreak.toString(),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            stats.tier?.let { tier ->
+                Text(
+                    text = stringResource(
+                        when (tier) {
+                            RecapTier.GOOD -> R.string.float_stats_recap_good
+                            RecapTier.MIXED -> R.string.float_stats_recap_mixed
+                            RecapTier.BAD -> R.string.float_stats_recap_bad
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatPill(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+private fun pct(part: Int, total: Int): Int = if (total > 0) part * 100 / total else 0
 
 @Composable
 private fun CardStatusBadge(card: StrategyCardEntity) {
