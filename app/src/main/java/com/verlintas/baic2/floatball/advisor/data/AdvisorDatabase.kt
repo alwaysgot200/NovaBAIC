@@ -58,8 +58,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         EmotionLexiconEntity::class,
         EmotionEventEntity::class,
         EmotionBaselineEntity::class,
+        EmotionMiningCandidateEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -115,6 +116,8 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun emotionEventDao(): EmotionEventDao
 
     abstract fun emotionBaselineDao(): EmotionBaselineDao
+
+    abstract fun emotionMiningDao(): EmotionMiningDao
 }
 
 /**
@@ -684,6 +687,35 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
                 PRIMARY KEY(`contactId`)
             )
             """.trimIndent(),
+        )
+    }
+}
+
+/**
+ * v14 → v15（情感分析师 E-g，方案 §4.7 词库运营闭环）：新表
+ * emotion_mining_candidates（AI 挖词候选待审流，term 唯一去重）。模型只能
+ * 提案——候选永远先落本表待人审，采纳才进 emotion_lexicon；拒绝行保留供
+ * 同类建议不再提。建表 IF NOT EXISTS，不搬不删任何既有数据，DDL 与实体
+ * 逐字对齐（Room 2.8 开库校验）。
+ */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `emotion_mining_candidates` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `term` TEXT NOT NULL,
+                `labelsJson` TEXT NOT NULL,
+                `reason` TEXT NOT NULL,
+                `contactId` INTEGER,
+                `status` TEXT NOT NULL,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_emotion_mining_candidates_term` " +
+                "ON `emotion_mining_candidates` (`term`)",
         )
     }
 }

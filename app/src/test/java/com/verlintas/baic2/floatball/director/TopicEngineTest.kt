@@ -19,6 +19,8 @@
 
 package com.verlintas.baic2.floatball.director
 
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionTrendCalculator
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -57,6 +59,7 @@ class TopicEngineTest {
         nowMs: Long = NOW,
         planDirections: List<String> = emptyList(),
         filter: TopicFilter? = null,
+        emotionFollowUp: String? = null,
     ) = TopicEngine.Materials(
         profileHooks = hooks,
         interestTags = tags,
@@ -72,7 +75,49 @@ class TopicEngineTest {
         nowMs = nowMs,
         planDirections = planDirections,
         filter = filter,
+        emotionFollowUp = emotionFollowUp,
     )
+
+    // ── 情绪跟进（E-g §4.7：低落登记到期的"最近好点没"） ────────────────
+
+    @Test
+    fun emotionFollowUp_beatsPlanDirectionAndAllSources() {
+        val pick = TopicEngine.select(
+            materials(
+                hooks = listOf("钓鱼"),
+                planDirections = listOf("行业见闻"),
+                emotionFollowUp = EmotionTrendCalculator.FOLLOW_UP_TOPIC,
+            ),
+        )
+        assertEquals(TopicSource.EMOTION_FOLLOWUP, pick?.source)
+        assertEquals(EmotionTrendCalculator.FOLLOW_UP_TOPIC, pick?.topic)
+        assertTrue(pick!!.angle.contains("关心"))
+    }
+
+    @Test
+    fun emotionFollowUp_dedupedInWindow_fallsThroughToOtherSources() {
+        val pick = TopicEngine.select(
+            materials(
+                hooks = listOf("钓鱼"),
+                emotionFollowUp = EmotionTrendCalculator.FOLLOW_UP_TOPIC,
+                used = listOf(
+                    TopicEngine.UsedTopic(
+                        TopicEngine.fingerprintOf(EmotionTrendCalculator.FOLLOW_UP_TOPIC),
+                        NOW - DAY_MS,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(TopicSource.PROFILE_HOOK, pick?.source)
+    }
+
+    @Test
+    fun emotionFollowUp_blankOrNull_neverBlocksOtherSources() {
+        val pick = TopicEngine.select(
+            materials(hooks = listOf("钓鱼"), emotionFollowUp = "   "),
+        )
+        assertEquals(TopicSource.PROFILE_HOOK, pick?.source)
+    }
 
     // ── 源优先级（枚举声明序即优先级） ─────────────────────────────────
 

@@ -24,6 +24,7 @@ import com.verlintas.baic2.floatball.advisor.data.EMOTION_REASON_JUDGE
 import com.verlintas.baic2.floatball.advisor.data.toEntry
 import com.verlintas.baic2.floatball.advisor.data.toEntity
 import com.verlintas.baic2.floatball.advisor.data.toEventEntity
+import com.verlintas.baic2.floatball.advisor.data.toTrendPoint
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -112,9 +113,49 @@ class EmotionAssessor @Inject constructor(
         return computed.toJudgeBaseline()
     }
 
+    /**
+     * 跨会话基线全量滚动重算（E-g 慢车道，方案 §4.7）：[samples] 由调用方跨
+     * 该联系人全部参谋会话收集（旧→新），距上次重算不足 [BASELINE_ROLL_INTERVAL_MS]
+     * 直接跳过；失败静默，绝不阻断回合。判定回合内的 [baselineFor] 小窗口快照
+     * 照旧，本方法是慢车道的全量校准。
+     */
+    suspend fun maybeRecalcBaseline(
+        contactId: Long,
+        samples: List<EmotionMessageSample>,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
+        if (samples.isEmpty()) return
+        val last = runCatching { db.emotionBaselineDao().get(contactId) }.getOrNull()?.updatedAt ?: 0L
+        if (nowMs - last < BASELINE_ROLL_INTERVAL_MS) return
+        runCatching {
+            db.emotionBaselineDao().save(EmotionBaselineCalculator.calculate(samples, nowMs).toEntity(contactId))
+        }
+    }
+
+    /**
+     * 联系人情绪轨迹（E-g，方案 §4.7）：近 [TREND_WINDOW_DAYS] 天 emotion_events
+     * 纯函数聚合。无事件返回 null（消费面空段不渲染，绝不臆测）。
+     */
+    suspend fun trend(
+        contactId: Long,
+        nowMs: Long = System.currentTimeMillis(),
+    ): EmotionTrend? {
+        val rows = runCatching {
+            db.emotionEventDao().sinceFor(contactId, nowMs - TREND_WINDOW_DAYS * DAY_MS)
+        }.getOrDefault(emptyList())
+        if (rows.isEmpty()) return null
+        return EmotionTrendCalculator.calculate(rows.map { it.toTrendPoint() }, nowMs)
+    }
+
     companion object {
         /** emotion_events 保留天数（方案 D4：默认 90 天，AdvisorPrefs 可调留 E-h）。 */
         const val RETENTION_DAYS = 90
+
+        /** 趋势窗口天数（§4.7：7/30 日曲线）。 */
+        const val TREND_WINDOW_DAYS = 30
+
+        /** 跨会话基线滚动重算最小间隔（慢车道每日一次足够）。 */
+        val BASELINE_ROLL_INTERVAL_MS = 24L * 60 * 60 * 1000
 
         private const val DAY_MS = 86_400_000L
     }

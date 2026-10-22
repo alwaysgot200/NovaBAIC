@@ -35,6 +35,7 @@ import com.verlintas.baic2.floatball.advisor.data.ActionPlayEntity
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L1
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L2
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionAssessor
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -249,6 +250,8 @@ internal data class PlanFacts(
     val stageCode: String = "",
     val stageLabel: String = "",
     val goalTitles: List<String> = emptyList(),
+    /** 情绪态势一句话（E-g §4.7，EmotionTrend 确定性产出；空 = 无情绪数据不注入）。 */
+    val emotionNote: String = "",
 )
 
 /**
@@ -294,6 +297,11 @@ internal object ActionPlannerPrompts {
         if (facts.goalTitles.isNotEmpty()) {
             appendLine("有效目标：")
             facts.goalTitles.take(GOAL_LINES).forEach { title -> appendLine("- ${clip(title)}") }
+        }
+        // E-g §4.7：情绪态势注入（确定性数据面，选谋略须尊重——降温/连续冷淡时
+        // 不出"强推进"类谋略，改选破冰/休眠/关心类）。
+        if (facts.emotionNote.isNotBlank()) {
+            appendLine("情绪态势（选谋略时须尊重）：${clip(facts.emotionNote)}")
         }
         appendLine("谋略库候选（stratagemCode 只能从这里选）：")
         allowed.forEach { s ->
@@ -346,6 +354,7 @@ class ActionPlanner @Inject constructor(
     private val db: AdvisorDatabase,
     private val agentRepository: AgentRepository,
     private val auxiliaryTasks: AuxiliaryTasks,
+    private val emotionAssessor: EmotionAssessor,
 ) {
     private val actionDao get() = db.actionPlayDao()
 
@@ -407,6 +416,10 @@ class ActionPlanner @Inject constructor(
             stageCode = stage.stageCode,
             stageLabel = pack.stages.firstOrNull { it.code == stage.stageCode }?.label.orEmpty(),
             goalTitles = (l2 + l1).map { it.title },
+            // E-g §4.7：情绪态势（EmotionTrend 确定性一句话，零 LLM）；无情绪数据空串。
+            emotionNote = runCatching {
+                emotionAssessor.trend(contactId)?.stanceNote()
+            }.getOrDefault("").orEmpty(),
         )
 
         val raw = withTimeoutOrNull(PLAN_TIMEOUT_MS) {

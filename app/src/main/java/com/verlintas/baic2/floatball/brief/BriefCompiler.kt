@@ -46,6 +46,7 @@ import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_REROUTE
 import com.verlintas.baic2.floatball.advisor.data.STAGE_EDGE_SKIP
 import com.verlintas.baic2.floatball.advisor.data.StageHistoryEntity
 import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionAssessor
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
 import com.verlintas.baic2.floatball.director.TopicPlanner
 import java.time.Instant
@@ -75,6 +76,8 @@ internal data class BriefContent(
     val nextMoves: List<String> = emptyList(),
     /** 下周期废话方向（V-C §4.4，确定性附加面——非 LLM 输出，落库前从 topic_plans 取）。 */
     val topicDirections: List<String> = emptyList(),
+    /** 情绪趋势段（E-g §4.7，确定性附加面——非 LLM 输出，落库前由 EmotionTrend 固定模板拼装）。 */
+    val emotionTrend: List<String> = emptyList(),
 )
 
 /**
@@ -235,6 +238,7 @@ class BriefCompiler @Inject constructor(
     private val db: AdvisorDatabase,
     private val agentRepository: AgentRepository,
     private val auxiliaryTasks: AuxiliaryTasks,
+    private val emotionAssessor: EmotionAssessor,
 ) {
     private val historyDao get() = db.stageHistoryDao()
     private val missionDao get() = db.talkMissionDao()
@@ -297,11 +301,16 @@ class BriefCompiler @Inject constructor(
             }
             // V-C §4.5：周报附加下周期废话方向（确定性数据面，取自 topic_plans
             // latest；Planner 未跑/无方向时空表，GoalTab 的 BriefSection 空表不渲染）。
+            // E-g §4.7：同口径附加"情绪趋势"段（EmotionTrend 固定模板，零 LLM、
+            // 不进提示词防污染；无事件空表不渲染）。
             val withDirections = content.copy(
                 topicDirections = runCatching { db.topicPlanDao().latest(contactId) }
                     .getOrNull()
                     ?.let { plan -> TopicPlanner.decodeDirections(plan.directionsJson) }
                     .orEmpty(),
+                emotionTrend = runCatching {
+                    emotionAssessor.trend(contactId, nowMs = System.currentTimeMillis())?.briefLines()
+                }.getOrNull().orEmpty(),
             )
             val now = System.currentTimeMillis()
             val entity = BriefOutputEntity(

@@ -23,7 +23,8 @@ import com.verlintas.baic2.floatball.advisor.data.WARM_CHAT_MISSION_PREFIX
 import kotlinx.serialization.Serializable
 
 /**
- * 素材源（方案 §7.2）。枚举声明顺序即选题优先级：方向（Planner 周编译的下周期
+ * 素材源（方案 §7.2）。枚举声明顺序即选题优先级：情绪跟进（E-g §4.7，低落登记
+ * 到期的关心，最有时效性）＞ 方向（Planner 周编译的下周期
  * 废话方向，V-C 方案 §4.4——最贴目标阶段但易空转，靠既有指纹去重轮换）＞
  * 对方画像钩子（最贴合对方、最易被接住）＞ 共同经历（关系专属）＞ 个人素材
  * （用户投喂，鲜活但泛于画像/经历）＞ 种子库（中庸兜底）。个人素材插位推导：
@@ -32,7 +33,7 @@ import kotlinx.serialization.Serializable
  * 鲜活（具个人色彩、可含时效内容），但相关度弱于对方画像钩子与双方共同经历
  * （那两源天然贴着「这个人、这段关系」），故置于共同经历之后、种子库之前。
  */
-enum class TopicSource { PLAN_DIRECTION, PROFILE_HOOK, SHARED_EXPERIENCE, PERSONAL_MATERIAL, SEED_BANK }
+enum class TopicSource { EMOTION_FOLLOWUP, PLAN_DIRECTION, PROFILE_HOOK, SHARED_EXPERIENCE, PERSONAL_MATERIAL, SEED_BANK }
 
 /** 保温话题种子（assets/advisor/topic_seeds.json 单条，方案 §6 静态资产）。 */
 @Serializable
@@ -120,6 +121,12 @@ object TopicEngine {
         val planDirections: List<String> = emptyList(),
         /** 风格三重过滤（V-C §4.2）；null = 不过滤。 */
         val filter: TopicFilter? = null,
+        /**
+         * 情绪跟进话题（E-g §4.7）：如对方低落 3 天后的"最近好点没"，来自
+         * EmotionTrend.followUpTopic（emotion_events 即登记，不另建跟进表）。
+         * 关心要有时效，故优先级高于周方向；指纹去重防重复问。
+         */
+        val emotionFollowUp: String? = null,
     )
 
     /** 选题产物：拼进保温提示词段与 missionHint（"话题候选=X（角度=Y），可弃用"）。 */
@@ -149,6 +156,16 @@ object TopicEngine {
     fun select(materials: Materials): TopicPick? {
         val window = materials.usedTopics.asSequence().take(DEDUP_WINDOW)
             .map { it.fingerprint }.toHashSet()
+        // 情绪跟进优先（E-g §4.7）：低落登记到期的关心要有时效，先于周方向出题；
+        // 近期已问过（去重窗口内）则照常落其余源，不重复追问。
+        val followUp = materials.emotionFollowUp?.trim().orEmpty()
+        if (followUp.isNotEmpty() && fingerprintOf(followUp) !in window) {
+            return TopicPick(
+                TopicSource.EMOTION_FOLLOWUP,
+                followUp.take(MAX_TOPIC_CHARS),
+                "顺着对方最近的状态自然关心一句，不追问细节、不给建议轰炸",
+            )
+        }
         // 方向优先消费：去过重（窗口内说明近期已聊），其余照旧。
         materials.planDirections.firstOrNull { it.isNotBlank() && fingerprintOf(it) !in window }
             ?.let { direction ->

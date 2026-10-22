@@ -25,6 +25,7 @@ import androidx.room.PrimaryKey
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionBaseline
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionJudge
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionLexiconEntry
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionTrendPoint
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -110,6 +111,37 @@ data class EmotionEventEntity(
     /** 证据链 JSON 数组（EmotionJudge.Evidence 口径）。 */
     val evidenceJson: String = "[]",
     val reason: String = "",
+    val createdAt: Long = 0L,
+)
+
+// ───────────────────────── 词库挖掘待审（E-g，方案 §4.7 运营闭环） ─────────────────────────
+
+/** emotion_mining_candidates.status 三档：待审 / 采纳 / 拒绝（拒绝行保留=拒绝记忆）。 */
+const val EMOTION_MINING_PENDING = "pending"
+const val EMOTION_MINING_ADOPTED = "adopted"
+const val EMOTION_MINING_REJECTED = "rejected"
+
+/**
+ * AI 挖词候选（方案 §4.7 词库运营闭环）：模型**只能提案**——挖出的词永远先进
+ * 本表待审，主人在词库管理页点采纳才入 emotion_lexicon（source=ai_mined、
+ * weight 初始 0.8）；拒绝的行以 [EMOTION_MINING_REJECTED] 保留，供同类建议
+ * 不再提（拒绝记忆）。term 全局唯一去重。
+ */
+@Entity(
+    tableName = "emotion_mining_candidates",
+    indices = [Index(value = ["term"], unique = true)],
+)
+data class EmotionMiningCandidateEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val term: String,
+    /** 建议标签 JSON 数组（EmotionLabels 口径）。 */
+    val labelsJson: String = "[]",
+    /** 挖掘理由（给主人审核看）。 */
+    val reason: String = "",
+    /** 来源联系人（人群差异线索）；null = 全局候选。 */
+    val contactId: Long? = null,
+    /** EMOTION_MINING_*。 */
+    val status: String = EMOTION_MINING_PENDING,
     val createdAt: Long = 0L,
 )
 
@@ -246,4 +278,12 @@ fun EmotionJudge.EmotionVerdict.toEventEntity(
     evidenceJson = encodeEmotionEvidence(evidence),
     reason = reason,
     createdAt = createdAt,
+)
+
+/** 台账行 → 情绪轨迹点（E-g 趋势计算输入，[EmotionTrendCalculator] 纯函数消费）。 */
+fun EmotionEventEntity.toTrendPoint(): EmotionTrendPoint = EmotionTrendPoint(
+    createdAtMs = createdAt,
+    labels = decodeEmotionLabelScores(labelsJson),
+    intensity = intensity,
+    state = state,
 )

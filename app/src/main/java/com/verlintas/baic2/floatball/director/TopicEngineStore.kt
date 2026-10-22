@@ -30,6 +30,7 @@ import com.verlintas.baic2.floatball.advisor.SelfFacets
 import com.verlintas.baic2.floatball.advisor.StrategyBrief
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.PersonalMaterialEntity
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionAssessor
 import com.verlintas.baic2.floatball.contact.ContactRef
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -53,6 +54,7 @@ class TopicEngineStore @Inject constructor(
     private val goals: GoalRepository,
     private val strategyBrief: StrategyBrief,
     private val memoryRepository: MemoryRepository,
+    private val emotionAssessor: EmotionAssessor,
 ) {
 
     @Volatile
@@ -172,6 +174,11 @@ class TopicEngineStore @Inject constructor(
                 nowMs = nowMs,
                 planDirections = planDirections,
                 filter = filter,
+                // E-g §4.7：情绪跟进话题（低落登记到期的"最近好点没"），
+                // emotion_events 即登记；无到期/无数据为 null，不影响其余源。
+                emotionFollowUp = runCatching {
+                    emotionAssessor.trend(contact.contactId, nowMs)?.followUpTopic
+                }.getOrNull(),
             ),
         )
         markMaterialUsed(pick, nowMs)

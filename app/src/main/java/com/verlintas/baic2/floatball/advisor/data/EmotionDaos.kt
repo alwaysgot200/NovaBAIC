@@ -73,8 +73,43 @@ interface EmotionEventDao {
     @Query("DELETE FROM emotion_events WHERE createdAt < :beforeMs")
     suspend fun deleteOlderThan(beforeMs: Long)
 
+    /** 某时刻起的事件（时间升序）：E-g 情绪轨迹曲线的取数口径。 */
+    @Query(
+        "SELECT * FROM emotion_events WHERE contactId = :contactId AND createdAt >= :sinceMs " +
+            "ORDER BY createdAt ASC",
+    )
+    suspend fun sinceFor(contactId: Long, sinceMs: Long): List<EmotionEventEntity>
+
     @Query("SELECT COUNT(*) FROM emotion_events WHERE contactId = :contactId")
     suspend fun countFor(contactId: Long): Int
+}
+
+/** 词库挖掘待审（E-g）：模型只提案，采纳/拒绝由主人驱动，拒绝行保留供去重。 */
+@Dao
+interface EmotionMiningDao {
+    /** IGNORE 语义保已提候选：同 term 冲突即跳过。 */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAll(rows: List<EmotionMiningCandidateEntity>)
+
+    @Query("SELECT * FROM emotion_mining_candidates WHERE status = 'pending' ORDER BY createdAt DESC")
+    suspend fun pending(): List<EmotionMiningCandidateEntity>
+
+    @Query("SELECT * FROM emotion_mining_candidates WHERE term = :term LIMIT 1")
+    suspend fun find(term: String): EmotionMiningCandidateEntity?
+
+    @Query("SELECT * FROM emotion_mining_candidates WHERE id = :id")
+    suspend fun get(id: Long): EmotionMiningCandidateEntity?
+
+    /** 全局最近一次挖词时间（全局节流依据；空表 → null）。 */
+    @Query("SELECT MAX(createdAt) FROM emotion_mining_candidates")
+    suspend fun latestCreatedAt(): Long?
+
+    /** 某联系人最近一次挖词时间（每联系人每周 ≤1 次的节流依据）。 */
+    @Query("SELECT MAX(createdAt) FROM emotion_mining_candidates WHERE contactId IS :contactId")
+    suspend fun latestFor(contactId: Long?): Long?
+
+    @Update
+    suspend fun update(row: EmotionMiningCandidateEntity)
 }
 
 /** 联系人滚动基线：一联系人一行，滚动重算后 upsert。 */

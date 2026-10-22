@@ -51,6 +51,8 @@ import com.verlintas.baic2.floatball.advisor.StrategyBrief
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionAssessor
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionCueExtractor
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionJudge
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionLexiconMiner
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionMessageSample
 import com.verlintas.baic2.floatball.advisor.data.EMOTION_REASON_VETO
 import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
 import com.verlintas.baic2.floatball.advisor.data.GOAL_ACTIVE
@@ -182,6 +184,7 @@ class ScreenAdvisor @Inject constructor(
     private val strategist: Strategist,
     private val escalationNotifier: EscalationNotifier,
     private val emotionAssessor: EmotionAssessor,
+    private val lexiconMiner: EmotionLexiconMiner,
 ) {
 
     /** 面板渲染所需的一切：会话消息 + 正在流式的回答 + 阶段状态。 */
@@ -2379,6 +2382,9 @@ class ScreenAdvisor @Inject constructor(
                                     runCatching { maybeRefreshDigest(conversationId, contact) }
                                     if (contact != null) {
                                         runCatching { maybeExtractPersona(conversationId, contact) }
+                                        // E-g 慢车道（方案 §4.7）：跨会话基线滚动重算 +
+                                        // 词库挖词（各带节流，失败静默不阻断回合）。
+                                        runCatching { maybeEmotionSlowLane(conversationId, contact) }
                                         // P2 Judge 规则层：本回合 retreat 命中 → 上一回合
                                         // pending 任务令直接 regressed（LLM 层在下回合 T1）。
                                         strategySnapshot?.let { snap ->
@@ -2571,6 +2577,35 @@ class ScreenAdvisor @Inject constructor(
             turns = turns,
             everyTurns = settings.extractEveryTurns,
         )
+    }
+
+    /**
+     * 情感分析师慢车道（E-g，方案 §4.7 挂档案官）：回合后异步沉淀两件事——
+     * ①跨会话基线全量滚动重算（[EmotionAssessor.maybeRecalcBaseline] 自带每日
+     * 节流，样本跨该联系人最近几个参谋会话收集）；②词库挖词
+     * （[EmotionLexiconMiner] 只产待审候选，每联系人每周 ≤1 次 + 全局节流，
+     * 模型只能提案、人审才入库）。语料只在本地消费，不出端；任何失败静默，
+     * 绝不阻断参谋回合。
+     */
+    private suspend fun maybeEmotionSlowLane(conversationId: Long, contact: ContactRef) {
+        val conversationIds = runCatching { contactDirectory.conversationIds(contact.contactId) }
+            .getOrDefault(emptyList())
+            .ifEmpty { listOf(conversationId) }
+        val samples = conversationIds
+            .take(EMOTION_SLOW_CONVERSATIONS)
+            .flatMap { id ->
+                runCatching { historyGateway.recentMessages(id, EMOTION_SLOW_MESSAGES) }
+                    .getOrDefault(emptyList())
+            }
+            .filter { it.role == ChatRole.USER }
+            .mapNotNull { message ->
+                IncomingCue.latestIncoming(stripScreenLabel(message.content))
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { EmotionMessageSample(text = it, timestampMs = message.createdAt) }
+            }
+            .sortedBy { it.timestampMs }
+        emotionAssessor.maybeRecalcBaseline(contact.contactId, samples)
+        lexiconMiner.maybeMine(contact.contactId, samples.map { it.text })
     }
 
     /**
@@ -3491,6 +3526,14 @@ class ScreenAdvisor @Inject constructor(
          * 都从这段窗口取，60 条足够喂满 STREAK_MIN=3 与基线最小样本量。
          */
         const val EMOTION_HISTORY_MESSAGES = 60
+
+        /**
+         * E-g 慢车道（方案 §4.7）：跨会话基线滚动重算与挖词语料的取样预算——
+         * 最近 [EMOTION_SLOW_CONVERSATIONS] 个参谋会话 × 每会话
+         * [EMOTION_SLOW_MESSAGES] 条消息，够 30 天基线窗口又不撑爆内存。
+         */
+        const val EMOTION_SLOW_CONVERSATIONS = 4
+        const val EMOTION_SLOW_MESSAGES = 60
 
         /** 保温选题共享会话回看的用户消息条数（与专属会话台账口径一致）。 */
         const val SHARED_USED_MESSAGES = 60

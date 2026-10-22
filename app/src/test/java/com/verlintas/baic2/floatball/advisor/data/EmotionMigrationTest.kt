@@ -19,6 +19,7 @@
 
 package com.verlintas.baic2.floatball.advisor.data
 
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionBaseline
 import java.lang.reflect.Proxy
@@ -34,7 +35,7 @@ import org.junit.Test
  */
 class EmotionMigrationTest {
 
-    private fun recordMigration(): List<String> {
+    private fun recordMigration(migration: Migration = MIGRATION_13_14): List<String> {
         val recorded = mutableListOf<String>()
         val db = Proxy.newProxyInstance(
             SupportSQLiteDatabase::class.java.classLoader,
@@ -51,7 +52,7 @@ class EmotionMigrationTest {
                 else -> null
             }
         } as SupportSQLiteDatabase
-        MIGRATION_13_14.migrate(db)
+        migration.migrate(db)
         return recorded
     }
 
@@ -129,6 +130,42 @@ class EmotionMigrationTest {
     @Test
     fun migrate_allStatementsAreIdempotent() {
         val sql = recordMigration()
+        assertTrue(sql.isNotEmpty())
+        sql.forEach { stmt ->
+            assertTrue("non-idempotent statement: $stmt", stmt.contains("IF NOT EXISTS"))
+        }
+    }
+
+    // ── v14 → v15：AI 挖词候选表（E-g） ─────────────────────────────────
+
+    @Test
+    fun migrate_declaresVersionSpan14To15() {
+        assertEquals(14, MIGRATION_14_15.startVersion)
+        assertEquals(15, MIGRATION_14_15.endVersion)
+    }
+
+    @Test
+    fun migrate_createsMiningTableWithColumnsAndUniqueIndex() {
+        val sql = recordMigration(MIGRATION_14_15)
+        val table = sql.single { it.contains("CREATE TABLE IF NOT EXISTS `emotion_mining_candidates`") }
+        listOf(
+            "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL",
+            "`term` TEXT NOT NULL",
+            "`labelsJson` TEXT NOT NULL",
+            "`reason` TEXT NOT NULL",
+            "`contactId` INTEGER",
+            "`status` TEXT NOT NULL",
+            "`createdAt` INTEGER NOT NULL",
+        ).forEach { col -> assertTrue("missing column: $col", table.contains(col)) }
+
+        val unique = sql.single { it.contains("CREATE UNIQUE INDEX") && it.contains("emotion_mining_candidates") }
+        assertTrue(unique.contains("`index_emotion_mining_candidates_term`"))
+        assertTrue(unique.contains("(`term`)"))
+    }
+
+    @Test
+    fun migrate_14To15_allStatementsAreIdempotent() {
+        val sql = recordMigration(MIGRATION_14_15)
         assertTrue(sql.isNotEmpty())
         sql.forEach { stmt ->
             assertTrue("non-idempotent statement: $stmt", stmt.contains("IF NOT EXISTS"))
