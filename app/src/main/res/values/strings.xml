@@ -298,10 +298,6 @@
     <string name="float_im_qq">QQ</string>
     <string name="float_im_taobao">淘宝</string>
     <string name="float_im_idlefish">闲鱼</string>
-    <!-- 详情页两分区：「关联会话」= 跳对方 IM；「参谋会话」= 本系统老参谋对话 -->
-    <string name="float_profile_open_im">关联会话</string>
-    <string name="float_profile_open_im_hint">打开聊天 App，进入与 %1$s 的对话</string>
-    <string name="float_profile_advisor_sessions">参谋会话</string>
     <!-- IM 直达导航（ImChatNavigator）：结果 Toast 文案 -->
     <string name="float_im_nav_ok">已进入与 %1$s 的对话</string>
     <string name="float_im_nav_a11y_off">无障碍服务未开启，无法自动进入对话：已为你打开聊天 App，请手动点击「%1$s」。开启方法：设置 → 无障碍 → BetterAIChat2</string>
@@ -373,8 +369,7 @@
     <string name="float_profile_bound_current">当前参谋会话已绑定此人</string>
     <string name="float_profile_bind">绑定</string>
     <string name="float_profile_conversations">关联会话</string>
-    <!-- V-B（v10 §2.3/§3）：画像页（目标 Tab）「该联系人的会话列表」区块 -->
-    <string name="float_conversations_title">该联系人的会话</string>
+    <!-- V-B（v10 §2.3/§3）：画像页「参谋会话」Tab（2026-10-22 由目标 Tab 区块升格） -->
     <string name="float_conversations_empty">尚无关联会话，在聊天界面发起一次屏幕参谋后自动建立。</string>
     <string name="float_conversations_new">＋ 新开会话（关联此人）</string>
     <string name="float_conversations_untitled">未命名会话</string>
@@ -556,8 +551,16 @@
     <string name="float_l1_complete_mark">标记完成</string>
     <string name="float_l1_complete_not_yet">还没</string>
 
-    <!-- 画像页：画像/目标 Tab -->
+    <!-- 画像页 Tab（§1.5 术语铁律，2026-10-22 重构：参谋会话/聊天会话升平级 Tab） -->
     <string name="float_goal_tab_profile">画像</string>
+    <string name="float_tab_advisor_sessions">参谋会话</string>
+    <string name="float_tab_chat_channels">聊天会话</string>
+    <string name="float_sessions_search_hint">搜索参谋会话</string>
+    <string name="float_sessions_link_existing">关联已有会话</string>
+    <string name="float_channels_search_hint">搜索聊天会话</string>
+    <string name="float_channels_open">打开</string>
+    <string name="float_channels_add">＋ 新增聊天会话</string>
+    <string name="float_channels_add_name_hint">聊天对象名称（在该 APP 内的显示名）</string>
     <string name="float_goal_tab_goals">目标</string>
     <string name="float_goal_global_quick">我的理想自我 · 默认策略</string>
     <string name="float_goal_global_quick_hint">默认策略卡与聊天策略模式在「设置 → 我的聊天策略」里管理</string>

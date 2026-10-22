@@ -90,7 +90,6 @@ import com.verlintas.baic2.floatball.advisor.StyleCardRepository
 import com.verlintas.baic2.floatball.advisor.StyleResolver
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_GROUP
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_PERSON
-import com.verlintas.baic2.floatball.advisor.data.ChatChannelEntity
 import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.data.GroupMemberEntity
 import com.verlintas.baic2.floatball.advisor.data.MY_PERSONA_CONTACT_ID
@@ -619,6 +618,8 @@ private fun MergeUndoBar(record: MergeRecordEntity, onUndo: () -> Unit) {
 
 private const val TAB_INDEX_PROFILE = 0
 private const val TAB_INDEX_GOALS = 1
+private const val TAB_INDEX_SESSIONS = 2
+private const val TAB_INDEX_CHATS = 3
 
 @Composable
 private fun ContactDetailScreen(
@@ -640,15 +641,12 @@ private fun ContactDetailScreen(
     var editing by remember { mutableStateOf<PersonaFieldDef?>(null) }
     var mergeOpen by remember { mutableStateOf(false) }
     var boundTitles by remember { mutableStateOf<List<Pair<Long, String>>>(emptyList()) }
-    // 聊天会话行（§1.5：一人可关联多个 APP 的聊天对象，不存内容只存归属）。
-    var channels by remember { mutableStateOf<List<ChatChannelEntity>>(emptyList()) }
 
     suspend fun refreshBindings() {
         boundTitles = contacts.conversationIdsFor(contactId).mapNotNull { id ->
             val title = conversationRepo.get(id)?.title ?: return@mapNotNull null
             id to title
         }
-        channels = contacts.channelsOf(contactId)
     }
     LaunchedEffect(contactId) { refreshBindings() }
 
@@ -674,10 +672,37 @@ private fun ContactDetailScreen(
                     onClick = { tab = TAB_INDEX_GOALS },
                     text = { Text(stringResource(R.string.float_goal_tab_goals)) },
                 )
+                // 参谋会话/聊天会话（§1.5 术语铁律）：2026-10-22 从画像 tab
+                // 内嵌区块升为平级 Tab，各自带搜索框。
+                Tab(
+                    selected = tab == TAB_INDEX_SESSIONS,
+                    onClick = { tab = TAB_INDEX_SESSIONS },
+                    text = { Text(stringResource(R.string.float_tab_advisor_sessions)) },
+                )
+                Tab(
+                    selected = tab == TAB_INDEX_CHATS,
+                    onClick = { tab = TAB_INDEX_CHATS },
+                    text = { Text(stringResource(R.string.float_tab_chat_channels)) },
+                )
             }
         },
     ) { tabScroll ->
         if (tab == TAB_INDEX_GOALS) {
+            // 目标一句话（2026-10-22 从画像表单挪来：语义归属目标 Tab）。
+            val cur = current
+            if (cur != null) {
+                var goal by remember(cur.id, cur.goal) { mutableStateOf(cur.goal.orEmpty()) }
+                LabeledField(stringResource(R.string.float_profile_goal), goal, { goal = it }, minLines = 2)
+                Button(
+                    onClick = {
+                        scope.launch {
+                            contacts.updateGoal(contactId, goal)
+                            toast(context, R.string.float_profile_saved)
+                        }
+                    },
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                ) { Text(stringResource(R.string.float_profile_save)) }
+            }
             // P2 目标 Tab：L3/L2/L1 目标、阶段、任务令台账与策略卡入口。
             GoalsTab(
                 contactId = contactId,
@@ -693,7 +718,6 @@ private fun ContactDetailScreen(
                 policies = activity.proactivePolicies,
                 materials = activity.materialLibrary,
                 director = activity.director,
-                conversations = activity.conversationRepository,
                 scroll = tabScroll,
                 onOpenStrategyCard = {
                     context.startActivity(
@@ -709,6 +733,13 @@ private fun ContactDetailScreen(
                     )
                 },
             )
+        } else if (tab == TAB_INDEX_SESSIONS) {
+            // 参谋会话 Tab（§1.5）：搜索 + 深链打开 + 新建/关联已有（原画像
+            // tab 内嵌区块与 GoalTab 会话卡合并升格）。
+            AdvisorSessionsTab(contactId = contactId, scroll = tabScroll)
+        } else if (tab == TAB_INDEX_CHATS) {
+            // 聊天会话 Tab（§1.5）：搜索 + ImChatNavigator 直达 + 新增。
+            ChatChannelsTab(contactId = contactId, scroll = tabScroll)
         } else if (current == null) {
             Text(stringResource(R.string.float_profile_gone))
         } else {
@@ -723,13 +754,10 @@ private fun ContactDetailScreen(
 
             var name by remember(current.id, current.displayName) { mutableStateOf(current.displayName) }
             LabeledField(stringResource(R.string.float_profile_name), name, { name = it })
-            var goal by remember(current.id, current.goal) { mutableStateOf(current.goal.orEmpty()) }
-            LabeledField(stringResource(R.string.float_profile_goal), goal, { goal = it }, minLines = 2)
             StyleEntryCard(contactId = contactId)
             Button(onClick = {
                 scope.launch {
                     contacts.renameContact(contactId, name)
-                    contacts.updateGoal(contactId, goal)
                     toast(context, R.string.float_profile_saved)
                 }
             }) { Text(stringResource(R.string.float_profile_save)) }
@@ -767,62 +795,8 @@ private fun ContactDetailScreen(
                 }
             }
 
-            // 聊天会话（§1.5 术语铁律）：不存 IM 聊天内容，只记录「哪个 APP 的
-            // 哪个聊天对象」；一人多 APP 各一行，点击由 ImChatNavigator 直达
-            // 该 APP 的该聊天页（RPA 打开的正确目标）。a11y 未开/中途失败 →
-            // Toast 报原因并指引手动操作（§4.5 铁律：硬前置必须显式提示，
-            // 绝不静默只开 App）。
-            SectionTitle(stringResource(R.string.float_profile_open_im))
-            if (channels.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.float_bind_channels_empty),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            val imNavigator = activity.imNavigator
-            channels.forEach { channel ->
-                val appLabelRes = FloatUi.IM_APPS.firstOrNull { it.first == channel.imPackage }?.second
-                TextButton(onClick = {
-                    scope.launch {
-                        val result = imNavigator.openChat(channel.imPackage, channel.displayName)
-                        imNavigator.toastResult(result, channel.displayName)
-                    }
-                }) {
-                    Text(
-                        text = "· " + (appLabelRes?.let { stringResource(it) } ?: channel.imPackage) +
-                            "：" + channel.displayName,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-
-            // 参谋会话（本系统中与该联系人关联的老参谋对话）+ 按人搜索
-            SectionTitle(stringResource(R.string.float_profile_advisor_sessions))
-            boundTitles.forEach { (conversationId, title) ->
-                    Text(
-                        text = "· $title",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                // 直达主 App 会话（extra 口径 mirror RunService）。
-                                // MainActivity=singleTop 且 task 顶通常是本画像页：必须
-                                // CLEAR_TOP 把覆盖层清掉让 MainActivity 回栈顶，否则系统
-                                // START_DELIVERED_TO_TOP 只投 Intent 不切界面（表现为
-                                // "点了没反应"，2026-10-21 真机实测）。
-                                context.startActivity(
-                                    android.content.Intent(context, com.verlintas.baic2.MainActivity::class.java)
-                                        .putExtra("open_conversation_id", conversationId)
-                                        .addFlags(
-                                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                                                android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                                android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP,
-                                        ),
-                                )
-                            },
-                    )
-                }
+            // 聊天会话/参谋会话已升为平级 Tab（§1.5，2026-10-22 重构），
+            // 原内嵌区块删除——入口见 TabRow「聊天会话」「参谋会话」。
             PersonHistorySearch(contactId)
 
             // 画像字段（schema 驱动分组）；P3：群实体字段按 contactType 显隐。
@@ -1738,7 +1712,7 @@ private fun LabeledField(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FlowChips(
+internal fun FlowChips(
     options: List<Pair<String, Int?>>,
     selected: String,
     onSelect: (String) -> Unit,
@@ -1758,14 +1732,14 @@ private fun FlowChips(
 
 /** LocalContext 可能是 Dialog/主题包装，沿 ContextWrapper 链找回宿主 Activity。 */
 @Composable
-private fun advisorActivity(): AdvisorProfileActivity =
+internal fun advisorActivity(): AdvisorProfileActivity =
     generateSequence<android.content.Context>(LocalContext.current) {
         (it as? android.content.ContextWrapper)?.baseContext
     }.filterIsInstance<AdvisorProfileActivity>().firstOrNull()
         ?: error("AdvisorProfileActivity context expected")
 
 @Composable
-private fun rememberContactRepository(): ContactRepository = advisorActivity().contacts
+internal fun rememberContactRepository(): ContactRepository = advisorActivity().contacts
 
 @Composable
 private fun rememberPersonaSchemas(): PersonaSchemas = advisorActivity().schemas
@@ -1777,7 +1751,7 @@ private fun rememberProfileSync(): ProfileMemorySync = advisorActivity().profile
 private fun rememberHistoryGateway(): ContactHistoryGateway = advisorActivity().historyGateway
 
 @Composable
-private fun rememberConversationRepository(): ConversationRepository =
+internal fun rememberConversationRepository(): ConversationRepository =
     advisorActivity().conversationRepository
 
 /** 「说话风格」入口卡：contactId=0 显示全局卡摘要；>0 显示联系人卡，缺卡时显示跟随默认。 */

@@ -59,7 +59,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.verlintas.baic2.R
-import com.verlintas.baic2.core.data.repository.ConversationRepository
 import com.verlintas.baic2.floatball.advisor.ContactRepository
 import com.verlintas.baic2.floatball.advisor.GoalOpResult
 import com.verlintas.baic2.floatball.advisor.GoalRepository
@@ -152,7 +151,6 @@ internal fun GoalsTab(
     policies: com.verlintas.baic2.floatball.director.ProactivePolicyRepository,
     materials: com.verlintas.baic2.floatball.director.PersonalMaterialRepository,
     director: com.verlintas.baic2.floatball.director.Director,
-    conversations: ConversationRepository,
     scroll: androidx.compose.foundation.ScrollState?,
     onOpenStrategyCard: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -239,14 +237,8 @@ internal fun GoalsTab(
     // 区块实现独立成 AdvisorPersonaCard.kt，本文件只挂载（追加式，不动既有行）。
     AdvisorPersonaCard(contactId = contactId, profile = profile, contacts = contacts)
 
-    // ①.3 该联系人的会话列表（V-B，UltraAdvisor v2.2 方案 §2.3/§3）：绑定会话
-    // 回看 + 主应用深链打开 + 手动新开会话（关联同档案）。区块独立成
-    // AdvisorConversationsCard.kt，本文件只挂载（追加式，不动既有行）。
-    AdvisorConversationsCard(
-        contactId = contactId,
-        contacts = contacts,
-        conversations = conversations,
-    )
+    // ①.3 该联系人的会话列表已升为画像页平级「参谋会话」Tab（§1.5，
+    // 2026-10-22 重构）：搜索 + 深链 + 新建/关联，见 AdvisorSessionsTab.kt。
 
     // ①.5 行动建议横幅（F7 action_hint 消费面）：Director 台账旁路信号命中时
     // 提示阶段驻留较久、引导到下方行动建议卡；点击按「同帧根坐标差」滚动定位
