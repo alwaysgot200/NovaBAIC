@@ -95,6 +95,9 @@ class FloatBallService : Service() {
     lateinit var screenAdvisor: ScreenAdvisor
 
     @Inject
+    lateinit var screenCapture: com.verlintas.baic2.floatball.auto.ScreenCapture
+
+    @Inject
     lateinit var diffEngine: FrameDiffEngine
 
     @Inject
@@ -159,9 +162,6 @@ class FloatBallService : Service() {
     /** 输入行手动发送的回合（区别于长按单次 askJob / 连续模式 diffEngine）。 */
     private var manualJob: Job? = null
     private var consentPending = false
-
-    /** 同意授权后的去向：单次重跑 or 进入录制。 */
-    private var pendingConsentAction: ((Int, android.content.Intent?) -> Unit)? = null
     private var completionCount = 0
 
     private val screenOffReceiver = object : BroadcastReceiver() {
@@ -663,13 +663,11 @@ class FloatBallService : Service() {
         // startOneShot 摘过，此处幂等兜底）。
         if (preheated == null) detachSplitWindow()
         askJob = scope.launch {
-            var awaitingConsent = false
             try {
                 screenAdvisor.adviseOnce(preheated, awaitProjection).collect { event ->
                     when (event) {
                         ScreenAdvisor.Event.NeedsConsent -> {
-                            awaitingConsent = true
-                            requestProjectionConsent { granted ->
+                            requestMpConsent { granted ->
                                 // 拒绝授权也要给出反馈，不能静默吞掉（用户会以为单击失效）。
                                 if (granted) {
                                     runOneShot(null, CONSENT_SETTLE_MS, awaitProjection = true)
@@ -698,12 +696,8 @@ class FloatBallService : Service() {
                 ensureSplit()
             } finally {
                 finishOneShot()
-                // 拍完即关的兜底：a11y 文本/无障碍截图路径不经过投影释放，
-                // 授权即亮的指示灯会一直挂在状态栏；无投影时为幂等 no-op。
-                // 等待授权中转时绝不释放：投影服务处于 startForegroundService→
-                // startForeground 窗口期，此刻 stopService 会触发
-                // ForegroundServiceDidNotStartInTimeException 崩溃。
-                if (!awaitingConsent) screenAdvisor.releaseProjection()
+                // 像素帧走 MPManager 常驻投影（方案 2026-10-22）：会话跨次
+                // 复用、状态栏指示灯常驻是既定取舍，不释放。
             }
         }
     }
@@ -744,18 +738,18 @@ class FloatBallService : Service() {
         ball?.setMode(FloatUi.BallMode.RECORDING, this)
         closeSplit(keepBall = true) // 录制开始前撤掉自身分屏
         hideAllOverlays()
-        if (screenAdvisor.isCaptureReady()) {
+        if (screenCapture.projectionAlive) {
             startRecordingLoop()
         } else {
-            requestProjectionConsent { granted ->
+            // 投影授权编排（方案模块 A）：a11y 开自动点弹窗 / Shizuku 静默
+            // 直过 / 手动兜底——经 FloatCaptureActivity 中转发起。
+            requestMpConsent { granted ->
                 if (granted) {
                     mainHandler.postDelayed({
                         // 授权等待期用户可能已双击停止（或服务被重建）：授权
-                        // 晚到时绝不能在非 RECORDING 态拉起差分循环，立即释放投影。
+                        // 晚到时绝不能在非 RECORDING 态拉起差分循环。
                         if (mode == Mode.RECORDING) {
                             startRecordingLoop()
-                        } else {
-                            screenAdvisor.releaseProjection()
                         }
                     }, CONSENT_SETTLE_MS)
                 } else {
@@ -789,7 +783,7 @@ class FloatBallService : Service() {
 
     private fun stopRecording() {
         diffEngine.stop()
-        screenAdvisor.releaseProjection()
+        // MPManager 常驻投影跨会话复用（方案 2026-10-22），停止录制不释放。
         // 陪伴窗口收尾：静默结束——不发「已停止」toast，汇总/续期由控制器通知。
         val wasCompanion = companionWindow
         companionWindow = false
@@ -893,34 +887,33 @@ class FloatBallService : Service() {
 
     // ------------------------------------------------------ consent
 
-    /** MediaProjection 授权必须由 Activity 发起：透明 Activity 中转。 */
-    private fun requestProjectionConsent(onResult: (Boolean) -> Unit) {
+    /**
+     * MPManager 常驻投影授权中转（方案 2026-10-22 模块 A）：MediaProjection
+     * 授权必须由 Activity 发起——FloatCaptureActivity(EXTRA_MP) 内执行
+     * ScreenCapture.ensureProjection 编排（a11y 自动点弹窗 / Shizuku appops
+     * 静默直过 / 手动兜底），布尔结果经 FloatCaptureBridge 回传。
+     */
+    private fun requestMpConsent(onResult: (Boolean) -> Unit) {
         if (consentPending) return
         consentPending = true
-        pendingConsentAction = { resultCode, data ->
+        FloatCaptureBridge.mpConsent = { granted ->
             consentPending = false
             mainHandler.removeCallbacks(consentWatchdog)
-            val granted = resultCode == Activity.RESULT_OK && data != null &&
-                screenAdvisor.onPermissionResult(resultCode, data)
             onResult(granted)
-        }
-        FloatCaptureBridge.consentIntent = screenAdvisor.createPermissionIntent()
-        FloatCaptureBridge.onConsentResult = { resultCode, data ->
-            pendingConsentAction?.invoke(resultCode, data)
-            pendingConsentAction = null
         }
         mainHandler.postDelayed(consentWatchdog, CONSENT_WATCHDOG_MS)
         runCatching {
             startActivity(
-                Intent(this, FloatCaptureActivity::class.java).addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                        Intent.FLAG_ACTIVITY_NO_HISTORY,
-                ),
+                Intent(this, FloatCaptureActivity::class.java)
+                    .putExtra(FloatCaptureActivity.EXTRA_MP, true)
+                    .addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                            Intent.FLAG_ACTIVITY_NO_HISTORY,
+                    ),
             )
         }.onFailure {
             consentPending = false
-            pendingConsentAction = null
             FloatCaptureBridge.clear()
             mainHandler.removeCallbacks(consentWatchdog)
             onResult(false)
@@ -930,7 +923,6 @@ class FloatBallService : Service() {
     private val consentWatchdog = Runnable {
         if (!consentPending) return@Runnable
         consentPending = false
-        pendingConsentAction = null
         FloatCaptureBridge.clear()
         if (mode == Mode.ONESHOT) finishOneShot()
         if (mode == Mode.RECORDING) abortRecording()

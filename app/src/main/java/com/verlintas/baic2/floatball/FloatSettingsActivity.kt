@@ -82,7 +82,7 @@ import com.verlintas.baic2.floatball.advisor.strategy.StrategyRuntime
 import com.verlintas.baic2.floatball.auto.InjectorSelector
 import com.verlintas.baic2.floatball.auto.ReadinessGate
 import com.verlintas.baic2.floatball.auto.ReadinessReport
-import com.ven.assists.mp.MPManager
+import com.verlintas.baic2.floatball.auto.ScreenCapture
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -132,6 +132,10 @@ class FloatSettingsActivity : ComponentActivity() {
     @Inject
     lateinit var shizukuGate: com.verlintas.baic2.floatball.shizuku.ShizukuGate
 
+    /** 投影授权编排（方案 2026-10-22 模块 A：a11y 自动点/Shizuku 静默/手动兜底）。 */
+    @Inject
+    lateinit var screenCapture: ScreenCapture
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -171,6 +175,7 @@ class FloatSettingsActivity : ComponentActivity() {
                     contactRepository = contactRepository,
                     readinessGate = readinessGate,
                     shizukuGate = shizukuGate,
+                    screenCapture = screenCapture,
                     onClose = { finish() },
                 )
             }
@@ -189,6 +194,7 @@ private fun AdvisorSettingsScreen(
     contactRepository: ContactRepository,
     readinessGate: ReadinessGate,
     shizukuGate: com.verlintas.baic2.floatball.shizuku.ShizukuGate,
+    screenCapture: ScreenCapture,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
@@ -433,6 +439,7 @@ private fun AdvisorSettingsScreen(
                     settings = settings,
                     prefs = prefs,
                     readinessGate = readinessGate,
+                    screenCapture = screenCapture,
                 )
                 // 2026-10-20 通报方案：H 接管/G 达成铃声通报 + SMTP 邮件配置。
                 EscalationSection(
@@ -873,6 +880,7 @@ private fun AutoExecutorSection(
     settings: AdvisorPrefs.Settings,
     prefs: AdvisorPrefs,
     readinessGate: ReadinessGate,
+    screenCapture: ScreenCapture,
 ) {
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
@@ -969,7 +977,7 @@ private fun AutoExecutorSection(
                                     when (item.id) {
                                         ReadinessGate.ID_SHIZUKU -> readinessGate.requestShizukuPermission()
                                         ReadinessGate.ID_PROJECTION -> scope.launch {
-                                            runCatching { MPManager.request(autoAllow = false) }
+                                            runCatching { screenCapture.ensureProjection() }
                                         }
                                         ReadinessGate.ID_NOTIFY -> runCatching {
                                             context.startActivity(

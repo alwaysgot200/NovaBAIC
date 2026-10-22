@@ -19,10 +19,11 @@
 
 package com.verlintas.baic2.floatball
 
+import android.graphics.Bitmap
 import android.graphics.Rect
 import com.verlintas.baic2.device.api.AccessibilityBridge
 import com.verlintas.baic2.device.api.OcrProvider
-import com.verlintas.baic2.device.api.ScreenshotProvider
+import com.verlintas.baic2.floatball.auto.ScreenCapture
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -36,25 +37,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 连续参谋的差分引擎：按 [AdvisorPrefs] 的节奏抓投影帧，运动检测 →
- * 静默期稳定后触发 OCR → 与上次内容去重 → 交给 [ScreenAdvisor] 的串行
- * LLM 队列。静止画面零 OCR 零 LLM。
+ * 连续参谋的差分引擎：按 [AdvisorPrefs] 的节奏从常驻投影 acquire 帧
+ * （[ScreenCapture]，方案 2026-10-22 模块 C——毫秒级、无 shell 开销、
+ * 感知全程无 a11y 痕迹），运动检测 → 静默期稳定后触发 OCR → 与上次内容
+ * 去重 → 交给 [ScreenAdvisor] 的串行 LLM 队列。静止画面零 OCR 零 LLM。
  *
  * 回合调度是「帧生产 / LLM 消费」两段：抓帧循环永不因 LLM 忙而停，去重
  * 通过的新帧 trySend 进 CONFLATED 通道——LLM 期间的多次画面变化只保留
  * 最新一帧（合并），上一回合 LLM 一结束，下一帧**立即**送出，形成连续的
  * OCR→LLM→OCR→LLM。
  *
- * 省电：① 静止时投影镜像复用同一字节数组（引用相等即跳 PNG 解码）；
- * ② 连续静止时抓帧间隔自适应倍增（上限读 AdvisorPrefs），一检测到运动
- * 立即恢复最快档。
+ * 省电：① 画面静止时投影 Reader 无新帧（acquire 返回 null），直接复用
+ * 上帧灰度签名；② 连续静止时抓帧间隔自适应倍增（上限读 AdvisorPrefs），
+ * 一检测到运动立即恢复最快档。
  *
  * 自身浮窗（分屏面板/悬浮球）由服务层通过 [maskProvider] 提供已知矩形，
  * OCR 前涂黑——几何掩膜零误判。
  */
 @Singleton
 class FrameDiffEngine @Inject constructor(
-    private val screenshotProvider: ScreenshotProvider,
+    private val screenCapture: ScreenCapture,
     private val ocrProvider: OcrProvider,
     private val accessibility: AccessibilityBridge,
     private val advisor: ScreenAdvisor,
@@ -126,11 +128,11 @@ class FrameDiffEngine @Inject constructor(
         loopJob = engineScope.launch {
             val startedAt = System.currentTimeMillis()
             var baseline: FrameQuality.GrayFrame? = null
+            // 最近一帧有效画面：静止期投影 Reader 无新帧（acquire 返回 null）
+            // 时复用它，等价于「本帧与上帧完全一致」。
+            var lastBitmap: Bitmap? = null
             var candidate: Candidate? = null
             var motionAtMs = 0L
-            // 投影缓存复用检测：屏幕无新帧时上游返回同一个 ByteArray 实例，
-            // 引用相同即像素相同，直接复用上帧签名，跳过整次 PNG 解码。
-            var lastRawBytes: ByteArray? = null
             // 自适应降频：连续静止拍数到阈值后把抓帧间隔倍增到设置上限，
             // 一旦检测到画面运动，下一拍立即恢复最快档。
             var intervalMs = prefs.state.value.pollIntervalMs
@@ -147,18 +149,20 @@ class FrameDiffEngine @Inject constructor(
                     return@launch
                 }
 
-                val bytes = screenshotProvider.capture().getOrNull()
-                if (bytes == null) {
+                // 感知面：常驻投影 acquire（毫秒级）。null = 画面静止（无新帧）
+                // 或会话已停——句柄判活区分，静默死亡必须报因不空转（§4.5.2）。
+                val fresh = screenCapture.acquireProjectionFrame(maxWaitMs = 0)
+                if (fresh == null && !screenCapture.projectionAlive) {
                     onSignal(Signal.Failed("projection_lost"))
                     return@launch
                 }
-                val frame = if (lastRawBytes != null && bytes === lastRawBytes && baseline != null) {
-                    baseline
-                } else {
-                    FrameQuality.grayFrame(bytes)
+                if (fresh != null) lastBitmap = fresh
+                val bitmap = lastBitmap ?: continue // 首帧未到（授权刚过），下一拍再试
+
+                val frame = withContext(Dispatchers.Default) {
+                    FrameQuality.grayBitmap(bitmap)
                 }
-                lastRawBytes = bytes
-                if (frame == null || FrameQuality.isBlank(frame)) continue
+                if (FrameQuality.isBlank(frame)) continue
 
                 val previous = baseline
                 baseline = frame
@@ -189,7 +193,7 @@ class FrameDiffEngine @Inject constructor(
                 if (now - motionAnchor < intervalMs * STABLE_TICKS) continue
                 if (candidate == null) {
                     android.util.Log.d(TAG, "stable, candidate armed (motion=$motion)")
-                    candidate = Candidate(bytes, frame)
+                    candidate = Candidate(bitmap, frame)
                 }
 
                 val current = candidate ?: continue
@@ -207,7 +211,7 @@ class FrameDiffEngine @Inject constructor(
                 // 第 1 层：自身浮窗矩形 + 底部系统带一次位图掩膜；
                 // 第 2 层：OCR 后几何分流（状态栏/标题带）+ 行级正则（§12.2/§12.3）。
                 val text = withContext(Dispatchers.Default) {
-                    recognizeCleanBody(current.bytes, maskProvider())
+                    recognizeCleanBody(current.bitmap, maskProvider())
                 }
                 if (text.isNullOrEmpty()) {
                     // OCR 空结果（纯图页）：推进灰度基线，免得每 tick 重 OCR。
@@ -258,41 +262,40 @@ class FrameDiffEngine @Inject constructor(
     }
 
     /**
-     * 连续帧的三层治理：自身浮窗 + 底部系统带合并成一次位图掩膜，OCR 后按
-     * 包围盒丢掉状态栏行、分流标题带，正文过行级正则库；拿不到几何尺寸时
-     * 退回「只掩浮窗 + 整页文本」的旧行为，保证不错杀。
+     * 连续帧的三层治理：自身浮窗 + 底部系统带合并成一次位图掩膜（在副本上
+     * 涂黑，原帧还要供差分复用），OCR 后按包围盒丢掉状态栏行、分流标题带，
+     * 正文过行级正则库；掩膜失败退回整页文本，保证不错杀。
      */
-    private suspend fun recognizeCleanBody(bytes: ByteArray, overlayRects: List<Rect>): String? {
-        val size = FrameQuality.bitmapSize(bytes)
-        val geometry = size?.let { (width, height) ->
-            val imeOpen = runCatching {
-                accessibility.connected.value && accessibility.editableFocused()
-            }.getOrDefault(false)
-            geometryProvider.compute(width, height, imeOpen)
-        }
+    private suspend fun recognizeCleanBody(bitmap: Bitmap, overlayRects: List<Rect>): String? {
+        val imeOpen = runCatching {
+            accessibility.connected.value && accessibility.editableFocused()
+        }.getOrDefault(false)
+        val geometry = geometryProvider.compute(bitmap.width, bitmap.height, imeOpen)
         val mask = overlayRects.toMutableList()
-        if (geometry != null) {
-            mask += Rect(
-                0,
-                geometry.heightPx - geometry.bottomBandPx,
-                geometry.widthPx,
-                geometry.heightPx,
-            )
-        }
-        val masked = FrameQuality.maskRects(bytes, mask)
+        mask += Rect(
+            0,
+            geometry.heightPx - geometry.bottomBandPx,
+            geometry.widthPx,
+            geometry.heightPx,
+        )
+        val masked = withContext(Dispatchers.Default) { FrameQuality.maskBitmap(bitmap, mask) }
+            ?: return ocrProvider.recognizeText(toJpeg(bitmap)).getOrNull()?.trim()
         val lines = ocrProvider.recognize(masked).getOrNull()
             ?: return ocrProvider.recognizeText(masked).getOrNull()?.trim()
-        if (geometry == null) {
-            return lines.joinToString("\n") { it.text.trim() }.takeIf { it.isNotBlank() }
-        }
         val partition = OcrNoiseFilter.partition(lines, geometry)
         return OcrNoiseFilter.clean(partition.bodyLines, noiseRules.get(), emptyList())
             .joinToString("\n") { it.text.trim() }
             .takeIf { it.isNotBlank() }
     }
 
+    private fun toJpeg(bitmap: Bitmap): ByteArray =
+        java.io.ByteArrayOutputStream().use { sink ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, sink)
+            sink.toByteArray()
+        }
+
     /** 触发时定格的候选帧。 */
-    private class Candidate(val bytes: ByteArray, val gray: FrameQuality.GrayFrame)
+    private class Candidate(val bitmap: Bitmap, val gray: FrameQuality.GrayFrame)
 
     companion object {
         private const val TAG = "FrameDiffEngine"

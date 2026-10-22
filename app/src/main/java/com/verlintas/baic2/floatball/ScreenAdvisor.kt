@@ -40,7 +40,6 @@ import com.verlintas.baic2.core.model.Note
 import com.verlintas.baic2.core.model.NoteKind
 import com.verlintas.baic2.core.model.ProviderConfig
 import com.verlintas.baic2.device.api.OcrProvider
-import com.verlintas.baic2.device.api.ScreenshotProvider
 import com.verlintas.baic2.floatball.ScreenPerceiver.Perception
 import com.verlintas.baic2.floatball.advisor.AdvisorResponder
 import com.verlintas.baic2.floatball.advisor.ChatBriefBuilder
@@ -143,7 +142,6 @@ import kotlinx.coroutines.withTimeout
 @Singleton
 class ScreenAdvisor @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val screenshotProvider: ScreenshotProvider,
     private val ocrProvider: OcrProvider,
     private val conversationRepository: ConversationRepository,
     private val agentRepository: AgentRepository,
@@ -654,20 +652,8 @@ class ScreenAdvisor @Inject constructor(
 
     // ------------------------------------------------------ projection
 
-    fun isCaptureReady(): Boolean = screenshotProvider.ready.value
-
     /** 无障碍服务连接状态（设置页徽章用）。 */
     val a11yConnected: StateFlow<Boolean> get() = perceiver.a11yConnected
-
-    fun createPermissionIntent(): android.content.Intent =
-        screenshotProvider.createPermissionIntent()
-
-    fun onPermissionResult(resultCode: Int, data: android.content.Intent): Boolean =
-        screenshotProvider.onPermissionResult(resultCode, data)
-
-    fun releaseProjection() {
-        runCatching { screenshotProvider.release() }
-    }
 
     // -------------------------------------------------------- direction
 
@@ -801,9 +787,10 @@ class ScreenAdvisor @Inject constructor(
 
     /**
      * 单次参谋。文本感知命中时不需要撤窗（无障碍树只含活动应用窗口）；
-     * 像素路径由服务层事先撤掉自身浮层。投影拍到的帧用完即释放。
-     * [awaitProjection] 供 MediaProjection 授权同意后的重跑：投影服务正在
-     * 异步启动，感知阶梯须等待就绪而非立刻回 NeedsConsent。
+     * 像素路径由服务层事先撤掉自身浮层。像素帧走 [ScreenPerceiver] 的
+     * 免 a11y 阶梯（常驻投影 + screencap 兜底，投影常驻复用不释放）。
+     * [awaitProjection] 供投影授权同意后的重跑：MPService 正在异步启动，
+     * 感知阶梯须等待就绪而非立刻回 NeedsConsent。
      */
     fun adviseOnce(
         preheated: String?,
@@ -813,7 +800,6 @@ class ScreenAdvisor @Inject constructor(
         // 成功则直接进入回合；返回 null 静默回退现行单屏感知阶梯。
         val stitched = tryMultiScreenStitch(preheated)
         if (stitched != null) {
-            if (stitched.viaProjection) releaseProjection()
             _transcript.updateStatus(Status.OcrRunning)
             emitScreenTurn(stitched.text)
             return@flow
@@ -822,7 +808,6 @@ class ScreenAdvisor @Inject constructor(
             is Perception.Text -> emitScreenTurn(perception.text)
 
             is Perception.Image -> {
-                if (perception.viaProjection) releaseProjection()
                 _transcript.updateStatus(Status.OcrRunning)
                 val recognized = recognizeCleanBody(perception.bytes)
                 if (recognized?.body.isNullOrEmpty()) {

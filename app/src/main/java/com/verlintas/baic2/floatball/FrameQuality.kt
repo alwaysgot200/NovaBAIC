@@ -81,6 +81,37 @@ internal object FrameQuality {
         return GrayFrame(pixels, blocks)
     }
 
+    /**
+     * Bitmap 版灰度帧（常驻投影 acquire 路径专用，方案 2026-10-22 模块 B/C）：
+     * 跳过 PNG 编解码往返直接降采样，与 [grayFrame] 同口径。
+     * 调用方须在 Dispatchers.Default 上。
+     */
+    fun grayBitmap(bitmap: Bitmap): GrayFrame {
+        val small = Bitmap.createScaledBitmap(bitmap, SAMPLE, SAMPLE, true)
+        val pixels = FloatArray(SAMPLE * SAMPLE)
+        val buffer = IntArray(SAMPLE * SAMPLE)
+        small.getPixels(buffer, 0, SAMPLE, 0, 0, SAMPLE, SAMPLE)
+        for (i in buffer.indices) {
+            val c = buffer[i]
+            pixels[i] = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000f
+        }
+        small.recycle()
+        val blocks = FloatArray(BLOCKS * BLOCKS)
+        val perBlock = SAMPLE / BLOCKS
+        for (by in 0 until BLOCKS) {
+            for (bx in 0 until BLOCKS) {
+                var sum = 0f
+                for (y in by * perBlock until (by + 1) * perBlock) {
+                    for (x in bx * perBlock until (by + 1) * perBlock) {
+                        sum += pixels[y * SAMPLE + x]
+                    }
+                }
+                blocks[by * BLOCKS + bx] = sum / (perBlock * perBlock)
+            }
+        }
+        return GrayFrame(pixels, blocks)
+    }
+
     /** 8×8 分块平均亮度差的归一化值（0=完全一致，1=最大差异）。 */
     fun blockDiff(a: FloatArray, b: FloatArray): Float {
         var total = 0f
@@ -126,6 +157,28 @@ internal object FrameQuality {
         } else {
             bitmap.recycle()
             bytes
+        }
+    }
+
+    /**
+     * Bitmap 版矩形掩膜（投影帧路径）：不改动原帧（调用方还会复用差分），
+     * 在副本上涂黑后输出 JPEG 字节供 OCR；失败返回 null。
+     * 调用方须在 Dispatchers.Default 上。
+     */
+    fun maskBitmap(bitmap: Bitmap, rects: List<Rect>): ByteArray? {
+        if (rects.isEmpty()) return null
+        val copy = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        Canvas(copy).apply {
+            val paint = android.graphics.Paint().apply { color = Color.BLACK }
+            rects.forEach { drawRect(it, paint) }
+        }
+        val out = ByteArrayOutputStream()
+        return if (copy.compress(Bitmap.CompressFormat.JPEG, 90, out)) {
+            copy.recycle()
+            out.toByteArray()
+        } else {
+            copy.recycle()
+            null
         }
     }
 

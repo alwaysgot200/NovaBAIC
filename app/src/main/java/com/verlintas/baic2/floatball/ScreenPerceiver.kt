@@ -20,7 +20,7 @@
 package com.verlintas.baic2.floatball
 
 import com.verlintas.baic2.device.api.AccessibilityBridge
-import com.verlintas.baic2.device.api.ScreenshotProvider
+import com.verlintas.baic2.floatball.auto.ScreenCapture
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -28,23 +28,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * 四级感知阶梯：a11y 文本 → a11y 截图（API 30+，无对话框）→
- * MediaProjection（需授权）。每级先于下一级；文本路径命中时零截屏、
- * 零闪烁、毫秒级。Shizuku `screencap` 备用级暂缓（exec 只回文本，
- * 二进制需走文件中转，待上游 shell 桥支持字节输出后接入）。
+ * 三级感知阶梯：a11y 文本 → a11y 截图（API 30+，无对话框）→ 像素帧
+ * （[ScreenCapture] 免 a11y 阶梯：常驻投影 acquire 主源 + Shizuku
+ * screencap 兜底，docs/2026-10-22 方案模块 C）。文本路径命中时零截屏、
+ * 零闪烁、毫秒级；像素路径全程无 a11y 痕迹（反侦察感知面）。
  */
 @Singleton
 class ScreenPerceiver @Inject constructor(
     private val accessibility: AccessibilityBridge,
-    private val screenshotProvider: ScreenshotProvider,
+    private val screenCapture: ScreenCapture,
 ) {
 
     sealed interface Perception {
         /** 无障碍树文本足够丰富，直接作为问题内容。 */
         data class Text(val text: String) : Perception
 
-        /** 像素帧（已过质检），交给 OCR。[viaProjection] 标记来源（投影帧用完即释放）。 */
-        data class Image(val bytes: ByteArray, val viaProjection: Boolean) : Perception
+        /** 像素帧（已过空白质检），交给 OCR。 */
+        data class Image(val bytes: ByteArray) : Perception
 
         /** 投影未授权：需要用户确认（服务层走 FloatCaptureActivity）。 */
         data object NeedsProjection : Perception
@@ -83,8 +83,8 @@ class ScreenPerceiver @Inject constructor(
 
     /**
      * 单次参谋的感知入口。[preheatedText] 为预热结果，命中即省去二次遍历。
-     * [awaitProjection] 供授权后重跑：投影服务正在异步启动，跳过就绪快检
-     * 直接采集（capture 自带就绪等待），避免把启动窗口误判为 NeedsProjection。
+     * [awaitProjection] 供授权后重跑：MPService 正在异步启动，跳过存活快检
+     * 等待就绪，避免把启动窗口误判为 NeedsProjection。
      */
     suspend fun quickPerceive(
         preheatedText: String? = null,
@@ -109,7 +109,7 @@ class ScreenPerceiver @Inject constructor(
             if (bytes != null) {
                 val gray = withContext(Dispatchers.Default) { FrameQuality.grayFrame(bytes) }
                 if (gray != null && !FrameQuality.isBlank(gray)) {
-                    return Perception.Image(bytes, viaProjection = false)
+                    return Perception.Image(bytes)
                 }
                 android.util.Log.w(TAG, "a11y screenshot blank (attempt=$attempt)")
                 // 疑似黑/白过渡帧：等一拍重采一次。
@@ -125,24 +125,33 @@ class ScreenPerceiver @Inject constructor(
         return null
     }
 
-    /** 阶梯④：MediaProjection（调用方保证已授权或已走完授权流程）。 */
+    /**
+     * 阶梯③：像素帧（ScreenCapture 免 a11y 阶梯——常驻投影 acquire 主源 +
+     * screencap 兜底 + 空白质检）。投影会话未建立且 screencap 也不可用时
+     * 返回 [Perception.NeedsProjection]（服务层走授权编排后重跑）。
+     */
     suspend fun projectionPerception(awaitReady: Boolean = false): Perception {
-        // awaitReady：授权刚通过的瞬间投影服务尚在 startForegroundService 的
-        // 异步启动窗口内，就绪快检必为 false；直接进 capture（内部等待就绪）。
-        if (!awaitReady && !screenshotProvider.ready.value) return Perception.NeedsProjection
-        repeat(2) { attempt ->
-            val bytes = screenshotProvider.capture().getOrNull()
-            if (bytes != null) {
-                val gray = withContext(Dispatchers.Default) { FrameQuality.grayFrame(bytes) }
-                if (gray != null && !FrameQuality.isBlank(gray)) {
-                    return Perception.Image(bytes, viaProjection = true)
-                }
-                if (attempt == 0) delay(RETRY_DELAY_MS)
-            } else {
-                return Perception.Failed("capture_failed")
+        if (awaitReady) {
+            // 授权中转刚返回：MPService 异步启动窗口内 isEnable 尚为 false，
+            // 轮询等就绪，避免误回 NeedsProjection 触发二次授权。
+            var waited = 0L
+            while (!screenCapture.projectionAlive && waited < AWAIT_READY_TIMEOUT_MS) {
+                delay(READY_POLL_MS)
+                waited += READY_POLL_MS
             }
         }
-        return Perception.Failed(REASON_BLANK)
+        // 投影死时 captureBytes 内部自动探 screencap 兜底；两者皆不可用才
+        // NeedsProjection（服务层走授权编排后重跑）。
+        val captured = screenCapture.captureBytes(qualityCheck = true)
+        val bytes = captured.getOrNull()
+        if (bytes != null) return Perception.Image(bytes)
+        val reason = captured.exceptionOrNull()?.message
+            ?: ScreenCapture.REASON_CAPTURE_UNAVAILABLE
+        return if (reason == ScreenCapture.REASON_CAPTURE_UNAVAILABLE) {
+            Perception.NeedsProjection
+        } else {
+            Perception.Failed(REASON_BLANK)
+        }
     }
 
     companion object {
@@ -151,5 +160,7 @@ class ScreenPerceiver @Inject constructor(
         const val MAX_NODES = 400
         const val RETRY_DELAY_MS = 300L
         const val REASON_BLANK = "blank_frame"
+        private const val AWAIT_READY_TIMEOUT_MS = 3_000L
+        private const val READY_POLL_MS = 200L
     }
 }

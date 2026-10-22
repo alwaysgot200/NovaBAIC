@@ -23,7 +23,7 @@ import android.util.Log
 import com.verlintas.baic2.device.api.AccessibilityBridge
 import com.verlintas.baic2.device.api.OcrLine
 import com.verlintas.baic2.device.api.OcrProvider
-import com.verlintas.baic2.device.api.ScreenshotProvider
+import com.verlintas.baic2.floatball.auto.ScreenCapture
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -37,13 +37,14 @@ import kotlinx.coroutines.withContext
  * 前置条件由调用方（ScreenAdvisor）校验：已绑定联系人、无障碍已连接
  * （滚动依赖 [AccessibilityBridge.swipe]）、IME 已收拢、包名不在禁滑名单。
  * 采集通道优先无障碍 [AccessibilityBridge.captureScreen]（序列内可连续截、
- * 无授权弹窗），失败且投影已就绪时整序列改用投影；投影由调用方在序列
- * 结束后统一释放，本类不触碰投影生命周期。
+ * 无授权弹窗），失败且常驻投影存活时整序列改用 [ScreenCapture] 像素阶梯
+ * （投影 acquire 主源 + screencap 兜底，方案 2026-10-22 模块 C）；投影
+ * 常驻复用，本类不触碰投影生命周期。
  */
 @Singleton
 class MultiScreenStitcher @Inject constructor(
     private val accessibility: AccessibilityBridge,
-    private val screenshotProvider: ScreenshotProvider,
+    private val screenCapture: ScreenCapture,
     private val ocrProvider: OcrProvider,
     private val geometryProvider: ScreenGeometryProvider,
     private val noiseRules: NoiseRules,
@@ -61,11 +62,10 @@ class MultiScreenStitcher @Inject constructor(
         val scrollBack: Boolean,
     )
 
-    /** 拼接产物。[viaProjection]=true 时调用方须在序列后释放投影。 */
+    /** 拼接产物。 */
     data class Stitched(
         val text: String,
         val screens: Int,
-        val viaProjection: Boolean,
     )
 
     /**
@@ -73,16 +73,15 @@ class MultiScreenStitcher @Inject constructor(
      * 不触发授权弹窗）。任何中途失败都尽量回底后返回已有内容。
      */
     suspend fun run(config: Config, whitelistNames: Collection<String>): Stitched? {
-        // 采集通道在序列开始前一次性选定：a11y 优先；其截图不可用时投影已就绪
-        // 才整序列改走投影（且不触发授权弹窗）。中途不静默切换，防止投影漏释放。
+        // 采集通道在序列开始前一次性选定：a11y 优先；其截图不可用时常驻投影
+        // 存活才整序列改走像素阶梯（且不触发授权弹窗）。中途不静默切换。
         var useA11y = accessibility.connected.value
         var seed: ByteArray? = null
         if (useA11y) {
             seed = accessibility.captureScreen().getOrNull()?.takeIf { looksUsable(it) }
             if (seed == null) useA11y = false
         }
-        val viaProjection = !useA11y
-        if (viaProjection && !screenshotProvider.ready.value) return null
+        if (!useA11y && !screenCapture.projectionAlive) return null
 
         val first = grabScreen(useA11y = useA11y, preset = seed) ?: return null
         var geometry: ScreenGeometry? = first.geometry
@@ -127,7 +126,7 @@ class MultiScreenStitcher @Inject constructor(
 
         val text = merged.joinToString("\n") { it.text.trim() }.trim()
         if (text.isEmpty()) return null
-        return Stitched(text = text, screens = mergedScreens, viaProjection = viaProjection)
+        return Stitched(text = text, screens = mergedScreens)
     }
 
     private suspend fun geoScrollBack(geometry: ScreenGeometry?, swipes: Int) {
@@ -192,7 +191,9 @@ class MultiScreenStitcher @Inject constructor(
             if (bytes != null && looksUsable(bytes)) return bytes
             return null // 通道已在序列前选定，不中途降级投影
         }
-        return screenshotProvider.capture().getOrNull()?.takeIf { looksUsable(it) }
+        // qualityCheck=false：拼接器自带 looksUsable 质检，跳过重复检查。
+        return screenCapture.captureBytes(qualityCheck = false).getOrNull()
+            ?.takeIf { looksUsable(it) }
     }
 
     private suspend fun looksUsable(bytes: ByteArray): Boolean {

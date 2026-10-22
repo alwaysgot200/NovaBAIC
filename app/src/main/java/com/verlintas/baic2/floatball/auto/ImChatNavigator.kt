@@ -29,9 +29,6 @@ import android.widget.Toast
 import com.verlintas.baic2.device.api.OcrLine
 import com.verlintas.baic2.device.api.OcrProvider
 import com.verlintas.baic2.device.api.TextNode
-import com.verlintas.baic2.floatball.shizuku.ShizukuGate
-import com.verlintas.baic2.floatball.shizuku.ShizukuGrantResult
-import com.ven.assists.mp.MPManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
@@ -60,7 +57,7 @@ class ImChatNavigator @Inject constructor(
     private val shizuku: ShizukuInjector,
     private val ocr: OcrProvider,
     private val frameSource: FrameSource,
-    private val shizukuGate: ShizukuGate,
+    private val screenCapture: ScreenCapture,
     private val imageMatcher: ImageMatcher,
     @ApplicationContext private val context: Context,
 ) {
@@ -446,25 +443,16 @@ class ImChatNavigator @Inject constructor(
     // ========================= 模式 2：视觉通道（a11y 关） =========================
 
     /**
-     * 静默投影建立（模式 2 感知面前置）：appops PROJECT_MEDIA allow（Shizuku
-     * 一键授权，未授权先补）→ [MPManager.request]（appops allow 时系统授权框
-     * 静默通过，HyperOS 真机实测见 docs/2026-10-21-投影免弹窗授权方案.md）。
-     * 已建立（isEnable）直接热复用；失败返回 false 由调用方报因。
-     * 投影不主动释放——MPManager 常驻投影是既有基础设施（与找图/WebRTC
-     * 共用），导航器不自作主张停。
+     * 静默投影建立（模式 2 感知面前置）：统一走 [ScreenCapture.ensureProjection]
+     * 授权编排（a11y 开自动点弹窗 / Shizuku appops 静默直过 / 手动兜底，
+     * docs/2026-10-22 方案模块 A）。已建立直接热复用；失败返回 false 由
+     * 调用方报因。投影不主动释放——MPManager 常驻投影是既有基础设施（与
+     * 找图/WebRTC 共用），导航器不自作主张停。
      */
     private suspend fun ensureProjection(): Boolean {
-        if (MPManager.isEnable) {
-            Log.i(TAG, "[v2] ① projection already enabled")
-            return true
-        }
-        if (!shizukuGate.projectionSilentGranted()) {
-            val grant = runCatching { shizukuGate.grantProjectionSilent() }.getOrNull()
-            Log.i(TAG, "[v2] ① appops grant=$grant")
-        }
-        val ok = runCatching { MPManager.request(autoAllow = false) }.getOrDefault(false)
-        Log.i(TAG, "[v2] ① projection request=$ok isEnable=${MPManager.isEnable}")
-        return ok && MPManager.isEnable
+        val ok = screenCapture.ensureProjection()
+        Log.i(TAG, "[v2] ① projection ensure=$ok alive=${screenCapture.projectionAlive}")
+        return ok
     }
 
     /**

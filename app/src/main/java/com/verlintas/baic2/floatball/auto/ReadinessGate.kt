@@ -34,7 +34,6 @@ import com.verlintas.baic2.device.api.ShellResult
 import com.verlintas.baic2.device.api.ShellState
 import com.verlintas.baic2.floatball.advisor.ContactRepository
 import com.verlintas.baic2.floatball.director.DirectorRoutes
-import com.ven.assists.mp.MPManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
@@ -71,6 +70,7 @@ class ReadinessGate @Inject constructor(
     private val shell: ShellBridge,
     private val ocr: OcrProvider,
     private val contactRepository: ContactRepository,
+    private val screenCapture: ScreenCapture,
     @ApplicationContext private val context: Context,
 ) {
 
@@ -111,8 +111,9 @@ class ReadinessGate @Inject constructor(
         }
     }
 
+    /** 真判活：isEnable 只看 imageReader（onStop 后不置空，会读到假活）。 */
     private fun checkProjection(): ReadinessItem =
-        if (MPManager.isEnable) {
+        if (screenCapture.projectionAlive) {
             ReadinessItem(ID_PROJECTION, true, "projection_session_active")
         } else {
             ReadinessItem(ID_PROJECTION, false, "projection_not_authorized")

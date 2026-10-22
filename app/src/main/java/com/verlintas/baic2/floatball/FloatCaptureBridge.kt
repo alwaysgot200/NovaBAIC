@@ -21,13 +21,23 @@ package com.verlintas.baic2.floatball
 
 import android.content.Intent
 
-/** Hands the screen-capture consent result from [FloatCaptureActivity] back to the service. */
+/**
+ * 把授权结果从 [FloatCaptureActivity] 回传给服务的中转桥。
+ *
+ * 两通道共用一个中转 Activity：
+ * - 上游通道：consentIntent + onConsentResult（原始 resultCode/data）。
+ * - MPManager 常驻投影通道（方案 2026-10-22 模块 A）：mpConsent 回传
+ *   [com.verlintas.baic2.floatball.auto.ScreenCapture.ensureProjection] 的
+ *   最终布尔结果，授权弹窗由 Activity 内 MPManager 启动器发起。
+ */
 object FloatCaptureBridge {
     var consentIntent: Intent? = null
     var onConsentResult: ((resultCode: Int, data: Intent?) -> Unit)? = null
+    var mpConsent: ((granted: Boolean) -> Unit)? = null
 
     fun clear() {
         consentIntent = null
         onConsentResult = null
+        mpConsent = null
     }
 }
