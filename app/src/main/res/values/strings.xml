@@ -371,7 +371,7 @@
     <string name="float_profile_conversations">关联会话</string>
     <!-- V-B（v10 §2.3/§3）：画像页「参谋会话」Tab（2026-10-22 由目标 Tab 区块升格） -->
     <string name="float_conversations_empty">尚无关联会话，在聊天界面发起一次屏幕参谋后自动建立。</string>
-    <string name="float_conversations_new">新开会话</string>
+    <string name="float_conversations_new">新建会话关联</string>
     <string name="float_conversations_untitled">未命名会话</string>
     <string name="float_conversations_scene_non_chat">非聊天</string>
     <string name="float_conversations_fail">新开会话失败，请重试</string>
