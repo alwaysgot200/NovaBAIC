@@ -371,7 +371,7 @@
     <string name="float_profile_conversations">关联会话</string>
     <!-- V-B（v10 §2.3/§3）：画像页「参谋会话」Tab（2026-10-22 由目标 Tab 区块升格） -->
     <string name="float_conversations_empty">尚无关联会话，在聊天界面发起一次屏幕参谋后自动建立。</string>
-    <string name="float_conversations_new">＋ 新开会话（关联此人）</string>
+    <string name="float_conversations_new">新开会话</string>
     <string name="float_conversations_untitled">未命名会话</string>
     <string name="float_conversations_scene_non_chat">非聊天</string>
     <string name="float_conversations_fail">新开会话失败，请重试</string>
@@ -557,9 +557,11 @@
     <string name="float_tab_chat_channels">聊天会话</string>
     <string name="float_sessions_search_hint">搜索参谋会话</string>
     <string name="float_sessions_link_existing">关联已有会话</string>
+    <string name="float_sessions_link_btn">关联已有</string>
     <string name="float_channels_search_hint">搜索聊天会话</string>
     <string name="float_channels_open">打开</string>
-    <string name="float_channels_add">＋ 新增聊天会话</string>
+    <string name="float_channels_add">新增聊天会话</string>
+    <string name="float_channels_add_btn">新增</string>
     <string name="float_channels_add_name_hint">聊天对象名称（在该 APP 内的显示名）</string>
     <string name="float_goal_tab_goals">目标</string>
     <string name="float_goal_global_quick">我的理想自我 · 默认策略</string>

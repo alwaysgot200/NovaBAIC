@@ -39,6 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -72,13 +73,22 @@ internal fun ChatChannelsTab(
     }
 
     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text(stringResource(R.string.float_channels_search_hint)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        // 操作按钮置顶（2026-10-22）：搜索框 + 新增同行，列表在下。
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text(stringResource(R.string.float_channels_search_hint)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(onClick = { addOpen = true }) {
+                Text(stringResource(R.string.float_channels_add_btn))
+            }
+        }
         Surface(
             shape = RoundedCornerShape(12.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -124,12 +134,6 @@ internal fun ChatChannelsTab(
                     }
                 }
             }
-        }
-        OutlinedButton(
-            onClick = { addOpen = true },
-            modifier = Modifier.padding(top = 12.dp),
-        ) {
-            Text(stringResource(R.string.float_channels_add))
         }
     }
 

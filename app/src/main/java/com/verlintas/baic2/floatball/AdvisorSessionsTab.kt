@@ -125,6 +125,40 @@ internal fun AdvisorSessionsTab(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        // 操作按钮置顶（2026-10-22）：新建/关联等宽并排，列表在下。
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(top = 12.dp),
+        ) {
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        // 手动新建：新会话关联同档案（agentId/标题取档案值）。
+                        runCatching {
+                            val profile = contacts.profile(contactId) ?: error("contact_gone")
+                            val id = conversations.create(profile.agentId, AppMode.CHAT, profile.displayName)
+                            contacts.bindConversation(id, contactId)
+                        }.onSuccess { reload++ }
+                            .onFailure {
+                                Toast.makeText(
+                                    context,
+                                    R.string.float_conversations_fail,
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                    }
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(stringResource(R.string.float_conversations_new))
+            }
+            OutlinedButton(
+                onClick = { pickOpen = true },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(stringResource(R.string.float_sessions_link_btn))
+            }
+        }
         Surface(
             shape = RoundedCornerShape(12.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -182,33 +216,6 @@ internal fun AdvisorSessionsTab(
                         }
                     }
                 }
-            }
-        }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.padding(top = 12.dp),
-        ) {
-            OutlinedButton(onClick = {
-                scope.launch {
-                    // 手动新建：新会话关联同档案（agentId/标题取档案值）。
-                    runCatching {
-                        val profile = contacts.profile(contactId) ?: error("contact_gone")
-                        val id = conversations.create(profile.agentId, AppMode.CHAT, profile.displayName)
-                        contacts.bindConversation(id, contactId)
-                    }.onSuccess { reload++ }
-                        .onFailure {
-                            Toast.makeText(
-                                context,
-                                R.string.float_conversations_fail,
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                }
-            }) {
-                Text(stringResource(R.string.float_conversations_new))
-            }
-            OutlinedButton(onClick = { pickOpen = true }) {
-                Text(stringResource(R.string.float_sessions_link_existing))
             }
         }
     }
