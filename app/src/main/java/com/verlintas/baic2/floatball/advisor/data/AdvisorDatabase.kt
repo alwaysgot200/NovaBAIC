@@ -55,8 +55,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SelfPersonaEntity::class,
         TopicPlanEntity::class,
         ChatChannelEntity::class,
+        EmotionLexiconEntity::class,
+        EmotionEventEntity::class,
+        EmotionBaselineEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -106,6 +109,12 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun topicPlanDao(): TopicPlanDao
 
     abstract fun chatChannelDao(): ChatChannelDao
+
+    abstract fun emotionLexiconDao(): EmotionLexiconDao
+
+    abstract fun emotionEventDao(): EmotionEventDao
+
+    abstract fun emotionBaselineDao(): EmotionBaselineDao
 }
 
 /**
@@ -600,6 +609,80 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
                    `displayName`, `updatedAt`, `createdAt`
             FROM `contact_profiles`
             WHERE `mergedInto` IS NULL AND `deletedAt` IS NULL
+            """.trimIndent(),
+        )
+    }
+}
+
+/**
+ * v13 → v14（情感分析师 E-c，方案 §4.3/§4.7）：新表 emotion_lexicon（情绪信号
+ * 词条，可运营数据资产）、emotion_events（判定事件台账，双索引 + 90 天保留）、
+ * emotion_baseline（联系人 30 天滚动基线，一联系人一行）。建表 IF NOT EXISTS，
+ * 不搬不删任何既有数据；词条内容由 EmotionLexiconSeeder 按身份补缺播种，
+ * 用户改动保护见 planSeed（绝不覆盖）。DDL 与实体逐字对齐（Room 2.8 开库校验）。
+ */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `emotion_lexicon` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `term` TEXT NOT NULL,
+                `library` INTEGER NOT NULL,
+                `labelsJson` TEXT NOT NULL,
+                `polarity` INTEGER NOT NULL,
+                `intensityDelta` INTEGER NOT NULL,
+                `negatable` INTEGER NOT NULL,
+                `scenario` TEXT,
+                `scopeContactId` INTEGER,
+                `weight` REAL NOT NULL,
+                `enabled` INTEGER NOT NULL,
+                `source` TEXT NOT NULL,
+                `note` TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_emotion_lexicon_term_library_scopeContactId` " +
+                "ON `emotion_lexicon` (`term`, `library`, `scopeContactId`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `emotion_events` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `conversationId` INTEGER,
+                `turnMessageId` INTEGER,
+                `state` TEXT NOT NULL,
+                `labelsJson` TEXT NOT NULL,
+                `intensity` INTEGER NOT NULL,
+                `confidence` TEXT NOT NULL,
+                `evidenceJson` TEXT NOT NULL,
+                `reason` TEXT NOT NULL,
+                `createdAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_emotion_events_contactId_createdAt` " +
+                "ON `emotion_events` (`contactId`, `createdAt`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_emotion_events_createdAt` " +
+                "ON `emotion_events` (`createdAt`)",
+        )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `emotion_baseline` (
+                `contactId` INTEGER NOT NULL,
+                `avgLen` REAL NOT NULL,
+                `avgIntervalMs` INTEGER NOT NULL,
+                `shortReplyRatio` REAL NOT NULL,
+                `activeFollowRatio` REAL NOT NULL,
+                `sampleCount` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL,
+                PRIMARY KEY(`contactId`)
+            )
             """.trimIndent(),
         )
     }
