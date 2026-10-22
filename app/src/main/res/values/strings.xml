@@ -17,11 +17,32 @@
     <string name="float_notification_text">点击悬浮球快捷操作</string>
     <string name="float_notification_show">显示悬浮球</string>
     <!-- 悬浮球 · 扇形子球 -->
-    <string name="float_fan_ask">问答</string>
+    <string name="float_fan_oneshot">单次</string>
+    <string name="float_fan_continuous">连续</string>
     <string name="float_fan_main">主界面</string>
+    <string name="float_fan_more">更多</string>
     <string name="float_fan_settings">设置</string>
     <string name="float_fan_help">帮助</string>
     <string name="float_fan_exit">退出</string>
+
+    <!-- 悬浮球 · 更多弹窗 -->
+    <string name="float_more_title">更多</string>
+    <string name="float_more_settings">设置</string>
+    <string name="float_more_help">帮助</string>
+    <string name="float_more_advisor_settings">老参谋设置</string>
+    <string name="float_more_profile">联系人画像</string>
+    <string name="float_more_close">关闭</string>
+
+    <!-- 悬浮球 · 自动托管 -->
+    <string name="float_auto_no_apps">本机尚未关联任何APP，无法执行自动托管。请先在聊天页或联系人画像中建立联系人的 APP 关联</string>
+    <string name="float_auto_scope_title">选择自动托管范围</string>
+    <string name="float_auto_scope_all">全部联系人</string>
+    <string name="float_auto_scope_all_desc">监控所有已关联联系人在所有已关联 APP 的来信</string>
+    <string name="float_auto_scope_apps_all">所有 APP</string>
+    <string name="float_auto_scope_app_count">%1$d 个APP</string>
+    <string name="float_auto_scope_started">自动托管已开启：%1$s</string>
+    <string name="float_auto_whitelist_full">自动白名单已满（最多 %1$d 个），请在老参谋设置中清理后再开启</string>
+    <string name="float_auto_draft_enabled">已开启全量来信监控：所有关联联系人的来信将自动拟稿并通知</string>
 
     <!-- 悬浮球 · 录制态 -->
     <string name="float_recording_started">连续参谋已开启，双击悬浮球停止</string>
@@ -141,22 +162,22 @@
     <string name="float_help_quick_body">第一次使用，跟着下面三步走（约 2 分钟）：</string>
     <string name="float_help_quick_step1">打开老参谋应用，按提示授予「显示在其他应用上层」（悬浮窗）权限，屏幕上就会出现悬浮球</string>
     <string name="float_help_quick_step2">打开 设置 → 老参谋，配置你的 AI 模型与 API Key（支持 DeepSeek 等主流服务）</string>
-    <string name="float_help_quick_step3">回到桌面随便打开一个聊天软件，单击悬浮球试试——分屏浮窗会给出参考回复</string>
+    <string name="float_help_quick_step3">回到桌面随便打开一个聊天软件，长按悬浮球试试——分屏浮窗会给出参考回复</string>
     <string name="float_help_ball_section">悬浮球与菜单操作</string>
     <string name="float_help_ball_body">悬浮球可以拖到屏幕任意位置；单击弹出扇形菜单，长按与双击是两个快捷模式：</string>
-    <string name="float_help_gesture_tap">单击：弹出扇形菜单（问答 / 主界面 / 设置 / 自动 / 帮助 / 退出）</string>
+    <string name="float_help_gesture_tap">单击：弹出扇形菜单（单次 / 连续 / 自动 / 主界面 / 更多 / 退出）</string>
     <string name="float_help_gesture_long">长按：立即开始一次「单次截屏参谋」，主球变灰旋转，出结果即恢复</string>
     <string name="float_help_gesture_double">双击：开启「连续参谋」，悬浮球变红并显示回合数；再次双击结束</string>
     <string name="float_help_gesture_drag">拖动：按住悬浮球即可移动位置；菜单展开时按住菜单上任意位置也能整体拖动</string>
     <string name="float_help_oneshot_section">单次参谋怎么用</string>
-    <string name="float_help_oneshot_body">在聊天界面单击（或长按）悬浮球即可触发。整个过程无需离开当前聊天：</string>
+    <string name="float_help_oneshot_body">在聊天界面长按（或菜单「单次」）悬浮球即可触发。整个过程无需离开当前聊天：</string>
     <string name="float_help_oneshot_split">分屏上半部分是参考回复，可拖动中间把手调整高度；关闭后一切照旧</string>
     <string name="float_help_oneshot_input">输入行可以继续追问，例如「语气再委婉一点」「不要提价格」，AI 会结合当前屏幕内容修改答案</string>
     <string name="float_help_continuous_section">连续参谋（盯屏模式）</string>
     <string name="float_help_continuous_body">双击悬浮球开启。它持续盯着屏幕：对方一有新消息、画面发生变化，就自动给出新一轮建议，你不用反复点击。画面长时间不动时自动降频省电，恢复变化立刻提速。</string>
     <string name="float_help_continuous_end">再次双击或达到时长上限即结束；整段问答会自动存进老参谋会话，可在主界面回看。</string>
-    <string name="float_help_auto_section">自动参谋（陪伴窗口）</string>
-    <string name="float_help_auto_body">在联系人聊天界面从菜单点「自动」，对该联系人开启最长 30 分钟的自动参谋：它按拟人节奏（约 8~90 秒一条）帮你拟回复，最多不超过你设置的条数上限。</string>
+    <string name="float_help_auto_section">自动托管（自动参谋）</string>
+    <string name="float_help_auto_body">从菜单点「自动」开启。与「单次 / 连续」看当前屏幕不同，自动托管监控的是**已关联联系人在其关联 APP（微信、企业微信、钉钉、飞书等）的聊天通知**：先选择监控范围（某联系人 + 某 APP，或全部联系人），选定联系人后自动打开其聊天页，按拟人节奏（约 8~90 秒一条）帮你拟回复并受控自动发送，最多不超过你设置的条数上限。本机尚未关联任何 APP 时无法使用。</string>
     <string name="float_help_auto_safe">安全底线：涉及金钱、承诺、敏感隐私或超出当前关系阶段的回复，一律不会自动发出，而是降级为「起草通知」，由你确认后一键使用</string>
     <string name="float_help_auto_whitelist">白名单最多 5 个联系人；夜间静默时段不会发送；需要开启无障碍服务</string>
     <string name="float_help_profile_section">联系人画像与策略</string>
@@ -173,7 +194,7 @@
     <string name="float_help_scene1_title">场景一 · 客户砍价</string>
     <string name="float_help_scene1_body">微信收到「能便宜点吗？」→ 长按悬浮球 → 参谋结合你的报价习惯和该客户画像，给出既不让利过多、又不吓跑客户的报价话术；不满意就在输入行说「再压一点」，立刻改写。</string>
     <string name="float_help_scene2_title">场景二 · 领导临时派活</string>
-    <string name="float_help_scene2_body">领导在群里@你安排任务，一时不知如何接话 → 单击悬浮球 → 得到一条得体的确认式回复框架，按你的口吻微调后发出。</string>
+    <string name="float_help_scene2_body">领导在群里@你安排任务，一时不知如何接话 → 长按悬浮球 → 得到一条得体的确认式回复框架，按你的口吻微调后发出。</string>
     <string name="float_help_scene3_title">场景三 · 长时间陪聊</string>
     <string name="float_help_scene3_body">相亲对象聊性正浓，消息一条接一条 → 双击开启连续参谋 → 对方每来新消息，分屏自动更新建议；聊完双击结束，全程记录可回看。</string>
     <string name="float_help_perm_section">权限说明</string>
@@ -304,7 +325,7 @@
     <string name="float_im_nav_shizuku_off">无障碍与 Shizuku 均未就绪，无法自动进入对话：已为你打开聊天 App，请手动点击「%1$s」。开启任一通道即可：设置 → 无障碍，或老参谋设置 → Shizuku</string>
     <string name="float_im_nav_projection_fail">屏幕投影建立失败，无法识别屏幕内容：请检查 Shizuku 是否在运行后重试，或手动点击「%1$s」</string>
     <string name="float_im_nav_app_missing">未找到对应的聊天应用，无法打开</string>
-    <string name="float_im_nav_generic_fail">未能自动进入与 %1$s 的对话（界面未能定位），已为你打开聊天 App，请手动点击该联系人</string>
+    <string name="float_im_nav_generic_fail">未能自动进入与 %1$s 的对话，已为你打开聊天 App，请手动点击该联系人。失败环节：%2$s</string>
     <!-- VA-2 U3（v10 §1.3）：NON_CHAT 分屏隐藏人设区，只显示纯问答标识 -->
     <string name="float_profile_status_nonchat">屏幕参谋 · 纯问答</string>
     <!-- VA-2 U2（v10 §2.4/§2.5/§2.6）：GoalTab 双方人设与维持度区块 -->
@@ -748,6 +769,9 @@
     <string name="float_draft_listener_label">老参谋代拟回复</string>
     <string name="float_draft_channel">老参谋代拟</string>
     <string name="float_draft_notif_title">老参谋为【%1$s】代拟了一条回复</string>
+    <string name="float_stranger_channel">老参谋陌生来信</string>
+    <string name="float_stranger_notif_title">陌生来信：【%1$s】</string>
+    <string name="float_stranger_notif_body">%1$s：来自 %2$s，尚未建档，不会自动回复。点击通知可直接打开该聊天</string>
     <string name="float_draft_preview">代拟：%1$s</string>
     <string name="float_draft_send">一键发送</string>
     <string name="float_draft_edit">改后发送</string>

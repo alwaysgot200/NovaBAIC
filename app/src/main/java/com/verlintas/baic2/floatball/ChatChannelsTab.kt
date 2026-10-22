@@ -111,6 +111,7 @@ internal fun ChatChannelsTab(
                     visible.forEach { channel ->
                         val appLabelRes = FloatUi.IM_APPS.firstOrNull { it.first == channel.imPackage }?.second
                         Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp),

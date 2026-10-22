@@ -709,6 +709,8 @@ class ImChatNavigator @Inject constructor(
 
     /** 便捷 Toast：结果码 → 用户文案（画像页调用方用，避免每处手写 when）。 */
     fun toastResult(result: NavResult, contactName: String) {
+        // 报因必须具体到环节（§4.5.2）：未单独映射的 REASON_* 不许吞成一句
+        // 泛泛文案——把原始 reason 拼给用户，问题可报告、可定位。
         val res = when (result) {
             is NavResult.Ok -> com.verlintas.baic2.R.string.float_im_nav_ok
             is NavResult.Fail -> when (result.reason) {
@@ -717,10 +719,18 @@ class ImChatNavigator @Inject constructor(
                 REASON_PROJECTION_UNAVAILABLE ->
                     com.verlintas.baic2.R.string.float_im_nav_projection_fail
                 REASON_APP_MISSING -> com.verlintas.baic2.R.string.float_im_nav_app_missing
-                else -> com.verlintas.baic2.R.string.float_im_nav_generic_fail
+                else -> null
             }
         }
-        val message = context.getString(res, contactName)
+        val message = when {
+            res != null -> context.getString(res, contactName)
+            result is NavResult.Fail -> context.getString(
+                com.verlintas.baic2.R.string.float_im_nav_generic_fail,
+                contactName,
+                result.reason,
+            )
+            else -> return
+        }
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
     }
 

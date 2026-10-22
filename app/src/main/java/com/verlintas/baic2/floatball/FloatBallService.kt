@@ -1676,7 +1676,7 @@ class FloatBallService : Service() {
         val fan = FloatUi.buildFanMenu(
             this,
             items = listOf(
-                FloatUi.FanItem(R.string.float_fan_ask) { startOneShot() },
+                FloatUi.FanItem(R.string.float_fan_oneshot) { startOneShot() },
                 FloatUi.FanItem(R.string.float_fan_main) { showMainUi() },
                 FloatUi.FanItem(R.string.float_fan_settings) { openMainSettings() },
                 // 「自动」= M3-b 陪伴窗口：对当前绑定联系人开启 30 分钟自动参谋

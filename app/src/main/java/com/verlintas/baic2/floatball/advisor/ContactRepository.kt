@@ -558,6 +558,19 @@ class ContactRepository @Inject constructor(
         if (imPackage == null) db.contactProfileDao().listAllAlive()
         else db.contactProfileDao().listAlive(imPackage)
 
+    /**
+     * 自动托管范围数据（2026-10-22 菜单改版方案 §3.3）：全部存活联系人 + 各自
+     * 名下的 APP 聊天会话（按 lastSeenAt 降序），**过滤无任何会话者**——自动托管
+     * 只能监控已关联 APP 的联系人；联系人按其最近会话活跃时间降序。
+     */
+    suspend fun autoScopeEntries(): List<Pair<ContactProfileEntity, List<ChatChannelEntity>>> =
+        listAlive().mapNotNull { profile ->
+            channelsOf(profile.id)
+                .sortedByDescending { it.lastSeenAt }
+                .takeIf { it.isNotEmpty() }
+                ?.let { profile to it }
+        }.sortedByDescending { it.second.first().lastSeenAt }
+
     suspend fun aliases(contactId: Long) = db.contactAliasDao().listFor(contactId)
 
     /**

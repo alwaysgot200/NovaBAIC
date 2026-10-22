@@ -184,9 +184,17 @@ internal fun AdvisorSessionsTab(
                                 .padding(top = 8.dp)
                                 .clickable {
                                     // 主应用深链打开：FROM_FLOAT 免冷启动自动隐藏。
+                                    // MainActivity=singleTop 且画像页盖在栈顶：必须
+                                    // CLEAR_TOP+SINGLE_TOP 让 MainActivity 回栈顶收
+                                    // onNewIntent，否则 Intent 只投递不切界面
+                                    // （「点了没反应」，2026-10-21 真机实测教训）。
                                     context.startActivity(
                                         Intent(context, MainActivity::class.java).apply {
-                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            addFlags(
+                                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                                            )
                                             putExtra(EXTRA_FROM_FLOAT, true)
                                             putExtra(RunService.EXTRA_OPEN_CONVERSATION_ID, row.conversationId)
                                         },

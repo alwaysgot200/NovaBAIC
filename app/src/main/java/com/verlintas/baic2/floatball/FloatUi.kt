@@ -37,6 +37,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.verlintas.baic2.R
 import kotlin.math.abs
@@ -1702,5 +1703,318 @@ internal object FloatUi {
             strip.primaryButton.text = strip.message.context.getString(R.string.float_draft_send)
             strip.secondaryButton.text = strip.message.context.getString(R.string.float_draft_edit)
         }
+    }
+
+    // ── 更多弹窗与自动托管范围选择器（2026-10-22 菜单改版方案 §3.2/§3.3） ──
+
+    /** 更多弹窗的一行入口（[action] 由服务层接线，触发前工厂先回调 onDismiss）。 */
+    class ListMenuItem(val labelRes: Int, val action: () -> Unit)
+
+    /** 自动托管范围选择器的一条 APP 聊天会话（[entryName] 为该 APP 内的会话名）。 */
+    class ScopeApp(
+        val imPackage: String,
+        val channelKey: String,
+        val entryName: String,
+    )
+
+    /** 范围选择器的一个联系人条目：[apps] 为名下已关联的 APP 聊天会话。 */
+    class ScopeContact(
+        val contactId: Long,
+        val displayName: String,
+        val apps: List<ScopeApp>,
+    )
+
+    /** 范围选择回调：任一命中即定范围，工厂先 onDismiss 再派发。 */
+    interface ScopePickerCallbacks {
+        /** 「全部联系人」：监控所有已关联联系人的来信。 */
+        fun onPickAll()
+        /** 某联系人「所有 APP」。 */
+        fun onPickContact(contact: ScopeContact)
+        /** 某联系人的具体 APP 会话。 */
+        fun onPickApp(contact: ScopeContact, app: ScopeApp)
+    }
+
+    /** 卡片弹窗尺寸：卡片宽 / 行高 / 球旁间距 / 列表区高上限（屏高占比）。 */
+    private const val CARD_WIDTH_DP = 212
+    private const val CARD_ROW_HEIGHT_DP = 44
+    private const val CARD_GAP_DP = 8
+    private const val CARD_LIST_MAX_RATIO = 0.52f
+
+    /**
+     * 卡片弹窗句柄：root 为全屏接罩（服务层直接挂窗；点空白=onDismiss），
+     * card 贴主球朝屏幕中央一侧弹出（与扇形菜单同款定位口径）。
+     * [place] 量内容实际高度并钳制屏内；内容增删（展开/收起）后须重调。
+     */
+    class CardMenu internal constructor(
+        val root: FrameLayout,
+        internal val card: LinearLayout,
+        private val cardWidthPx: Int,
+        private val gapPx: Int,
+        private val ballCenterX: Int,
+        private val ballCenterY: Int,
+        private val screenWidth: Int,
+        private val screenHeight: Int,
+    ) {
+        /** 量卡片实际高度并摆位：横向贴球、纵向以球心居中，双双钳制屏内。 */
+        fun place() {
+            card.measure(
+                View.MeasureSpec.makeMeasureSpec(cardWidthPx, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            )
+            val height = card.measuredHeight
+            val left = (if (ballCenterX <= screenWidth / 2) {
+                ballCenterX + gapPx
+            } else {
+                ballCenterX - gapPx - cardWidthPx
+            }).coerceIn(0, (screenWidth - cardWidthPx).coerceAtLeast(0))
+            val top = (ballCenterY - height / 2)
+                .coerceIn(0, (screenHeight - height).coerceAtLeast(0))
+            card.layoutParams = FrameLayout.LayoutParams(cardWidthPx, height).apply {
+                leftMargin = left
+                topMargin = top
+            }
+            card.requestLayout()
+        }
+    }
+
+    /** 包名 → 用户可见 APP 名（内置清单优先，未收录回退包名末段）。 */
+    fun imAppLabel(context: Context, imPackage: String): String {
+        val res = IM_APPS.firstOrNull { it.first == imPackage }?.second
+        return if (res != null) context.getString(res) else imPackage.substringAfterLast('.')
+    }
+
+    /** 卡片弹窗共同骨架：全屏接罩 + 圆角卡片 + 标题行（✕ 右上角）。 */
+    private fun cardSkeleton(
+        context: Context,
+        titleRes: Int,
+        ballCenterX: Int,
+        ballCenterY: Int,
+        screenWidth: Int,
+        screenHeight: Int,
+        onDismiss: () -> Unit,
+    ): CardMenu {
+        val root = FrameLayout(context).apply { setOnClickListener { onDismiss() } }
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(context, 16).toFloat()
+                setColor(PANEL_COLOR)
+                setStroke(dp(context, 1), 0x885B86E5.toInt())
+            }
+            elevation = dp(context, 10).toFloat()
+            // 卡片自身消费点按：点标题区/行间隙不应误触「点空白关闭」。
+            isClickable = true
+            setOnClickListener { }
+        }
+        val titleRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(context, 16), dp(context, 12), dp(context, 4), dp(context, 6))
+            addView(TextView(context).apply {
+                text = context.getString(titleRes)
+                setTextColor(Color.WHITE)
+                textSize = 15f
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(
+                View(context),
+                LinearLayout.LayoutParams(0, 1, 1f),
+            )
+            addView(TextView(context).apply {
+                text = context.getString(R.string.float_ask_close_x)
+                setTextColor(0xCCFFFFFF.toInt())
+                textSize = 18f
+                contentDescription = context.getString(R.string.float_more_close)
+                setPadding(dp(context, 12), dp(context, 2), dp(context, 12), dp(context, 4))
+                setOnClickListener { onDismiss() }
+            })
+        }
+        card.addView(titleRow)
+        card.addView(divider(context))
+        root.addView(
+            card,
+            FrameLayout.LayoutParams(dp(context, CARD_WIDTH_DP), FrameLayout.LayoutParams.WRAP_CONTENT),
+        )
+        return CardMenu(
+            root = root,
+            card = card,
+            cardWidthPx = dp(context, CARD_WIDTH_DP),
+            gapPx = dp(context, BALL_SIZE_DP / 2 + CARD_GAP_DP),
+            ballCenterX = ballCenterX,
+            ballCenterY = ballCenterY,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+        )
+    }
+
+    /** 卡片内一行菜单项：统一行高、白字、涟漪反馈；[indentDp] 为左侧缩进。 */
+    private fun cardRow(
+        context: Context,
+        label: String,
+        indentDp: Int = 16,
+        onClick: () -> Unit,
+    ): TextView = TextView(context).apply {
+        text = label
+        setTextColor(0xEEFFFFFF.toInt())
+        textSize = 14f
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(context, indentDp), 0, dp(context, 16), 0)
+        minHeight = dp(context, CARD_ROW_HEIGHT_DP)
+        isClickable = true
+        selectableBackground(this)
+        setOnClickListener { onClick() }
+    }
+
+    /**
+     * 「更多」弹窗（方案 §3.2）：标题行 + 次级入口列表。行点击 = onDismiss
+     * 后执行动作；点接罩空白或右上角 ✕ 仅关闭。
+     */
+    fun buildListMenu(
+        context: Context,
+        items: List<ListMenuItem>,
+        ballCenterX: Int,
+        ballCenterY: Int,
+        screenWidth: Int,
+        screenHeight: Int,
+        onDismiss: () -> Unit,
+    ): CardMenu {
+        val menu = cardSkeleton(
+            context, R.string.float_more_title,
+            ballCenterX, ballCenterY, screenWidth, screenHeight, onDismiss,
+        )
+        items.forEach { item ->
+            menu.card.addView(
+                cardRow(context, context.getString(item.labelRes)) {
+                    onDismiss()
+                    item.action()
+                },
+            )
+        }
+        menu.place()
+        return menu
+    }
+
+    /** 高度封顶的 ScrollView：联系人多时滚动，不把卡片顶出屏幕。 */
+    private class CappedScrollView(context: Context, private val maxHeightPx: Int) :
+        ScrollView(context) {
+        override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+            super.onMeasure(widthSpec, heightSpec)
+            if (measuredHeight > maxHeightPx) {
+                setMeasuredDimension(measuredWidth, maxHeightPx)
+            }
+        }
+    }
+
+    /**
+     * 自动托管范围选择器（方案 §3.3）：「全部联系人」置顶 + 联系人列表
+     * （点按展开名下 APP 会话：「所有 APP」+ 各具体会话）。选择行 = onDismiss
+     * 后派发回调；展开/收起不关闭、只重摆卡片位置。
+     */
+    fun buildScopePicker(
+        context: Context,
+        contacts: List<ScopeContact>,
+        ballCenterX: Int,
+        ballCenterY: Int,
+        screenWidth: Int,
+        screenHeight: Int,
+        onDismiss: () -> Unit,
+        callbacks: ScopePickerCallbacks,
+    ): CardMenu {
+        val menu = cardSkeleton(
+            context, R.string.float_auto_scope_title,
+            ballCenterX, ballCenterY, screenWidth, screenHeight, onDismiss,
+        )
+        val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+
+        // 全部联系人：强调色主行 + 一行小字说明。
+        list.addView(
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                isClickable = true
+                selectableBackground(this)
+                setOnClickListener {
+                    onDismiss()
+                    callbacks.onPickAll()
+                }
+                setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 8))
+                addView(TextView(context).apply {
+                    text = context.getString(R.string.float_auto_scope_all)
+                    setTextColor(MENU_ACCENT)
+                    textSize = 14.5f
+                    typeface = Typeface.DEFAULT_BOLD
+                })
+                addView(TextView(context).apply {
+                    text = context.getString(R.string.float_auto_scope_all_desc)
+                    setTextColor(0x80FFFFFF.toInt())
+                    textSize = 11f
+                })
+            },
+        )
+        list.addView(divider(context))
+
+        val scroll = CappedScrollView(context, (screenHeight * CARD_LIST_MAX_RATIO).toInt())
+        val rows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        contacts.forEach { contact ->
+            // 展开区：所有 APP + 该联系人各具体会话（默认收起）。
+            val appsBox = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+            }
+            rows.addView(
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    isClickable = true
+                    selectableBackground(this)
+                    setOnClickListener {
+                        appsBox.visibility =
+                            if (appsBox.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                        menu.place()
+                    }
+                    setPadding(dp(context, 16), 0, dp(context, 16), 0)
+                    minimumHeight = dp(context, CARD_ROW_HEIGHT_DP)
+                    addView(TextView(context).apply {
+                        text = contact.displayName
+                        setTextColor(0xEEFFFFFF.toInt())
+                        textSize = 14f
+                        layoutParams = LinearLayout.LayoutParams(
+                            0,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            1f,
+                        )
+                    })
+                    addView(TextView(context).apply {
+                        text = context.getString(R.string.float_auto_scope_app_count, contact.apps.size)
+                        setTextColor(0x80FFFFFF.toInt())
+                        textSize = 11f
+                    })
+                },
+            )
+            appsBox.addView(
+                cardRow(context, context.getString(R.string.float_auto_scope_apps_all)) {
+                    onDismiss()
+                    callbacks.onPickContact(contact)
+                }.apply { setPadding(dp(context, 32), 0, dp(context, 16), 0) },
+            )
+            contact.apps.forEach { app ->
+                val label = "${imAppLabel(context, app.imPackage)} · ${app.entryName}"
+                appsBox.addView(
+                    cardRow(context, label) {
+                        onDismiss()
+                        callbacks.onPickApp(contact, app)
+                    }.apply {
+                        setPadding(dp(context, 32), 0, dp(context, 16), 0)
+                        setTextColor(0xCCFFFFFF.toInt())
+                        textSize = 13f
+                    },
+                )
+            }
+            rows.addView(appsBox)
+        }
+        scroll.addView(rows)
+        list.addView(scroll)
+        menu.card.addView(list)
+        menu.place()
+        return menu
     }
 }
