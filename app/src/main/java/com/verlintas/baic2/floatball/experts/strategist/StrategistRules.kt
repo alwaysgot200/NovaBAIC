@@ -50,11 +50,14 @@ internal object StrategistRules {
     /**
      * 四道闸执法：输入模型提案 + 四维授权档位（disclosure 用 F1 privacyPolicy
      * 单点真源）→ 档位闸过滤后的许可单。恒不返回 null（降级口径在门面层）。
+     * [emotion] 为 E-e 情绪约束（方案 §4.6，active 时追加执法）：禁用敏感维剥
+     * use、approach 命中禁用词表则覆写为映射建议重点。
      */
     fun enforce(
         permit: Permit,
         strategy: TalkerStrategy,
         privacyPolicy: String?,
+        emotion: EmotionRoute = EmotionRoute.INACTIVE,
     ): RuledPermit {
         val violations = mutableListOf<String>()
         var needsHuman = false
@@ -99,9 +102,24 @@ internal object StrategistRules {
             }
         }
 
+        // E-e 情绪约束（方案 §4.6 映射表硬执法）：禁用敏感维剥 use（盛怒禁
+        // exemplifying 类比论证）；approach 命中禁用词表则覆写为映射建议重点。
+        // 非红线违规（不进 violations），提示词端已同口径告知，这里只兜底。
+        if (emotion.active && emotion.bannedDims.isNotEmpty()) {
+            if (DIM_DISCLOSURE in emotion.bannedDims) disclosure = disclosure.copy(use = false)
+            if (DIM_LYING in emotion.bannedDims) lying = lying.copy(use = false)
+            if (DIM_PROMISING in emotion.bannedDims) promising = promising.copy(use = false)
+            if (DIM_EXEMPLIFYING in emotion.bannedDims) exemplifying = exemplifying.copy(use = false)
+        }
+        val approach = if (emotion.active && permit.approach in emotion.bannedApproaches) {
+            emotion.approaches.firstOrNull() ?: APPROACH_MIXED
+        } else {
+            permit.approach
+        }
+
         return RuledPermit(
             permit = Permit(
-                approach = permit.approach,
+                approach = approach,
                 disclosure = disclosure,
                 lying = lying,
                 promising = promising,

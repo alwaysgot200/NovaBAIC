@@ -49,7 +49,9 @@ internal object StrategistPrompt {
 
     /**
      * 用户提示词：现场信息 + 四维授权档位表（军师提案不得越过档位，
-     * 档位闸还会代码复核）。[privacyDomain] 为 F1 合议判出的对方所问域。
+     * 档位闸还会代码复核）。[privacyDomain] 为 F1 合议判出的对方所问域；
+     * [emotion] 为 E-e 情绪→方针映射产物（§4.6），active 时以同一渲染段
+     * 进现场信息（与代言者端口径一致）。
      */
     fun userPrompt(
         stageIntent: String,
@@ -59,6 +61,7 @@ internal object StrategistPrompt {
         strategy: TalkerStrategy,
         privacyPolicy: String,
         privacyDomain: String?,
+        emotion: EmotionRoute = EmotionRoute.INACTIVE,
     ): String = buildString {
         append("【授权档位】lying=").append(normalizeTalkerLevel(strategy.lying))
         append(", promising=").append(normalizeTalkerLevel(strategy.promising))
@@ -77,12 +80,42 @@ internal object StrategistPrompt {
         if (recentDigest.isNotBlank()) {
             append("【近两轮对话】").append(recentDigest).append('\n')
         }
+        emotionSection(emotion)?.let { append(it).append('\n') }
         append("【对方最新来信】").append(incomingText.take(INCOMING_CLIP)).append('\n')
         append("给出本回合方针与敏感手段许可。")
     }
 
     private const val INCOMING_CLIP = 300
     private const val PRIVACY_ASSESS = "assess"
+
+    // ── 情绪段（E-e，方案 §4.6）：零 LLM 字符串段，双端共用同一渲染 ──────────
+
+    /**
+     * 「对方当前情绪」段（方案 §4.6 映射表消费面）：映射行 active 才产出，
+     * 平稳/观察态/未列组合恒 null（原则 5 不干预）。**零 LLM**——随手段库段
+     * 直插代言者提示词，同一段也进许可单 userPrompt；情绪不新增任何 LLM 调用
+     * （方案 §五 预算锁）。
+     */
+    fun emotionSection(emotion: EmotionRoute): String? {
+        if (!emotion.active) return null
+        return buildString {
+            append("【对方当前情绪】").append(emotion.label)
+            if (emotion.intensity > 0) {
+                append("（强度 ").append(emotion.intensity).append("）")
+            }
+            append("。话术方向：").append(emotion.guidance)
+            if (emotion.approaches.isNotEmpty()) {
+                append("；重点用")
+                append(emotion.approaches.joinToString("、") { StrategistAssets.approachLabel(it) })
+            }
+            val bans = emotion.bannedApproaches.map { StrategistAssets.approachLabel(it) } +
+                listOfNotNull(emotion.bannedNote.trim().takeIf { it.isNotBlank() })
+            if (bans.isNotEmpty()) {
+                append("。禁用：").append(bans.joinToString("、"))
+            }
+            append('。')
+        }
+    }
 
     // ── 代言者两段渲染（裁量层方案 §四，T1-c 插桩消费；TacticPromptBuilderTest 锁死）──
 

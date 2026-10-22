@@ -152,4 +152,56 @@ class StrategistRulesTest {
         val assess = StrategistRules.enforce(permit, TalkerStrategy(), PRIVACY_POLICY_ASSESS)
         assertTrue(assess.permit.disclosure.use)
     }
+
+    // ── E-e 情绪约束（方案 §4.6）：禁用维剥 use、禁用 approach 覆写 ────────
+
+    @Test
+    fun enforce_rageStripsExemplifyingEvenOnFree() {
+        val permit = Permit(
+            exemplifying = TacticRuling(use = true, why = "类比说服", claim = "就像别人家一样"),
+        )
+        val ruled = StrategistRules.enforce(
+            permit,
+            TalkerStrategy(exemplifying = TALKER_FREE),
+            null,
+            EmotionRouting.RAGE,
+        )
+        assertFalse(ruled.permit.exemplifying.use)
+        // 情绪约束不是红线违规，不进 violations（红线台账语义保持纯净）。
+        assertTrue(ruled.violations.isEmpty())
+    }
+
+    @Test
+    fun enforce_rageOverridesBannedApproachToEmpathy() {
+        val ruled = StrategistRules.enforce(
+            Permit(approach = APPROACH_HUMOR),
+            TalkerStrategy(),
+            null,
+            EmotionRouting.RAGE,
+        )
+        assertEquals(APPROACH_EMPATHY, ruled.permit.approach)
+    }
+
+    @Test
+    fun enforce_bannedApproachWithoutSuggestionFallsToMixed() {
+        val route = EmotionRoute(active = true, bannedApproaches = listOf(APPROACH_STORY))
+        val ruled = StrategistRules.enforce(Permit(approach = APPROACH_STORY), TalkerStrategy(), null, route)
+        assertEquals(APPROACH_MIXED, ruled.permit.approach)
+    }
+
+    @Test
+    fun enforce_inactiveEmotionKeepsProposalUntouched() {
+        val permit = Permit(
+            approach = APPROACH_HUMOR,
+            exemplifying = TacticRuling(use = true, why = "类比", claim = "就像…"),
+        )
+        val ruled = StrategistRules.enforce(
+            permit,
+            TalkerStrategy(exemplifying = TALKER_FREE),
+            null,
+            EmotionRoute.INACTIVE,
+        )
+        assertEquals(APPROACH_HUMOR, ruled.permit.approach)
+        assertTrue(ruled.permit.exemplifying.use)
+    }
 }

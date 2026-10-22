@@ -97,6 +97,7 @@ import com.verlintas.baic2.floatball.experts.EmotionTurn
 import com.verlintas.baic2.floatball.experts.ExpertPanel
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyAssets
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyDomain
+import com.verlintas.baic2.floatball.experts.strategist.EmotionRouting
 import com.verlintas.baic2.floatball.experts.strategist.RuledPermit
 import com.verlintas.baic2.floatball.experts.strategist.Strategist
 import com.verlintas.baic2.floatball.experts.strategist.StrategistPrompt
@@ -1542,6 +1543,7 @@ class ScreenAdvisor @Inject constructor(
                 smalltalk,
                 handoffAvoid,
                 escalationOutcome.privacyDomain,
+                escalationOutcome.emotion,
             )
         }
     }
@@ -1800,6 +1802,7 @@ class ScreenAdvisor @Inject constructor(
         smalltalk: TopicEngine.TopicPick? = null,
         handoffAvoidSection: String? = null,
         privacyDomain: PrivacyDomain? = null,
+        emotionVerdict: EmotionJudge.EmotionVerdict? = null,
     ) {
         activeConversationId = conversationId
         val settings = prefs.state.value
@@ -2147,6 +2150,12 @@ class ScreenAdvisor @Inject constructor(
         // 返回（ruled=null, triggered=false）；90s 缓存使连续多回合与自动发送
         // 路径共享同一许可单。任何失败静默降级：已触发而无许可 → 渲染禁令段
         // （等价 never 现状口径），回合链条零中断。
+        //
+        // E-e 情绪段（方案 §4.6）：三档裁决 → 映射行 → 零 LLM 字符串段随手段库
+        // 段注入（预算锁：情绪不新增任何 LLM 调用）；平稳/观察态/未列组合恒
+        // 不干预（原则 5）。映射层纯函数无失败面，不进 runCatching。
+        val emotionRoute = EmotionRouting.route(emotionVerdict)
+        val emotionSection = StrategistPrompt.emotionSection(emotionRoute)
         var tacticToolkit: String? = null
         var tacticCommand: String? = null
         var tacticFallback: String? = null
@@ -2173,6 +2182,7 @@ class ScreenAdvisor @Inject constructor(
                         },
                     personaDigest = sources.boundDigest.orEmpty(),
                     privacyDomain = privacyDomain?.code,
+                    emotion = emotionRoute,
                 )
             }.getOrNull()
             val ruled = outcome?.ruled
@@ -2209,8 +2219,10 @@ class ScreenAdvisor @Inject constructor(
             styleWithLength,
             strategySection,
             // T1-c 军师两段渲染：手段库段（恒开放）→ 作战指令段（有 Permit）
-            // / 降级禁令段（已触发无 Permit）。
+            // / 降级禁令段（已触发无 Permit）。E-e 情绪段（§4.6）紧随手段库段，
+            // 零 LLM 直插（与许可单无关，确定档命中映射行即注入）。
             tacticToolkit,
+            emotionSection,
             tacticCommand,
             tacticFallback,
             // 保温闲聊段紧跟策略段（KPI 覆盖：自然度优先于任务推进，见 WarmChatPrompt）。

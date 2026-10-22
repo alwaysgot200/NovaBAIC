@@ -181,4 +181,48 @@ class TacticPromptBuilderTest {
             prompt.indexOf(StrategistAssets.REDLINE_WORDS.first()),
         )
     }
+
+    // ---- 情绪段（E-e，方案 §4.6）----
+
+    @Test
+    fun `情绪段不干预时恒省略`() {
+        assertNull(StrategistPrompt.emotionSection(EmotionRoute.INACTIVE))
+    }
+
+    @Test
+    fun `情绪段渲染情绪行重点与禁用`() {
+        val section = StrategistPrompt.emotionSection(EmotionRouting.RAGE.copy(intensity = 4))
+        assertNotNull(section)
+        assertTrue(section!!.contains("【对方当前情绪】盛怒（强度 4）"))
+        assertTrue(section.contains("重点用共情回应"))
+        assertTrue(section.contains("禁用："))
+        assertTrue(section.contains("幽默化解"))
+        assertTrue(section.contains("推进"))
+    }
+
+    @Test
+    fun `userPrompt 携带情绪段且不干预时无该段`() {
+        val active = StrategistPrompt.userPrompt(
+            stageIntent = "",
+            incomingText = "你怎么能这样",
+            recentDigest = "",
+            personaDigest = "",
+            strategy = neverStrategy,
+            privacyPolicy = PRIVACY_POLICY_HANDOFF,
+            privacyDomain = null,
+            emotion = EmotionRouting.RAGE.copy(intensity = 4),
+        )
+        assertTrue(active.contains("【对方当前情绪】"))
+
+        val inactive = StrategistPrompt.userPrompt(
+            stageIntent = "",
+            incomingText = "在吗",
+            recentDigest = "",
+            personaDigest = "",
+            strategy = neverStrategy,
+            privacyPolicy = PRIVACY_POLICY_HANDOFF,
+            privacyDomain = null,
+        )
+        assertFalse(inactive.contains("【对方当前情绪】"))
+    }
 }

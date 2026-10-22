@@ -54,6 +54,8 @@ class Strategist @Inject constructor(
         val ruled: RuledPermit?,
         val createdAt: Long,
         val fingerprint: Set<String>,
+        /** E-e 情绪行键：情绪变了许可单必须重出（缓存不跨情绪复用）。 */
+        val emotionKey: String,
     )
 
     private val cache = HashMap<Long, CacheEntry>()
@@ -62,6 +64,9 @@ class Strategist @Inject constructor(
     /**
      * 许可单：触发条件不满足 → [PermitOutcome](null, false)（零成本）；
      * 缓存命中 → 直接复用（fromCache=true）；否则轻 LLM 一发 + 四道闸执法。
+     * [emotion] 为 E-e 情绪→方针映射产物（方案 §4.6）：进许可单现场段与
+     * enforce 约束，并纳入缓存键；**不进触发条件**（情绪不新增 LLM 调用，
+     * 方案 §五 预算锁）。
      */
     suspend fun permit(
         contactId: Long,
@@ -72,12 +77,14 @@ class Strategist @Inject constructor(
         recentDigest: String,
         personaDigest: String,
         privacyDomain: String?,
+        emotion: EmotionRoute = EmotionRoute.INACTIVE,
     ): PermitOutcome {
         val fingerprint = PromptDedup.fingerprint(incomingText)
         val now = System.currentTimeMillis()
         cacheMutex.withLock {
             val cached = cache[contactId]
             if (cached != null && now - cached.createdAt <= CACHE_TTL_MS &&
+                cached.emotionKey == emotion.key &&
                 fingerprintSimilar(cached.fingerprint, fingerprint)
             ) {
                 return PermitOutcome(
@@ -108,6 +115,7 @@ class Strategist @Inject constructor(
                             strategy = strategy,
                             privacyPolicy = privacyPolicy.orEmpty(),
                             privacyDomain = privacyDomain,
+                            emotion = emotion,
                         ),
                         maxTokens = PERMIT_MAX_TOKENS,
                         temperature = PERMIT_TEMPERATURE,
@@ -116,11 +124,11 @@ class Strategist @Inject constructor(
             }
         }
         val ruled = raw?.let { parsed -> StrategistRules.parse(parsed)?.let {
-            StrategistRules.enforce(it, strategy, privacyPolicy)
+            StrategistRules.enforce(it, strategy, privacyPolicy, emotion)
         } }
 
         cacheMutex.withLock {
-            cache[contactId] = CacheEntry(ruled, System.currentTimeMillis(), fingerprint)
+            cache[contactId] = CacheEntry(ruled, System.currentTimeMillis(), fingerprint, emotion.key)
         }
         return PermitOutcome(ruled, fromCache = false, triggered = true)
     }
