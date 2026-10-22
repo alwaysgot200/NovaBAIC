@@ -419,28 +419,30 @@ object EmotionJudge {
             )
         }
 
-        // 原则 2：基线偏离（样本不足不判，绝不按全局绝对值硬判人格差异）
+        // 原则 2：基线偏离（样本不足不判，绝不按全局绝对值硬判人格差异；
+        // 阈值唯一来源 EmotionBaselineCalculator.deviation，与 UI 基线对照共用）
         val baseline = input.baseline
         if (baseline != null && baseline.usable) {
             val len = input.text.trim().length
             val gap = cue.replyIntervalMs?.takeIf { it >= 0 }
+            val dev = EmotionBaselineCalculator.deviation(len, gap, baseline)
             when {
-                len > 0 && len < baseline.avgLen * LENGTH_DROP_RATIO -> add(
+                dev.lengthDrop -> add(
                     "length_drop", -1, listOf(EmotionLabels.PERFUNCTORY),
                     "篇幅骤降：本条 $len 字不足基线均值 ${baseline.avgLen.toInt()} 字的三成（原则 2 偏离）",
                 )
-                len > 0 && len > baseline.avgLen * LONG_REPLY_RATIO -> add(
+                dev.lengthRise -> add(
                     "long_reply", 1, listOf(EmotionLabels.JOY),
                     "篇幅高于基线 1.5 倍（高投入信号，原则 2）",
                 )
             }
-            if (gap != null && baseline.avgIntervalMs > 0) {
+            if (gap != null) {
                 when {
-                    gap > baseline.avgIntervalMs * INTERVAL_STRETCH_RATIO -> add(
+                    dev.intervalStretch -> add(
                         "interval_stretch", -1, listOf(EmotionLabels.PERFUNCTORY),
                         "回复间隔拉长：${gap / 60000} 分钟 vs 基线 ${baseline.avgIntervalMs / 60000} 分钟（原则 2 偏离）",
                     )
-                    gap < baseline.avgIntervalMs * QUICK_REPLY_RATIO -> add(
+                    dev.quickReply -> add(
                         "quick_reply", 1, listOf(EmotionLabels.JOY),
                         "回复节奏明显加快（热度上升信号，原则 2）",
                     )
@@ -501,8 +503,4 @@ object EmotionJudge {
 
     private const val STREAK_MIN = 3
     private const val NEG_LOOKBACK = 4
-    private const val LENGTH_DROP_RATIO = 0.3
-    private const val LONG_REPLY_RATIO = 1.5
-    private const val INTERVAL_STRETCH_RATIO = 1.8
-    private const val QUICK_REPLY_RATIO = 0.4
 }
