@@ -25,6 +25,8 @@ import com.verlintas.baic2.floatball.advisor.data.toEntry
 import com.verlintas.baic2.floatball.advisor.data.toEntity
 import com.verlintas.baic2.floatball.advisor.data.toEventEntity
 import com.verlintas.baic2.floatball.advisor.data.toTrendPoint
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -40,7 +42,14 @@ import javax.inject.Singleton
 @Singleton
 class EmotionAssessor @Inject constructor(
     private val db: AdvisorDatabase,
+    @ApplicationContext context: Context,
 ) {
+
+    /**
+     * 慢车道节流戳。**不能**用 emotion_baseline.updatedAt 当节流依据——判定回合的
+     * [baselineFor] 每次都会 upsert 基线行刷新它，滚动重算会被永久挡在门外。
+     */
+    private val stamps = context.getSharedPreferences("emotion_slow_lane", Context.MODE_PRIVATE)
 
     /**
      * 判定一条来信的情绪。[samples] 为旧→新的来信序列（末条 = [text] 对应的
@@ -114,10 +123,19 @@ class EmotionAssessor @Inject constructor(
     }
 
     /**
+     * 基线滚动重算是否到期（[BASELINE_ROLL_INTERVAL_MS] 节流，慢车道取样前探针，
+     * 未到期调用方免付跨会话取样开销）。节流戳独立持久化（[stamps]），
+     * 与判定回合写入的 emotion_baseline.updatedAt 无关。
+     */
+    fun baselineRollDue(contactId: Long, nowMs: Long): Boolean =
+        nowMs - stamps.getLong(rollStampKey(contactId), 0L) >= BASELINE_ROLL_INTERVAL_MS
+
+    /**
      * 跨会话基线全量滚动重算（E-g 慢车道，方案 §4.7）：[samples] 由调用方跨
      * 该联系人全部参谋会话收集（旧→新），距上次重算不足 [BASELINE_ROLL_INTERVAL_MS]
      * 直接跳过；失败静默，绝不阻断回合。判定回合内的 [baselineFor] 小窗口快照
-     * 照旧，本方法是慢车道的全量校准。
+     * 照旧，本方法是慢车道的全量校准。先记戳再重算：重算失败也等下个周期，
+     * 宁缓勿让慢车道反复空转。
      */
     suspend fun maybeRecalcBaseline(
         contactId: Long,
@@ -125,12 +143,14 @@ class EmotionAssessor @Inject constructor(
         nowMs: Long = System.currentTimeMillis(),
     ) {
         if (samples.isEmpty()) return
-        val last = runCatching { db.emotionBaselineDao().get(contactId) }.getOrNull()?.updatedAt ?: 0L
-        if (nowMs - last < BASELINE_ROLL_INTERVAL_MS) return
+        if (!baselineRollDue(contactId, nowMs)) return
+        stamps.edit().putLong(rollStampKey(contactId), nowMs).apply()
         runCatching {
             db.emotionBaselineDao().save(EmotionBaselineCalculator.calculate(samples, nowMs).toEntity(contactId))
         }
     }
+
+    private fun rollStampKey(contactId: Long): String = "baseline_roll_$contactId"
 
     /**
      * 联系人情绪轨迹（E-g，方案 §4.7）：近 [TREND_WINDOW_DAYS] 天 emotion_events

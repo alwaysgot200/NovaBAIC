@@ -100,14 +100,6 @@ interface EmotionMiningDao {
     @Query("SELECT * FROM emotion_mining_candidates WHERE id = :id")
     suspend fun get(id: Long): EmotionMiningCandidateEntity?
 
-    /** 全局最近一次挖词时间（全局节流依据；空表 → null）。 */
-    @Query("SELECT MAX(createdAt) FROM emotion_mining_candidates")
-    suspend fun latestCreatedAt(): Long?
-
-    /** 某联系人最近一次挖词时间（每联系人每周 ≤1 次的节流依据）。 */
-    @Query("SELECT MAX(createdAt) FROM emotion_mining_candidates WHERE contactId IS :contactId")
-    suspend fun latestFor(contactId: Long?): Long?
-
     @Update
     suspend fun update(row: EmotionMiningCandidateEntity)
 }

@@ -30,6 +30,8 @@ import com.verlintas.baic2.floatball.advisor.data.encodeEmotionLabels
 import com.verlintas.baic2.floatball.advisor.data.decodeEmotionLabels
 import com.verlintas.baic2.floatball.advisor.data.toEntity
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -134,7 +136,25 @@ class EmotionLexiconMiner @Inject constructor(
     private val db: AdvisorDatabase,
     private val agentRepository: AgentRepository,
     private val auxiliaryTasks: AuxiliaryTasks,
+    @ApplicationContext context: Context,
 ) {
+
+    /**
+     * 挖词节流戳。**不能**以 emotion_mining_candidates 行时间当节流依据——
+     * 无产出/解析失败的尝试不落行，会漏成"每回合都挖"，击穿每周 ≤1 次预算；
+     * 这里按"尝试"记戳（含失败），宁缺勿滥。
+     */
+    private val stamps = context.getSharedPreferences("emotion_slow_lane", Context.MODE_PRIVATE)
+
+    /**
+     * 挖词是否到期（全局 [GLOBAL_INTERVAL_MS] + 每联系人 [PER_CONTACT_INTERVAL_MS]），
+     * 取样前探针，未到期调用方免付语料收集开销。
+     */
+    fun mineDue(contactId: Long?, nowMs: Long): Boolean {
+        if (nowMs - stamps.getLong(STAMP_GLOBAL, 0L) < GLOBAL_INTERVAL_MS) return false
+        if (contactId == null) return true
+        return nowMs - stamps.getLong(STAMP_CONTACT_PREFIX + contactId, 0L) >= PER_CONTACT_INTERVAL_MS
+    }
 
     /**
      * 机会性挖词：过节流门 + 语料非空才发起一次慢车道轻调用，产出待审候选。
@@ -145,7 +165,9 @@ class EmotionLexiconMiner @Inject constructor(
         texts: List<String>,
         nowMs: Long = System.currentTimeMillis(),
     ): Int = withContext(Dispatchers.Default) {
-        if (!withinThrottle(contactId, nowMs)) return@withContext 0
+        if (!mineDue(contactId, nowMs)) return@withContext 0
+        // 先记戳再调用：LLM 失败/无产出同样占额，防预算泄漏（方案 §五 预算表）。
+        markMineAttempt(contactId, nowMs)
         val corpus = texts.map { it.trim() }.filter { it.isNotEmpty() }
             .distinct()
             .takeLast(CORPUS_LINES)
@@ -213,11 +235,11 @@ class EmotionLexiconMiner @Inject constructor(
             scopeContactId = row.contactId,
             note = row.reason,
         )
-        runCatching { db.emotionLexiconDao().insertAll(listOf(entry.toEntity())) }
-        runCatching {
+        // 词库写入失败不标记 adopted（宁可重试，也不能出现"已采纳却没词"的断点）。
+        if (!runCatching { db.emotionLexiconDao().insertAll(listOf(entry.toEntity())) }.isSuccess) return false
+        return runCatching {
             db.emotionMiningDao().update(row.copy(status = EMOTION_MINING_ADOPTED))
         }.isSuccess
-        return true
     }
 
     /** 拒绝候选：标记 rejected 并保留（拒绝记忆，同类建议不再提）。 */
@@ -229,12 +251,11 @@ class EmotionLexiconMiner @Inject constructor(
         }.isSuccess
     }
 
-    /** 节流门：每联系人每周 ≤1 次 + 全局节流（方案 §五 预算表）。 */
-    private suspend fun withinThrottle(contactId: Long?, nowMs: Long): Boolean {
-        val global = runCatching { db.emotionMiningDao().latestCreatedAt() }.getOrNull()
-        if (global != null && nowMs - global < GLOBAL_INTERVAL_MS) return false
-        val perContact = runCatching { db.emotionMiningDao().latestFor(contactId) }.getOrNull()
-        return perContact == null || nowMs - perContact >= PER_CONTACT_INTERVAL_MS
+    /** 记挖词尝试戳（失败/无产出同样占额）。 */
+    private fun markMineAttempt(contactId: Long?, nowMs: Long) {
+        val editor = stamps.edit().putLong(STAMP_GLOBAL, nowMs)
+        if (contactId != null) editor.putLong(STAMP_CONTACT_PREFIX + contactId, nowMs)
+        editor.apply()
     }
 
     /** 标签 → 入库极性（喜 +1 / 负面 −1 / 其余 0，与判定引擎同口径）。 */
@@ -256,6 +277,10 @@ class EmotionLexiconMiner @Inject constructor(
     companion object {
         /** AI 挖掘词条初始权重（低于内置 1.0，判错反馈可再降，方案 §4.7）。 */
         const val AI_MINED_WEIGHT = 0.8f
+
+        /** 慢车道节流戳键（SharedPreferences，与 EmotionAssessor 同文件各用各键）。 */
+        private const val STAMP_GLOBAL = "mine_global"
+        private const val STAMP_CONTACT_PREFIX = "mine_contact_"
 
         /** 全局挖词最小间隔（相邻两次慢车道挖掘）。 */
         val GLOBAL_INTERVAL_MS = TimeUnit.DAYS.toMillis(3)

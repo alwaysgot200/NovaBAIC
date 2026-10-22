@@ -52,7 +52,6 @@ import com.verlintas.baic2.floatball.advisor.emotion.EmotionAssessor
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionCueExtractor
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionJudge
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionLexiconMiner
-import com.verlintas.baic2.floatball.advisor.emotion.EmotionMessageSample
 import com.verlintas.baic2.floatball.advisor.data.EMOTION_REASON_VETO
 import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
 import com.verlintas.baic2.floatball.advisor.data.GOAL_ACTIVE
@@ -2588,24 +2587,34 @@ class ScreenAdvisor @Inject constructor(
      * 绝不阻断参谋回合。
      */
     private suspend fun maybeEmotionSlowLane(conversationId: Long, contact: ContactRef) {
+        val nowMs = System.currentTimeMillis()
+        // 取样是慢车道最贵的一步：两个消费者都没到期就直接退（探针只读一跳戳）。
+        if (!emotionAssessor.baselineRollDue(contact.contactId, nowMs) &&
+            !lexiconMiner.mineDue(contact.contactId, nowMs)
+        ) {
+            return
+        }
         val conversationIds = runCatching { contactDirectory.conversationIds(contact.contactId) }
             .getOrDefault(emptyList())
             .ifEmpty { listOf(conversationId) }
         val samples = conversationIds
             .take(EMOTION_SLOW_CONVERSATIONS)
             .flatMap { id ->
-                runCatching { historyGateway.recentMessages(id, EMOTION_SLOW_MESSAGES) }
+                val lines = runCatching { historyGateway.recentMessages(id, EMOTION_SLOW_MESSAGES) }
                     .getOrDefault(emptyList())
+                    .filter { it.role == ChatRole.USER }
+                    .mapNotNull { message ->
+                        IncomingCue.latestIncoming(stripScreenLabel(message.content))
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { EmotionCueExtractor.IncomingSample(text = it, timestampMs = message.createdAt) }
+                    }
+                    .sortedBy { it.timestampMs }
+                // 复用判定同款提取器：问号/短确认追问标志 + 连续同文折叠，
+                // 滚动重算口径与回合内基线快照一致（activeFollowRatio 不被抹零）。
+                EmotionCueExtractor.extract(lines).samples
             }
-            .filter { it.role == ChatRole.USER }
-            .mapNotNull { message ->
-                IncomingCue.latestIncoming(stripScreenLabel(message.content))
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { EmotionMessageSample(text = it, timestampMs = message.createdAt) }
-            }
-            .sortedBy { it.timestampMs }
-        emotionAssessor.maybeRecalcBaseline(contact.contactId, samples)
-        lexiconMiner.maybeMine(contact.contactId, samples.map { it.text })
+        emotionAssessor.maybeRecalcBaseline(contact.contactId, samples, nowMs)
+        lexiconMiner.maybeMine(contact.contactId, samples.map { it.text }, nowMs)
     }
 
     /**
