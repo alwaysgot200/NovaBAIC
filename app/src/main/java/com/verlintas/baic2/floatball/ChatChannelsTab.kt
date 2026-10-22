@@ -24,9 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -60,6 +58,7 @@ internal fun ChatChannelsTab(
     contactId: Long,
     scroll: androidx.compose.foundation.ScrollState?,
 ) {
+    // 同 AdvisorSessionsTab：滚动由 PageScaffold 外层负责，勿再套 verticalScroll。
     val scope = rememberCoroutineScope()
     val activity = advisorActivity()
     val contacts = rememberContactRepository()
@@ -72,10 +71,7 @@ internal fun ChatChannelsTab(
         channels = runCatching { contacts.channelsOf(contactId) }.getOrDefault(emptyList())
     }
 
-    Column(
-        modifier = (scroll?.let { Modifier.verticalScroll(it) } ?: Modifier)
-            .padding(horizontal = 16.dp),
-    ) {
+    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },

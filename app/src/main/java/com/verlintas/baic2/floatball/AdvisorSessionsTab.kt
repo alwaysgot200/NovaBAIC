@@ -79,6 +79,9 @@ internal fun AdvisorSessionsTab(
     contactId: Long,
     scroll: androidx.compose.foundation.ScrollState?,
 ) {
+    // scroll 仅用于滚动定位（同 GoalsTab 约定）；滚动由 PageScaffold 外层
+    // verticalScroll(tabScroll) 统一负责——此处再套 verticalScroll 会与
+    // 外层共享同一 ScrollState，高度塌陷为 0 导致整个列表不显示。
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val activity = advisorActivity()
@@ -114,10 +117,7 @@ internal fun AdvisorSessionsTab(
         }.getOrDefault(emptyList())
     }
 
-    Column(
-        modifier = (scroll?.let { Modifier.verticalScroll(it) } ?: Modifier)
-            .padding(horizontal = 16.dp),
-    ) {
+    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
