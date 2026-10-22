@@ -19,6 +19,7 @@
 
 package com.verlintas.baic2.floatball.advisor.emotion
 
+import kotlinx.serialization.Serializable
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -138,7 +139,9 @@ object EmotionJudge {
     /**
      * 证据链条目（分屏"点开证据链"透出）。
      * score=0 的中性命中也保留供解释（"好的（中性确认，不构成证据）"）。
+     * 带 [Serializable] 供 emotion_events.evidenceJson 落库回放。
      */
+    @Serializable
     data class Evidence(
         val kind: String,
         val term: String,
@@ -164,6 +167,8 @@ object EmotionJudge {
         }
     }
 
+    /** 标签得分（emotion_events.labelsJson 落库口径，[Serializable]）。 */
+    @Serializable
     data class LabelScore(val label: String, val score: Double)
 
     /** 三档输出（方案 §4.4 原则 5）：确定=影响方针；观察态=仅记录；平稳=不干预。 */
@@ -180,6 +185,19 @@ object EmotionJudge {
         val confidence: EmotionConfidence,
         val evidence: List<Evidence>,
         val reason: String,
+    )
+
+    /**
+     * 平稳档基准值（判定降级/无输入口径）：强度 1、置信高、零证据。
+     * 合议团与哨官降级统一引用，保证「平稳」输出逐字一致。
+     */
+    val CALM_VERDICT = EmotionVerdict(
+        state = EmotionState.CALM,
+        labels = emptyList(),
+        intensity = 1,
+        confidence = EmotionConfidence.HIGH,
+        evidence = emptyList(),
+        reason = "无有效情绪证据，判平稳",
     )
 
     /** 主判定入口：纯函数，同输入恒同输出。 */
@@ -463,7 +481,8 @@ object EmotionJudge {
         return count
     }
 
-    private fun isShortConfirm(text: String): Boolean {
+    /** 短确认判定（原则 3 口径，对外公开：行为线索提取与连续累积共用）。 */
+    fun isShortConfirm(text: String): Boolean {
         if (text.isEmpty() || text.length > SHORT_REPLY_MAX_LEN) return false
         if (text.contains('？') || text.contains('?')) return false
         return CONFIRM_WORDS.any { text == it || text == "$it。" || text == "$it，" }

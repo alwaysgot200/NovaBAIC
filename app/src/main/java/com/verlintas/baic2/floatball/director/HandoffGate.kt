@@ -21,6 +21,7 @@ package com.verlintas.baic2.floatball.director
 
 import com.verlintas.baic2.core.data.repository.AgentRepository
 import com.verlintas.baic2.core.engine.AuxiliaryTasks
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionLabels
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyAssets
 import javax.inject.Inject
@@ -33,7 +34,7 @@ import kotlinx.serialization.Serializable
 /**
  * 合议共享分类器的输出协议（输出永远不可信：畸形/超时一律按 null 处理）。
  * 一次调用同时产出接管（E1）与隐私（F1）两域结论——N 个专家 ≠ N 次 LLM
- * （子代理化组织模式 §3 成本纪律）。
+ * （子代理化组织模式 §3 成本纪律）；[emotion] 仅在精判请求时输出（E-d）。
  */
 @Serializable
 internal data class IncomingLlmVerdict(
@@ -45,12 +46,29 @@ internal data class IncomingLlmVerdict(
     val privacy: Boolean = false,
     /** privacy=true 时的域 code（p1~p12/other）；未知码由 fromCode 归 other。 */
     val privacyDomain: String = "",
+    /** 情绪精判复核（E-d）：仅 refineEmotion 请求时可能非空；畸形=弃用回库判。 */
+    val emotion: IncomingEmotionRefine? = null,
 ) {
 
     /** kind 归一：任何非 handoff 输出（含畸形大小写）都视为 normal。 */
     val isHandoff: Boolean
         get() = kind.trim().equals("handoff", ignoreCase = true)
 }
+
+/**
+ * 情绪精判复核输出（E-d）：低置信 + 高价值回合时随共享分类器同一次调用附带
+ * 产出（**不新增 LLM 调用**）。字段畸形由合议团 [com.verlintas.baic2.floatball
+ * .experts.ExpertPanel.applyEmotionRefine] 校验后弃用回库判。
+ */
+@Serializable
+internal data class IncomingEmotionRefine(
+    /** confirmed / watch / calm；其余视为畸形。 */
+    val state: String = "",
+    /** 标签码（EmotionLabels 口径）；非空档须至少一个合法标签。 */
+    val labels: List<String> = emptyList(),
+    /** 强度 1..5；0/越界视为未给出。 */
+    val intensity: Int = 0,
+)
 
 /**
  * 合议共享分类器（方案 2026-10-20 §2.2 主判定器 + 隐私闸门方案 §3.3 合并升级）：
@@ -72,24 +90,29 @@ class HandoffGate @Inject constructor(
 
     /**
      * 轻分类：[text] 为对方来信原文（IncomingCue 抽取的来信段）。
+     * [refineEmotion]=true（E-d）：同一次调用附带情绪精判复核（prompt 追加
+     * [EMOTION_REFINE_SECTION]，输出多一个 emotion 字段）——**不新增 LLM 调用**，
+     * 典型回合预算零增加。
      * @return 两域结论 / null=不可判定（降级备胎）。
      */
-    internal suspend fun classify(text: String): IncomingLlmVerdict? = withContext(Dispatchers.Default) {
-        val config = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
-            ?: return@withContext null
-        val raw = withTimeoutOrNull(CLASSIFY_TIMEOUT_MS) {
-            runCatching {
-                auxiliaryTasks.complete(
-                    config = config,
-                    systemPrompt = SYSTEM_PROMPT,
-                    userPrompt = text.take(TEXT_CLIP_CHARS),
-                    maxTokens = CLASSIFY_MAX_TOKENS,
-                    temperature = CLASSIFY_TEMPERATURE,
-                )
-            }.getOrNull()
+    internal suspend fun classify(text: String, refineEmotion: Boolean = false): IncomingLlmVerdict? =
+        withContext(Dispatchers.Default) {
+            val config = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
+                ?: return@withContext null
+            val systemPrompt = if (refineEmotion) SYSTEM_PROMPT + EMOTION_REFINE_SECTION else SYSTEM_PROMPT
+            val raw = withTimeoutOrNull(CLASSIFY_TIMEOUT_MS) {
+                runCatching {
+                    auxiliaryTasks.complete(
+                        config = config,
+                        systemPrompt = systemPrompt,
+                        userPrompt = text.take(TEXT_CLIP_CHARS),
+                        maxTokens = CLASSIFY_MAX_TOKENS,
+                        temperature = CLASSIFY_TEMPERATURE,
+                    )
+                }.getOrNull()
+            }
+            raw?.let { parse(it) }
         }
-        raw?.let { parse(it) }
-    }
 
     private fun parse(raw: String): IncomingLlmVerdict? {
         val text = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
@@ -139,6 +162,20 @@ class HandoffGate @Inject constructor(
             append("{\"kind\":\"handoff\",\"category\":\"索取物品|日程出席|私人事实|决策请求\"," +
                 "\"privacy\":true,\"privacyDomain\":\"p1|p2|p3|p4|p5|p6|p7|p8|p9|p10|p11|p12|other\"}\n")
             append("{\"kind\":\"normal\",\"privacy\":false,\"privacyDomain\":\"\"}")
+        }
+
+        /**
+         * 情绪精判复核段（E-d 追加，仅 refineEmotion 请求时拼接）：对同一条来信
+         * 复核情绪三要素。保守偏置与词库判定五原则同向——**中性确认（如「好的」）
+         * 单句绝不判敷衍/冷淡**，证据不足一律 calm。
+         */
+        val EMOTION_REFINE_SECTION = buildString {
+            append("\n同时复核对方这条消息的情绪（输出里的 emotion 字段）：\n")
+            append("state 三档：confirmed（证据充分）/watch（疑似）/calm（平稳）；")
+            append("labels 从 ${EmotionLabels.ALL.joinToString(",")} 里选 0-2 个；intensity 1-5。\n")
+            append("判定纪律：单词不定论——「好的」「嗯」这类中性确认单独出现绝不判敷衍/冷淡；")
+            append("只有连续敷衍、明显负面措辞或行为反差才算证据；证据不足一律 calm。\n")
+            append("emotion 形如：\"emotion\":{\"state\":\"calm\",\"labels\":[],\"intensity\":1}\n")
         }
     }
 }

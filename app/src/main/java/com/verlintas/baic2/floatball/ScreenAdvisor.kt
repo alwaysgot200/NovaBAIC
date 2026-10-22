@@ -48,6 +48,8 @@ import com.verlintas.baic2.floatball.advisor.GoalRepository
 import com.verlintas.baic2.floatball.advisor.HeatRules
 import com.verlintas.baic2.floatball.advisor.MissionJudgeRunner
 import com.verlintas.baic2.floatball.advisor.StrategyBrief
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionCueExtractor
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionJudge
 import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
 import com.verlintas.baic2.floatball.advisor.data.GOAL_ACTIVE
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L1
@@ -91,6 +93,7 @@ import com.verlintas.baic2.floatball.director.HandoffCategory
 import com.verlintas.baic2.floatball.director.TopicEngine
 import com.verlintas.baic2.floatball.director.TopicEngineStore
 import com.verlintas.baic2.floatball.director.WarmChatPrompt
+import com.verlintas.baic2.floatball.experts.EmotionTurn
 import com.verlintas.baic2.floatball.experts.ExpertPanel
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyAssets
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyDomain
@@ -1494,7 +1497,7 @@ class ScreenAdvisor @Inject constructor(
         var handoffAvoid: String? = null
         var escalationOutcome = EscalationOutcome()
         if (!skipDirectorRoute && backgroundTurn && contact != null) {
-            escalationOutcome = judgeEscalation(conversationId, contact)
+            escalationOutcome = judgeEscalation(conversationId, contact, turnMessageId)
             isHandoff = escalationOutcome.isHandoff
             handoffAvoid = escalationOutcome.avoidSection
         }
@@ -1561,6 +1564,11 @@ class ScreenAdvisor @Inject constructor(
          * null = 本回合无隐私命中。随 [runAdvisorTurn] 进许可单 userPrompt。
          */
         val privacyDomain: PrivacyDomain? = null,
+        /**
+         * 情感分析师三档裁决（E-d，方案 §4.5）：每回合随合议产生（含平稳），
+         * 供 E-e 军师情绪路由与消费；null = 合议旁路（异常/未触发判定）。
+         */
+        val emotion: EmotionJudge.EmotionVerdict? = null,
     )
 
     /**
@@ -1570,33 +1578,65 @@ class ScreenAdvisor @Inject constructor(
      * 隐私按联系人策略分流（handoff 档并入接管链 / bypass 档绕行+轻通报）、
      * 达成快通道照旧。旁路纪律：合议团意外失败静默降级为不接管，绝不阻断回合。
      */
-    private suspend fun judgeEscalation(conversationId: Long, contact: ContactRef): EscalationOutcome {
+    private suspend fun judgeEscalation(
+        conversationId: Long,
+        contact: ContactRef,
+        turnMessageId: Long? = null,
+    ): EscalationOutcome {
         if (!prefs.state.value.escalationEnabled) return EscalationOutcome()
-        val question = runCatching { historyGateway.recentMessages(conversationId, 1) }
-            .getOrNull()
-            ?.lastOrNull { it.role == ChatRole.USER }
-            ?.content
+        val messages = runCatching {
+            historyGateway.recentMessages(conversationId, EMOTION_HISTORY_MESSAGES)
+        }.getOrNull().orEmpty()
+        val question = messages.lastOrNull { it.role == ChatRole.USER }?.content
             ?: return EscalationOutcome()
         val incoming = IncomingCue.latestIncoming(stripScreenLabel(question))
             ?.takeIf { it.isNotBlank() }
             ?: return EscalationOutcome()
-        val review = runCatching { expertPanel.reviewIncoming(incoming) }
-            .getOrElse { return EscalationOutcome() }
+        // 情绪判定输入（E-d，方案 §4.5）：来信窗口逐条取样（含当前条），行为线索
+        // 由 EmotionCueExtractor 提取；不可得的线索传 false/null，绝不臆测。
+        val samples = messages.mapNotNull { message ->
+            if (message.role != ChatRole.USER) return@mapNotNull null
+            IncomingCue.latestIncoming(stripScreenLabel(message.content))
+                ?.takeIf { it.isNotBlank() }
+                ?.let { EmotionCueExtractor.IncomingSample(it, message.createdAt) }
+        }
+        val review = runCatching {
+            expertPanel.reviewIncoming(
+                incoming,
+                EmotionTurn(
+                    contactId = contact.contactId,
+                    conversationId = conversationId,
+                    turnMessageId = turnMessageId,
+                    samples = samples,
+                    assessDim = assessDim(contact.contactId),
+                ),
+            )
+        }.getOrElse { return EscalationOutcome() }
         // 接管命中：走 E1 接管链（铃声通报 + await-human 挂起 + 抑制 AI 草稿）。
         if (review.handoff.handoff) {
             return EscalationOutcome(
                 isHandoff = true,
                 category = review.handoff.category,
                 incoming = incoming,
+                emotion = review.emotion,
             )
         }
         if (review.handoff.uncertain) {
             // 严格档：uncertain 也视同接管转通报（宁严勿松，方案 §十.1）；
             // 宽松档（默认）：放行正常回答，仅挂生成端回避约束。
             return if (prefs.state.value.escalationStrict) {
-                EscalationOutcome(isHandoff = true, category = null, incoming = incoming)
+                EscalationOutcome(
+                    isHandoff = true,
+                    category = null,
+                    incoming = incoming,
+                    emotion = review.emotion,
+                )
             } else {
-                EscalationOutcome(incoming = incoming, avoidSection = HANDOFF_AVOID_SECTION)
+                EscalationOutcome(
+                    incoming = incoming,
+                    avoidSection = HANDOFF_AVOID_SECTION,
+                    emotion = review.emotion,
+                )
             }
         }
         // F1 隐私闸门三分（隐私闸门方案 §3.4 + 裁量层 T1-c）：bypass 绕行+轻通报；
@@ -1612,12 +1652,17 @@ class ScreenAdvisor @Inject constructor(
                     avoidSection = PrivacyAssets.avoidSection(domain),
                     privacyBypass = domain,
                     privacyDomain = domain,
+                    emotion = review.emotion,
                 )
             }
             if (policy == PRIVACY_POLICY_ASSESS) {
                 // assess 档：不接管、不挂回避段，正常回答；是否披露由军师裁量
                 // + Gatekeeper 越许可检测兜底（裁量层方案 §五）。
-                return EscalationOutcome(incoming = incoming, privacyDomain = domain)
+                return EscalationOutcome(
+                    incoming = incoming,
+                    privacyDomain = domain,
+                    emotion = review.emotion,
+                )
             }
             // handoff 档（默认）：接管链照走，类别=私人事实。
             return EscalationOutcome(
@@ -1625,6 +1670,7 @@ class ScreenAdvisor @Inject constructor(
                 category = HandoffCategory.PRIVACY,
                 incoming = incoming,
                 privacyDomain = domain,
+                emotion = review.emotion,
             )
         }
         // G 达成快通道（§3.1）：对方明示同意/敲定，当回合立即通报。
@@ -1633,8 +1679,23 @@ class ScreenAdvisor @Inject constructor(
                 escalationNotifier.notifyGoalHit(contact, conversationId, incoming)
             }
         }
-        return EscalationOutcome()
+        // 正常回合也带情绪裁决（E-d）：E-e 军师情绪路由依赖它，不只接管/隐私分支。
+        return EscalationOutcome(emotion = review.emotion)
     }
+
+    /**
+     * 高价值回合门原料（E-d，方案 §4.5 精判触发门之一）：联系人隐私策略=assess
+     * 档，或四维策略任一维=自评档——这类回合值得占用共享分类器的精判段。
+     * 取数失败按非高价值处理（旁路纪律，绝不阻断回合）。
+     */
+    private suspend fun assessDim(contactId: Long): Boolean = runCatching {
+        contactRepository.privacyPolicy(contactId) == PRIVACY_POLICY_ASSESS ||
+            contactRepository.talkerStrategy(contactId).let {
+                it.lying == TALKER_ASSESS ||
+                    it.promising == TALKER_ASSESS ||
+                    it.exemplifying == TALKER_ASSESS
+            }
+    }.getOrDefault(false)
 
     /**
      * 当前阶段驻留天数（F7 action_hint 旁路原料，方案 §5.6）：无联系人/无
@@ -3353,6 +3414,12 @@ class ScreenAdvisor @Inject constructor(
 
         /** 主回合历史的有界读取条数（与 AdvisorHistory.MAX_MESSAGES 对齐）。 */
         const val HISTORY_LOAD_MESSAGES = 60
+
+        /**
+         * 情绪判定回看的来信条数（E-d）：连续短确认累积（原则 3）与基线样本
+         * 都从这段窗口取，60 条足够喂满 STREAK_MIN=3 与基线最小样本量。
+         */
+        const val EMOTION_HISTORY_MESSAGES = 60
 
         /** 保温选题共享会话回看的用户消息条数（与专属会话台账口径一致）。 */
         const val SHARED_USED_MESSAGES = 60

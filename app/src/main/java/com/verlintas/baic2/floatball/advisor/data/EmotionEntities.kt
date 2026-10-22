@@ -23,6 +23,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionBaseline
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionJudge
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionLexiconEntry
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -39,6 +40,14 @@ const val EMOTION_STATE_CALM = "calm"
 const val EMOTION_CONFIDENCE_HIGH = "high"
 const val EMOTION_CONFIDENCE_MEDIUM = "medium"
 const val EMOTION_CONFIDENCE_LOW = "low"
+
+/**
+ * emotion_events.reason 台账键（`emotion_*` 家族，方案 §七 E-d）：
+ * 词库判定落 [EMOTION_REASON_JUDGE]；LLM 精判复核落 [EMOTION_REASON_REFINE]；
+ * 审查官情绪红线降级（E-f）落 `emotion_veto`——同族键可按前缀检索回放。
+ */
+const val EMOTION_REASON_JUDGE = "emotion_judge"
+const val EMOTION_REASON_REFINE = "emotion_refine"
 
 /**
  * 情绪信号词条（方案 §4.3.2）：**可运营数据资产**——用户可查看/增补/调权重/停用/
@@ -180,4 +189,58 @@ fun EmotionBaselineEntity.toDomain(): EmotionBaseline = EmotionBaseline(
     activeFollowRatio = activeFollowRatio,
     sampleCount = sampleCount,
     updatedAt = updatedAt,
+)
+
+// ───────────────────── 判定结论 → emotion_events 落库（E-d 台账） ─────────────────────
+
+/** 标签得分数组 → JSON（emotion_events.labelsJson，[{label,score}]）。 */
+fun encodeEmotionLabelScores(labels: List<EmotionJudge.LabelScore>): String =
+    labelJson.encodeToString(ListSerializer(EmotionJudge.LabelScore.serializer()), labels)
+
+/** JSON → 标签得分数组（畸形回空表）。 */
+fun decodeEmotionLabelScores(json: String): List<EmotionJudge.LabelScore> =
+    runCatching { labelJson.decodeFromString(ListSerializer(EmotionJudge.LabelScore.serializer()), json) }
+        .getOrDefault(emptyList())
+
+/** 证据链数组 → JSON（emotion_events.evidenceJson，分屏"点开证据链"回放）。 */
+fun encodeEmotionEvidence(evidence: List<EmotionJudge.Evidence>): String =
+    labelJson.encodeToString(ListSerializer(EmotionJudge.Evidence.serializer()), evidence)
+
+/** JSON → 证据链数组（畸形回空表）。 */
+fun decodeEmotionEvidence(json: String): List<EmotionJudge.Evidence> =
+    runCatching { labelJson.decodeFromString(ListSerializer(EmotionJudge.Evidence.serializer()), json) }
+        .getOrDefault(emptyList())
+
+/** 三档输出 → 落库码。 */
+fun EmotionJudge.EmotionState.code(): String = when (this) {
+    EmotionJudge.EmotionState.CONFIRMED -> EMOTION_STATE_CONFIRMED
+    EmotionJudge.EmotionState.WATCH -> EMOTION_STATE_WATCH
+    EmotionJudge.EmotionState.CALM -> EMOTION_STATE_CALM
+}
+
+/** 置信三档 → 落库码。 */
+fun EmotionJudge.EmotionConfidence.code(): String = when (this) {
+    EmotionJudge.EmotionConfidence.HIGH -> EMOTION_CONFIDENCE_HIGH
+    EmotionJudge.EmotionConfidence.MEDIUM -> EMOTION_CONFIDENCE_MEDIUM
+    EmotionJudge.EmotionConfidence.LOW -> EMOTION_CONFIDENCE_LOW
+}
+
+/** 判定结论 → 台账行（reason 传 `emotion_*` 键，见 [EMOTION_REASON_JUDGE]）。 */
+fun EmotionJudge.EmotionVerdict.toEventEntity(
+    contactId: Long,
+    conversationId: Long?,
+    turnMessageId: Long?,
+    reason: String,
+    createdAt: Long,
+): EmotionEventEntity = EmotionEventEntity(
+    contactId = contactId,
+    conversationId = conversationId,
+    turnMessageId = turnMessageId,
+    state = state.code(),
+    labelsJson = encodeEmotionLabelScores(labels),
+    intensity = intensity,
+    confidence = confidence.code(),
+    evidenceJson = encodeEmotionEvidence(evidence),
+    reason = reason,
+    createdAt = createdAt,
 )
