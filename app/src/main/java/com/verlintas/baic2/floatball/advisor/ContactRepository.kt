@@ -203,6 +203,15 @@ class ContactRepository @Inject constructor(
     suspend fun channelsOf(contactId: Long): List<ChatChannelEntity> =
         db.chatChannelDao().listForContact(contactId)
 
+    /** 删除一行聊天会话登记（2026-10-22 方案 §3.4）：仅删本应用记录，不碰真实聊天。 */
+    suspend fun deleteChannel(channelId: Long) =
+        db.chatChannelDao().delete(channelId)
+
+    /** 解除参谋会话与联系人的关联（方案 §3.3）：删 session_bindings 行，
+     *  会话与消息保留在上游 conversations/messages，主页「对话」列表仍可打开。 */
+    suspend fun unbindConversation(conversationId: Long) =
+        db.sessionBindingDao().deleteByConversation(conversationId)
+
     /** 命中后登记别名热度；标题是新变体则追加 alias（改名续档）。 */
     suspend fun recordAliasHit(contactId: Long, normalized: String, rawTitle: String, source: String) {
         val now = System.currentTimeMillis()

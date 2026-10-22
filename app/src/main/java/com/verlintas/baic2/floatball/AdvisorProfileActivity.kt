@@ -35,14 +35,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -133,6 +138,13 @@ class AdvisorProfileActivity : ComponentActivity() {
 
     @Inject
     lateinit var historyGateway: ContactHistoryGateway
+
+    /** 列表增删方案 §3.3：参谋会话彻底删除时的活跃会话防护（清转录/摘要/引用）。 */
+    @Inject
+    lateinit var screenAdvisor: ScreenAdvisor
+
+    @Inject
+    lateinit var advisorPrefs: AdvisorPrefs
 
     @Inject
     lateinit var conversationRepository: ConversationRepository
@@ -306,6 +318,8 @@ private fun ContactListScreen(
     var merges by remember { mutableStateOf<List<MergeRecordEntity>>(emptyList()) }
     // 快速绑定候选被消费（建档/绑到已有档案）后即收起卡片。
     var candidate by remember { mutableStateOf(candidateTitle?.takeIf { it.isNotBlank() }) }
+    // 列表项删除确认（方案 §3.2）：非空即弹共用确认弹窗。
+    var deleting by remember { mutableStateOf<ContactProfileEntity?>(null) }
 
     suspend fun refresh() {
         all = contacts.listAlive()
@@ -519,7 +533,29 @@ private fun ContactListScreen(
             } else {
                 stringResource(R.string.float_profile_bind_current_session)
             }
-            ContactCard(profile, bindCandidate = bindCandidate, bindText = bindText) { onOpen(profile.id) }
+            ContactCard(
+                profile,
+                bindCandidate = bindCandidate,
+                bindText = bindText,
+                onDelete = { deleting = profile },
+            ) { onOpen(profile.id) }
+        }
+
+        // 列表项删除确认：与详情页危险区同一套词（软删，档案从列表消失）。
+        deleting?.let { target ->
+            DeleteConfirmDialog(
+                title = stringResource(R.string.float_profile_delete_title),
+                message = stringResource(R.string.float_profile_delete_confirm, target.displayName),
+                confirmText = stringResource(R.string.float_profile_delete_confirm_btn),
+                onConfirm = {
+                    deleting = null
+                    scope.launch {
+                        contacts.deleteContact(target.id)
+                        refresh()
+                    }
+                },
+                onDismiss = { deleting = null },
+            )
         }
     }
 }
@@ -529,6 +565,7 @@ private fun ContactCard(
     profile: ContactProfileEntity,
     bindCandidate: (() -> Unit)? = null,
     bindText: String = "",
+    onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     Surface(
@@ -548,6 +585,20 @@ private fun ContactCard(
                     modifier = Modifier.weight(1f),
                 )
                 TypeTag(profile.contactType)
+                // 列表项行内删除（2026-10-22 方案 §3.2）：点按弹共用确认弹窗，
+                // 与详情页危险区同一套词（软删口径）。
+                if (onDelete != null) {
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.padding(start = 4.dp).size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Delete,
+                            contentDescription = stringResource(R.string.float_delete),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
             profile.goal?.takeIf { it.isNotBlank() }?.let {
                 Text(

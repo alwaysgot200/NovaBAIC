@@ -3,6 +3,8 @@
 > 📌 状态：**已实施完成**（2026-10-16 全量落地：12 子项全绿，`:app:testDebugUnitTest`
 > 113 测试通过、assembleDebug 通过、build-client.ps1 grant+smoke 通过（扇形菜单+分屏均现）、
 > logcat 无 FATAL；总方案已按 §十九 回改）。本文件是 P3 的唯一实施依据（历史记录）。
+> 实施落地与本计划的命名/结构偏差、以及 2026-10-16 之后的后续演进，
+> 见文末「二十、实施后勘误与后续演进（2026-10-22）」。
 > 上游事实来源：[总方案](../../docs/2026-10-15-智能优化增强的聊天策略方案.md) §13 P3 清单、
 > [P2 plan](P2_三级目标与策略卡_plan.md) §十三「P3 设计备忘录」。
 > 本计划与二者冲突时，以**本文件经批准后的版本**为准，并回改总方案对应小节。
@@ -36,7 +38,7 @@
 
 ---
 
-## 二、现状调研结论（代码事实，2026-10-16）
+## 二、现状调研结论（开工前快照，2026-10-16；行号与「现状」为此时点，当前事实见文末 §二十）
 
 | 挂点 | 现状 | 文件:行 |
 | --- | --- | --- |
@@ -404,3 +406,76 @@ ALTER TABLE session_bindings ADD COLUMN lastIncomingAt INTEGER;
 批准并实施完成后，回改 [总方案](../../docs/2026-10-15-智能优化增强的聊天策略方案.md)：
 头部状态 P3 ✅、§5 四边语义、§6.5 改 v6、§8.1 增强档拼装顺序、§9 Judge 完成建议、
 §13 全绿并收口（声明无 P4）；P1/P2 plan 不动（历史记录）。
+
+---
+
+## 二十、实施后勘误与后续演进（2026-10-22 补）
+
+P3 十二子项已全量落地；以下为落地与本计划的偏差、以及 2026-10-16 之后与本文设计面
+有交叉的演进，均以当前代码为准：
+
+### 20.1 命名与结构偏差（实施时落定）
+
+1. **有向图内核独立成 `advisor/strategy/StageGraph.kt`**（§4.2 计划把 resolveEdge 并入
+   StagePolicy 重构）：核心函数 `autoMove()`（advance/skip/retreat 自动边裁决）、
+   `offers()`（branch 待确认建议）、`applyEdge()`（移动 + pathTag 同步 + 清计数 + 写
+   evidence）；locked=1 一律不放行自动边。StagePolicy 旧函数保留薄封装。
+2. **画像裁剪落地为 `PersonaSelector`**（ChatBriefBuilder 内，§十一 计划函数名
+   selectPersonaFields 未沿用）：DEFAULT_LIMIT ≤6、taboos/红线字段硬豁免、当前站信号
+   弱关联优先、salience/updatedAt 排序、超 staleAfterDays 行追加时效措辞不删除。
+3. **增强档预调用组件为 `advisor/TacticalAdvisor.kt`**：`preAnalyze(ctx, latestIncoming)`
+   产出 TacticalBrief；ScreenAdvisor 在增强档 + 非 lean 通道主调用前串行预调用，
+   校验不过整段丢弃，异常/超时静默回退一段式并记 `REASON_ENHANCED_FALLBACK`
+   （§七「Tactician 预调用」的落地形态）。
+4. **测试文件名**：§十四 计划的 RerouteTest 落地为 **RerouteRulesTest**；另有
+   TacticalBriefRulesTest 等随 TacticalAdvisor 增补。
+5. **L1 完成建议（§十）已落地**：MissionJudgeRunner 的 Judge JSON 增
+   `completedL1: [{id, confidence, evidence}]`，id 白名单 + 置信门槛硬校验，
+   仅产建议条、绝不自动勾选；ScreenAdvisor 只传 active L1（≤3）。
+6. **reroute（§六）已落地**：StrategyRuntime.requestReroute / acceptReroute / rejectReroute；
+   GoalTab 触发 1/3（failStreak≥3 黄条口径）与停留超时（expectedDays×1.5，缺省 14 天兜底），
+   pending 确认条文案 float_reroute_pending/accept/reject，迁站目标按 stageMapping 预算；
+   拒绝则新版 decomp 留存不激活、状态机继续跑旧版。
+7. **GoalTab 阶段 UI（§五）已落地**：当前站 🔒 锁定/解锁（goals.setStageLocked）、
+   私有支线站（〽 次级色、随当前 roadmap 版本走，旧版支线随旧版失效）、历程折叠
+   （最近 5 条 stage_history，edge 中文化 + 相对时间 + 原因短句）、手动改站自动加锁。
+8. **行内纠偏（§九）已落地**（TranscriptView）：pending 任务令的建议逐条「✓采纳」回写
+   talk_missions.adoptedIndex；长按三档纠偏（太直接/太软/换方向 → 固定中文修正模板，
+   regenUsed 每回合限 1 次防烧钱）；气泡下「依据：X、Y · 记错了」→ 记忆 addNote 走
+   冲突裁决，不直删。
+9. **时序信号（§12.2）已落地**：SignalRules 的 silence_24h / silenceSignal() /
+   hoursSinceIncoming()；写入点在帧感知确认对方来信文本确实变化时更新
+   session_bindings.lastIncomingAt（防 OCR 抖动反复刷），旧会话无来信时间=无此信号。
+10. **群聊（§十三）已落地**：scenario_packs 现役 13 包（12 + group_general，
+    group 第 5 组 social：破冰露面 → 稳定在场 → 关键人互信 → 口碑沉淀）；
+    persona_schema 群实体字段 groupType/keyRoles/groupTaboos；v10 contact_profiles.isGroup
+    群标识；绑定链路零改动（群会话 bind 到一个群实体档案）。
+
+### 20.2 术语铁律重述（2026-10-21，AGENTS §1.5）
+
+本文中的「会话绑定」「会话」类措辞按术语铁律统一理解：
+**参谋会话**（上游 conversations/messages，归属关系在 session_bindings）、
+**聊天会话**（chat_channels 行：imPackage + channelKey + displayName，只记
+「哪个 APP 的哪个聊天对象」，内容不存储）、**联系人**（contact_profiles 档案）。
+
+### 20.3 列表增删体系（2026-10-22）
+
+chat_channels 与 session_bindings 增删除面：ChatChannelDao.delete(id)、
+SessionBindingDao.deleteByConversation 与 ContactRepository.deleteChannel /
+unbindConversation。联系人详情「参谋会话」Tab 删除为双语义弹窗（解除关联：仅移除归属、
+会话与消息保留；彻底删除：连同全部消息永久删除，且若删的是当前活跃会话则
+clearConversationAsync + conversationId 置 0，下次问答自愈新建）；
+「聊天会话」Tab 删除仅移除登记行（再次进入该聊天页自动重新登记）。上游
+conversations/messages 永不触碰。
+
+### 20.4 DB 演进超出本文 v6 口径
+
+v6 之后 advisor.db 又历 v7（导演 director：director_logs/action_plays/brief_outputs/
+proactive_policies 四表）、v8（director_logs.replanHint 补列）、v9（素材库
+personal_materials + director_logs.actionHint）、v10（UltraAdvisor v2.2：self_personas /
+topic_plans 两表 + contact_profiles 七列（isGroup/engagement/identity/chatStyle/
+closeness/heatScore/selfFacetJson 等）+ session_bindings.scene）、v11（隐私闸门
+privacyPolicy 列）、v12（聊天策略裁量层 talkerStrategyJson/stageIntent 两列）、
+v13（chat_channels 表）——**当前 version = 13**。导演/专家面板/RPA 等为 P1~P3 之后
+的新特性体系（各自独立方案文档），MissionJudgeRunner（Judge）与 experts 专家面板并存，
+交叉形态以代码为准。本文 §三「DB v5 → v6」为 P3 时点正确历史。

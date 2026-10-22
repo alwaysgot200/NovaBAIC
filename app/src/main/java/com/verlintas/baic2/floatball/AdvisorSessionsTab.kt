@@ -28,11 +28,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -88,17 +93,12 @@ internal fun AdvisorSessionsTab(
     val contacts = rememberContactRepository()
     val conversations = rememberConversationRepository()
 
-    data class SessionRow(
-        val conversationId: Long,
-        val title: String,
-        val updatedAt: Long,
-        val scene: String,
-    )
-
     var rows by remember(contactId) { mutableStateOf<List<SessionRow>>(emptyList()) }
     var reload by remember { mutableIntStateOf(0) }
     var query by remember(contactId) { mutableStateOf("") }
     var pickOpen by remember { mutableStateOf(false) }
+    // 列表项删除确认（方案 §3.3）：非空即弹双语义弹窗（解除关联/彻底删除）。
+    var deleting by remember { mutableStateOf<SessionRow?>(null) }
 
     LaunchedEffect(contactId, reload) {
         rows = runCatching {
@@ -159,71 +159,41 @@ internal fun AdvisorSessionsTab(
                 Text(stringResource(R.string.float_sessions_link_btn))
             }
         }
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 12.dp),
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                val keyword = query.trim()
-                val visible = rows.filter { keyword.isEmpty() || it.title.contains(keyword, ignoreCase = true) }
-                if (visible.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.float_conversations_empty),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    visible.forEach { row ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp)
-                                .clickable {
-                                    // 主应用深链打开：FROM_FLOAT 免冷启动自动隐藏。
-                                    // MainActivity=singleTop 且画像页盖在栈顶：必须
-                                    // CLEAR_TOP+SINGLE_TOP 让 MainActivity 回栈顶收
-                                    // onNewIntent，否则 Intent 只投递不切界面
-                                    // （「点了没反应」，2026-10-21 真机实测教训）。
-                                    context.startActivity(
-                                        Intent(context, MainActivity::class.java).apply {
-                                            addFlags(
-                                                Intent.FLAG_ACTIVITY_NEW_TASK or
-                                                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                                                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
-                                            )
-                                            putExtra(EXTRA_FROM_FLOAT, true)
-                                            putExtra(RunService.EXTRA_OPEN_CONVERSATION_ID, row.conversationId)
-                                        },
-                                    )
-                                },
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = row.title,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
+        // 卡片化列表（2026-10-22 方案 §3.3）：每条参谋会话独立卡片，样式与
+        // 联系人卡同款（RoundedCorner 12dp / surfaceContainer），带行内删除。
+        val keyword = query.trim()
+        val visible = rows.filter { keyword.isEmpty() || it.title.contains(keyword, ignoreCase = true) }
+        if (visible.isEmpty()) {
+            Text(
+                text = stringResource(R.string.float_conversations_empty),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        } else {
+            visible.forEach { row ->
+                SessionCard(
+                    row = row,
+                    onClick = {
+                        // 主应用深链打开：FROM_FLOAT 免冷启动自动隐藏。
+                        // MainActivity=singleTop 且画像页盖在栈顶：必须
+                        // CLEAR_TOP+SINGLE_TOP 让 MainActivity 回栈顶收
+                        // onNewIntent，否则 Intent 只投递不切界面
+                        // （「点了没反应」，2026-10-21 真机实测教训）。
+                        context.startActivity(
+                            Intent(context, MainActivity::class.java).apply {
+                                addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                        Intent.FLAG_ACTIVITY_SINGLE_TOP,
                                 )
-                                Text(
-                                    text = formatSessionTime(row.updatedAt),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            // scene 标识（方案 §1.2）：non_chat 场景条件展示。
-                            if (row.scene == SCENE_NON_CHAT) {
-                                Text(
-                                    text = stringResource(R.string.float_conversations_scene_non_chat),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.tertiary,
-                                )
-                            }
-                        }
-                    }
-                }
+                                putExtra(EXTRA_FROM_FLOAT, true)
+                                putExtra(RunService.EXTRA_OPEN_CONVERSATION_ID, row.conversationId)
+                            },
+                        )
+                    },
+                    onDelete = { deleting = row },
+                )
             }
         }
     }
@@ -237,6 +207,129 @@ internal fun AdvisorSessionsTab(
                 reload++
             },
         )
+    }
+
+    // 双语义删除弹窗（方案 §3.3）：解除关联（保留会话内容）/ 彻底删除
+    // （连消息永久删除）。两条 hint 明示区别，误删代价大的动作用红色。
+    deleting?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text(stringResource(R.string.float_sessions_delete_title)) },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.float_sessions_unbind_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        text = stringResource(R.string.float_sessions_delete_forever_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = {
+                        deleting = null
+                        scope.launch {
+                            // 解除关联：仅删 session_bindings 行，会话与消息保留。
+                            contacts.unbindConversation(target.conversationId)
+                            reload++
+                        }
+                    }) {
+                        Text(stringResource(R.string.float_sessions_unbind))
+                    }
+                    TextButton(onClick = {
+                        deleting = null
+                        scope.launch {
+                            // 彻底删除：上游删会话+消息，同步清绑定行。
+                            runCatching { conversations.delete(target.conversationId) }
+                            contacts.unbindConversation(target.conversationId)
+                            // 活跃会话防护：删的正是悬浮管道当前会话时，清转录
+                            // 与摘要并置空引用——下次问答 get 不到即自动新建。
+                            if (target.conversationId == activity.advisorPrefs.conversationId()) {
+                                activity.screenAdvisor.clearConversationAsync()
+                                activity.advisorPrefs.setConversationId(0L)
+                            }
+                            reload++
+                        }
+                    }) {
+                        Text(
+                            text = stringResource(R.string.float_sessions_delete_forever),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleting = null }) {
+                    Text(stringResource(R.string.float_cancel))
+                }
+            },
+        )
+    }
+}
+
+/** 参谋会话卡片行（方案 §3.3）：与联系人卡同款视觉，行内删除入口。 */
+private data class SessionRow(
+    val conversationId: Long,
+    val title: String,
+    val updatedAt: Long,
+    val scene: String,
+)
+
+@Composable
+private fun SessionCard(
+    row: SessionRow,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = row.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = formatSessionTime(row.updatedAt),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // scene 标识（方案 §1.2）：non_chat 场景条件展示。
+            if (row.scene == SCENE_NON_CHAT) {
+                Text(
+                    text = stringResource(R.string.float_conversations_scene_non_chat),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
+            }
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Delete,
+                    contentDescription = stringResource(R.string.float_delete),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 

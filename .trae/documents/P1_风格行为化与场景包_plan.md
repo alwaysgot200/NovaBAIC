@@ -3,8 +3,10 @@
 > **📌 状态：已实施完成（2026-10-15，覆盖安装冒烟通过）。本文是当时的实施记录，不再代表待办。**
 > **架构事实与数字以总方案现状章节为准：
 > [`docs/2026-10-15-智能优化增强的聊天策略方案.md`](../../docs/2026-10-15-智能优化增强的聊天策略方案.md)。**
-> **阅读本文时须知（后续 P2 已改变的口径，见文末「实施后勘误」）：场景包已从 2 个扩至 12 个四组；
-> 灰度门不再是 P2 开工硬门（总方案决议 #5）；场景选择器已按四组分段。**
+> **阅读本文时须知（后续 P2/P3 已改变的口径，见文末「实施后勘误」）：场景包已从 2 个扩至
+> 13 个五组（P2 扩至 12 包四组，P3 增群聊包 group_general / social 组）；灰度门不再是 P2
+> 开工硬门（总方案决议 #5）；场景选择器已按组分段；customNote 行为化编译确认流已随 P3 交付；
+> advisor.db 版本现为 13。**
 >
 > 依据：`docs/2026-10-15-智能优化增强的聊天策略方案.md` §6.1–6.4、§7、§8.1、§10.2、§13 P1、§14 评审决议 #4。
 > 铁律：零上游模块改动（仅白名单 Manifest/strings.xml 追加）；新代码进 app 模块 floatball 包；GPL 头；不 commit。
@@ -526,23 +528,42 @@ ProfileMemorySync 改动点：`syncMyPersonaField` 与 `syncTheirField` 渲染 v
 
 ---
 
-## 实施后勘误（2026-10-16 补，以总方案与代码为准）
+## 实施后勘误（2026-10-16 补，以总方案与代码为准；第 3/5 条及第 6/7 条为 2026-10-22 修订）
 
-本节列出 P1 完工后、P2 实施造成的口径变化。**P1 当期交付物（8 基调 10 意图、style_cards、
+本节列出 P1 完工后造成的口径变化。**P1 当期交付物（8 基调 10 意图、style_cards、
 DB v3→v4、schema v2 + label→code 惰性迁移、StyleCardActivity）与本文一致，未被推翻。**
 
-1. **场景包 2 → 12**：P2 把 `scenario_packs.json` 扩到 12 包、分四组
+1. **场景包 2 → 13**：P2 把 `scenario_packs.json` 扩到 12 包、分四组
    （romance/workplace/business/conflict），每包新增 `pathKind`（pursue/maintain/defend）
-   与 `group` 元数据；本文 §2.2 的两包 JSON 是 P1 历史内容，完整 12 包清单以总方案 §6.4 与
-   资产文件为准。§4.1 风格页场景下拉项（"不套用 / dating / sales_b2b"）已被四组分段选择器取代
-   （StyleCardActivity 与新建目标对话框共用）。
+   与 `group` 元数据；P3 再增群聊包 `group_general`（group 第 5 组 `social`，群=单一对方实体），
+   现役 13 包五组。本文 §2.2 的两包 JSON 是 P1 历史内容，完整清单以总方案 §6.4 与
+   资产文件为准。§4.1 风格页场景下拉项（"不套用 / dating / sales_b2b"）已被分组成员的
+   场景选择器取代（StyleCardActivity 与新建目标对话框共用）。
 2. **灰度门改性质**：本文 §八.5「≥7 天 / ≥50 回合 do/dont 符合率 ≥85% 才启动 P2」原定是
    P2 开工硬门；2026-10-15 评审拍板 **P2 不切片全量实施**（总方案决议 #5），该门转为
    P1/P2 合并试用期的持续观察项，不再阻断过 P2。
-3. **DB 版本**：本文的 v3→v4（仅 style_cards + scenarioCode）是正确历史；P2 已继续
-   v4→v5（goals/goal_decomps/stage_states/strategy_cards/talk_missions 五表 +
-   contact_profiles.activeCardId）。当前版本 = **5**。
+3. **DB 版本**〔2026-10-22 修订〕：本文的 v3→v4（仅 style_cards + scenarioCode）是正确
+   历史；P2 继 v4→v5（goals/goal_decomps/stage_states/strategy_cards/talk_missions 五表 +
+   contact_profiles.activeCardId），P3 再升 v6（stage_states 三列 + stage_history 表 +
+   session_bindings.lastIncomingAt）。**当前版本 = 13**——v7 起为后续新特性演进（v7 导演
+   模块四表、v8 导演补列、v9 素材库 personal_materials、v10 UltraAdvisor v2.2
+   self_personas/topic_plans + contact_profiles 七列、v11 隐私闸门列、v12 聊天策略裁量层
+   两列、v13 chat_channels 聊天会话表），与本文交付物零冲突、纯增量，详见各自主文档。
 4. **fitStages 调用口径**：本文约定「P1 恒传 stageCode=null」；P2 起传真实 stageCode，
    并增加跨包兼容规则（意图从未对本包声明门控时全站点放行，见总方案 §7）。
-5. **customNote 行为化编译仍未做**：维持本文边界（compiledCustomJson 恒 null、原文一行注入），
-   该确认流随 P3 交付。
+5. **customNote 行为化编译已随 P3 交付**〔2026-10-22 修订〕：保存带 customNote 的风格卡
+   走 StrategyRuntime.requestStyleCompile 慢车道，编译成 do/dont 草稿（confirmed=0）；
+   StyleResolver 仅渲染 confirmed 的编译结果进【说话方式】段，draft 不进任何提示词；
+   重新编辑 customNote 即旧编译作废重编。本文「compiledCustomJson 恒 null、原文一行注入」
+   的 P1 历史边界已由该机制取代。
+6. **意图库扩至 16**〔2026-10-22 补〕：P3（§12.1）新增 defend/职场专用意图
+   hold_line / disengage / fact_anchor / manage_upward / credit_share / de_escalate
+   （带 pathKind 门控，retreat 类意图只在 defend 包与 retreat 边命中后上浮）。本文 §2.1 的
+   10 意图为 P1 历史清单。StyleResolver.render 签名现为
+   `(card, playbook, stageCode, packStageCodes, pathKind)`——本文 P1 时点仅
+   `(card, playbook, stageCode)`，packStageCodes（跨包兼容）与 pathKind（defend 意图门）
+   为 P2/P3 增参。
+7. **persona_schema 再演进**〔2026-10-22 补〕：字段属性新增 `staleAfterDays`（P3 §十一；
+   ageRange/city/occupation 等易变字段标注 180/365 时效）；their 侧新增群实体字段
+   groupType/keyRoles/groupTaboos（P3 §十三，配 group_general 包）。salience ≤6 裁剪与
+   超期时效措辞已随 P3 落地于 ChatBriefBuilder 的 PersonaSelector（taboos/红线字段硬豁免）。

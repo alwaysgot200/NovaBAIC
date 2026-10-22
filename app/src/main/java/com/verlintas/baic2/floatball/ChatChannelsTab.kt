@@ -19,13 +19,19 @@
 
 package com.verlintas.baic2.floatball
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -67,6 +73,8 @@ internal fun ChatChannelsTab(
     var channels by remember(contactId) { mutableStateOf<List<ChatChannelEntity>>(emptyList()) }
     var query by remember(contactId) { mutableStateOf("") }
     var addOpen by remember { mutableStateOf(false) }
+    // 列表项删除确认（方案 §3.4）：仅删登记行，不碰真实聊天。
+    var deleting by remember { mutableStateOf<ChatChannelEntity?>(null) }
 
     LaunchedEffect(contactId) {
         channels = runCatching { contacts.channelsOf(contactId) }.getOrDefault(emptyList())
@@ -89,53 +97,87 @@ internal fun ChatChannelsTab(
                 Text(stringResource(R.string.float_channels_add_btn))
             }
         }
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 12.dp),
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                val keyword = query.trim()
-                val visible = channels.filter {
-                    keyword.isEmpty() || it.displayName.contains(keyword, ignoreCase = true)
-                }
-                if (visible.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.float_bind_channels_empty),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    visible.forEach { channel ->
-                        val appLabelRes = FloatUi.IM_APPS.firstOrNull { it.first == channel.imPackage }?.second
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                        ) {
+        // 卡片化列表（2026-10-22 方案 §3.4）：每条聊天会话独立卡片，与
+        // 联系人卡同款视觉；「打开」直达 + 行内删除登记行。
+        val keyword = query.trim()
+        val visible = channels.filter {
+            keyword.isEmpty() || it.displayName.contains(keyword, ignoreCase = true)
+        }
+        if (visible.isEmpty()) {
+            Text(
+                text = stringResource(R.string.float_bind_channels_empty),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        } else {
+            visible.forEach { channel ->
+                val appLabelRes = FloatUi.IM_APPS.firstOrNull { it.first == channel.imPackage }?.second
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable {
+                            scope.launch {
+                                // 直达该 APP 的该聊天页；失败 toast 报因（§4.5.2）。
+                                val result = imNavigator.openChat(channel.imPackage, channel.displayName)
+                                imNavigator.toastResult(result, channel.displayName)
+                            }
+                        },
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = (appLabelRes?.let { stringResource(it) } ?: channel.imPackage) +
                                     "：" + channel.displayName,
                                 style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
                             )
-                            TextButton(onClick = {
-                                scope.launch {
-                                    // 直达该 APP 的该聊天页；失败 toast 报因（§4.5.2）。
-                                    val result = imNavigator.openChat(channel.imPackage, channel.displayName)
-                                    imNavigator.toastResult(result, channel.displayName)
-                                }
-                            }) {
-                                Text(stringResource(R.string.float_channels_open))
+                        }
+                        TextButton(onClick = {
+                            scope.launch {
+                                // 直达该 APP 的该聊天页；失败 toast 报因（§4.5.2）。
+                                val result = imNavigator.openChat(channel.imPackage, channel.displayName)
+                                imNavigator.toastResult(result, channel.displayName)
                             }
+                        }) {
+                            Text(stringResource(R.string.float_channels_open))
+                        }
+                        IconButton(
+                            onClick = { deleting = channel },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Delete,
+                                contentDescription = stringResource(R.string.float_delete),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
             }
         }
+    }
+
+    // 删除确认弹窗（共用骨架）：文案讲清边界——只删本应用登记记录。
+    deleting?.let { target ->
+        DeleteConfirmDialog(
+            title = stringResource(R.string.float_channels_delete_title),
+            message = stringResource(R.string.float_channels_delete_hint),
+            confirmText = stringResource(R.string.float_delete),
+            onConfirm = {
+                deleting = null
+                scope.launch {
+                    contacts.deleteChannel(target.id)
+                    channels = runCatching { contacts.channelsOf(contactId) }.getOrDefault(channels)
+                }
+            },
+            onDismiss = { deleting = null },
+        )
     }
 
     if (addOpen) {

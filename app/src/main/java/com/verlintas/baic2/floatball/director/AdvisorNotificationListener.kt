@@ -51,7 +51,8 @@ import kotlinx.coroutines.launch
 /**
  * 起草档的感知源（M2-a，方案 §8.1 N1~N4）：聊天类通知 → 包名白名单 + 联系人
  * 别名匹配（[ContactDirectory.resolve]，allowStub=false 只认既有档案，未命中
- * **静默忽略**）→ [ScreenAdvisor.submitNotificationTurn] 后台回合 → 起草通知。
+ * 转**陌生来信通知**——不拟稿不落库，只提示主人，方案 §3.4）→
+ * [ScreenAdvisor.submitNotificationTurn] 后台回合 → 起草通知。
  *
  * 隐私红线（方案 §8.3）：通知文本即取即用——只在内存中传递给参谋管线（与
  * OCR 文本同径落本地会话），监听器自身不落盘、不写日志、不进任何持久化。
@@ -101,21 +102,29 @@ class AdvisorNotificationListener : NotificationListenerService() {
         val parsed = gate.parse(pkg, title, body) ?: return
         // contentIntent 捕获（托管方案 §四.A.2）：点通知直达会话的 PendingIntent
         // 是 ImNavigator 拉起会话的钥匙，即取即用只进内存缓存（隐私红线：不落盘
-        // 不序列化不进日志）。联系人解析成功后在 handleDraftTurn 补挂 contactId 键。
-        imNavigator.remember(pkg, parsed.contactTitle, notification.notification?.contentIntent)
+        // 不序列化不进日志）。联系人解析成功后在 handleDraftTurn 补挂 contactId 键；
+        // 陌生来信通知也复用它做点击直达（同样只内存传递）。
+        val contentIntent = notification.notification?.contentIntent
+        imNavigator.remember(pkg, parsed.contactTitle, contentIntent)
         // 节流在解析之后、建档查询之前：重复通知连 DB 都不打。
         if (!gate.shouldDispatch(Throttle.keyOf(parsed), System.currentTimeMillis())) return
-        scope.launch { handleDraftTurn(parsed) }
+        scope.launch { handleDraftTurn(parsed, contentIntent) }
     }
 
-    private suspend fun handleDraftTurn(parsed: IncomingNotification) {
+    private suspend fun handleDraftTurn(parsed: IncomingNotification, contentIntent: PendingIntent?) {
         if (!inFlight.compareAndSet(false, true)) return
         try {
             val contact = contactDirectory.resolve(
                 imPackage = parsed.packageName,
                 rawTitle = parsed.contactTitle,
                 allowStub = false,
-            ) ?: return // 未建档联系人：静默忽略，不创建会话不落库（M0 同款纪律）。
+            ) ?: run {
+                // 未建档联系人：陌生来信通知（方案 §3.4）——不创建会话不落库
+                //（M0 同款纪律），不拟稿不自动回复，只通知主人；点击通知经原
+                // contentIntent 直开该聊天（不消耗 LLM）。
+                postStrangerNotification(parsed, contentIntent)
+                return
+            }
             // 导航缓存补挂 contactId 键（§四.A.2）：回合成败与否，键先就位。
             imNavigator.bindContact(parsed.packageName, contact.contactId, parsed.contactTitle)
             // 维持度第一手开关（v10 方案 §2.6）：mute 档静默丢弃（不起草不出稿），
@@ -194,6 +203,49 @@ class AdvisorNotificationListener : NotificationListenerService() {
         }
     }
 
+    /**
+     * 陌生来信通知（方案 §3.4，「全部联系人」托管的感知面）：未建档联系人的
+     * 来信不拟稿、不自动回复、不创建会话不落库，只提示主人；点击经原
+     * contentIntent 直开该聊天。通知 id 按（包名|标题）散列，不同陌生来源
+     * 互不覆盖。文本即取即用（同隐私红线，不落盘不进日志）。
+     */
+    private fun postStrangerNotification(parsed: IncomingNotification, contentIntent: PendingIntent?) {
+        val manager = NotificationManagerCompat.from(this)
+        if (!manager.areNotificationsEnabled()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    STRANGER_CHANNEL_ID,
+                    getString(R.string.float_stranger_channel),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ),
+            )
+        }
+        val appLabel = runCatching {
+            packageManager.getApplicationLabel(
+                packageManager.getApplicationInfo(parsed.packageName, 0),
+            ).toString()
+        }.getOrNull() ?: parsed.packageName
+        val preview = parsed.body.replace('\n', ' ').let {
+            if (it.length > STRANGER_PREVIEW_MAX) it.take(STRANGER_PREVIEW_MAX) + "…" else it
+        }
+        val text = getString(R.string.float_stranger_notif_body, preview, appLabel)
+        val notification = NotificationCompat.Builder(this, STRANGER_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(getString(R.string.float_stranger_notif_title, parsed.contactTitle))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .apply { if (contentIntent != null) setContentIntent(contentIntent) }
+            .build()
+        NotifyGate.notifyIfPermitted(this, strangerNotificationId(parsed), notification)
+    }
+
+    /** 陌生来信通知 id：（包名|标题）散列 + 基址，远离既有固定 id（2001 等）。 */
+    private fun strangerNotificationId(parsed: IncomingNotification): Int =
+        STRANGER_ID_BASE + (parsed.packageName + '|' + parsed.contactTitle)
+            .hashCode().and(0x1FFFFFFF)
+
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
@@ -208,6 +260,13 @@ class AdvisorNotificationListener : NotificationListenerService() {
         private const val CHANNEL_ID = "floatball_draft"
         private const val NOTIFICATION_ID = 2001
         private const val REQUEST_CODE = 2001
+
+        /** 陌生来信通知（方案 §3.4）：独立通道 + 散列 id 基址（避开固定 id）。 */
+        private const val STRANGER_CHANNEL_ID = "floatball_stranger"
+        private const val STRANGER_ID_BASE = 0x20000000
+
+        /** 陌生来信通知的正文预览上限（字符，通知栏摘要，不展示全文）。 */
+        private const val STRANGER_PREVIEW_MAX = 40
 
         /** 起草通知点击：经 service action 打开分屏并预填草稿（复用 record 的先例）。 */
         const val ACTION_SHOW_DRAFT = "com.verlintas.baic2.floatball.SHOW_DRAFT"

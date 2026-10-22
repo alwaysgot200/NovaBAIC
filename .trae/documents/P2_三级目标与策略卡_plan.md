@@ -4,7 +4,9 @@
 > **本文档的设计边界（不切片、12 包、L1 不弹分屏、线性阶段机、增强档延后、无 P4）与落地实现一致；**
 > **仅有少量文件名与实现偏差，记录于文末「实施后勘误」。架构事实总纲以
 > [`docs/2026-10-15-智能优化增强的聊天策略方案.md`](../../docs/2026-10-15-智能优化增强的聊天策略方案.md)
-> §4/§6/§13（P2 已完成）为准；§十三 P3 细化仍有效、未开工。**
+> §4/§6/§13（P2 已完成）为准；§十三 P3 细化已由
+> [P3 实施计划](P3_有向图阶段机与全量增强_plan.md) 全量落地（2026-10-16，12 子项全绿），
+> 2026-10-16 之后的后续演进见文末「实施后勘误二」。**
 >
 > 依据：`docs/2026-10-15-智能优化增强的聊天策略方案.md`（下称「总方案」）§4 三级目标、§5 流水线、
 > §6.5/§6.6 数据与产物、§7 门控、§8 提示词契约、§9 固化、§10 界面、§11 调度降级、**§13 分期（仅 P0/P1/P2/P3，无 P4）**、
@@ -806,5 +808,43 @@ Situator/Tactician/Judge 思考链在分屏可见、可对单步纠偏；目标�
 5. **阶段事件留痕口径澄清**：P2 未向上游记忆双写阶段 EVENT 草稿（本文 §9.6 也只要求写
    stage_states）；跃迁永久留痕在 Advisor 库 `stage_states`（事件型语义、不套 90 天 FACT TTL），
    逐跳 `stage_history` 时间线仍按 §13.1 归 P3（DB v6）。总方案 §9 已据此对齐。
-6. **P3 内容状态不变**：§十三（有向图/reroute/P3 既有项/P2 欠账）与 §十四远期备忘仍然有效，
-   截至 2026-10-16 全部未开工；总方案 §13 P3 清单为其对外口径，两处一致。
+6. **P3 已全量落地**〔2026-10-22 修订〕：§十三（有向图/reroute/P3 既有项/P2 欠账）已由
+   [P3 实施计划](P3_有向图阶段机与全量增强_plan.md) 全量实施完成（2026-10-16，12 子项全绿：
+   113 测试通过 + 冒烟通过）；§十四远期备忘仍为备忘（未立项）。总方案 §13 已收口、
+   声明无 P4。
+
+---
+
+## 十七、实施后勘误二：后续演进（2026-10-22 补）
+
+本文落地的五表 / 12 包 / 四级链 / 两段式协议口径不变；以下为 2026-10-16 之后与本文
+设计面有交叉的演进，均已实施、以当前代码为准：
+
+1. **详情页 Tab 2 → 4**（2026-10-21 术语铁律，AGENTS §1.5）：本文 §11.1 的「详情顶部加
+   画像/目标 TabRow」为 P2 时点快照；现役详情页为「画像 / 目标 / 参谋会话 / 聊天会话」
+   四 Tab——参谋会话 Tab（AdvisorSessionsTab.kt：上游 conversations/messages 按
+   session_bindings 归属本联系人渲染，卡片化 + 解除关联/彻底删除双语义弹窗）与
+   聊天会话 Tab（ChatChannelsTab.kt：v13 chat_channels 聊天会话行，卡片化 + 删除 +
+   ImChatNavigator 直达），两者为 2026-10-21/22 术语铁律与列表增删体系交付物。
+2. **术语口径按铁律重述**（AGENTS §1.5）：「会话」一词禁止裸用——**参谋会话**（上游
+   conversations/messages + session_bindings 归属关系）/ **聊天会话**（chat_channels 行：
+   只记「哪个 APP 的哪个聊天对象」，内容不存储）/ **联系人**（contact_profiles 档案）。
+   本文及 P1/P3 中的「会话绑定」类措辞按此口径理解。
+3. **绑定与删除面新增**（2026-10-22 列表增删体系）：ChatChannelDao.delete(id)、
+   SessionBindingDao.deleteByConversation 与 ContactRepository.deleteChannel /
+   unbindConversation；删除当前活跃参谋会话时 ScreenAdvisor.clearConversationAsync +
+   conversationId 置 0 自愈重建。上游 conversations/messages 永不触碰。
+4. **DB v5 → v13**：P3 升 v6（stage_states roadmapVersion/pathTag/locked 三列、
+   stage_history 表、session_bindings.lastIncomingAt）；其后 v7~v13 为后续新特性演进
+   （导演 director 四表+补列、素材库 personal_materials、UltraAdvisor v2.2
+   self_personas/topic_plans + contact_profiles 七列、隐私闸门 privacyPolicy、聊天策略
+   裁量层 talkerStrategyJson/stageIntent、chat_channels 表），与本文五表零冲突、纯增量。
+5. **strategy/ 子包与 StyleResolver 演进**：P3 新增 StageGraph.kt（有向图内核，
+   autoMove/offers/applyEdge）等文件（文件清单以目录为准）；StyleResolver.render
+   增 packStageCodes（本文 §7.5 跨包兼容已落地）与 pathKind（defend 意图门）两参；
+   增强档预调用组件为 advisor/TacticalAdvisor.kt（preAnalyze → TacticalBrief，
+   失败回退 REASON_ENHANCED_FALLBACK，读档 2 行为退化不变）。
+6. **场景与测试规模**：场景包现役 13 个五组（P3 增 group_general / social）；本文 §十二的
+   34 例测试已壮大至 app/src/test floatball 相关 58 个测试文件（strategy/ 13 +
+   director/ 13 + auto/ 7 + experts/ 6 + advisor/contact/brief 等，含 P3 的
+   StageGraphTest / RerouteRulesTest / PersonaSelectTest）。

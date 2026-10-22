@@ -97,3 +97,36 @@ private fun AdvisorTopBar(
         )
     }
 }
+
+/**
+ * 共用删除确认弹窗（2026-10-22 列表增删方案 §3.5）：联系人卡片 / 参谋会话 /
+ * 聊天会话三处复用，观感统一。确认按钮固定 error 色（危险动作口径），
+ * 取消按钮走通用 [R.string.float_cancel]。
+ */
+@Composable
+internal fun DeleteConfirmDialog(
+    title: String,
+    message: String,
+    confirmText: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onConfirm) {
+                Text(
+                    text = confirmText,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.float_cancel))
+            }
+        },
+    )
+}

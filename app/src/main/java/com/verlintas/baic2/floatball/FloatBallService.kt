@@ -42,6 +42,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -55,6 +56,7 @@ import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.verlintas.baic2.EXTRA_EXIT
@@ -83,10 +85,13 @@ import kotlinx.coroutines.launch
  * 悬浮球前台服务：窗口增删、手势路由、状态机、把 [ScreenAdvisor] 的事件
  * 渲染到 [FloatUi] 视图。
  *
- * 状态机：Idle（蓝球）→ 单击=六子球扇形菜单（仅 Idle，双击消歧后弹出）；
- * 长按=单次参谋（变色·灰白蒙层·旋转环·锁定输入，完成自动弹分屏）；
- * 双击=连续参谋（红球 + 差分循环 + 红点计数）。任务期间（OneShot）一切
- * 手势忽略；录制态仅保留单击红球（分屏开合）与双击（停止），长按拒绝。
+ * 状态机：Idle（蓝球）→ 单击=六子球扇形菜单（单次/连续/自动/主界面/更多/
+ * 退出，仅 Idle，双击消歧后弹出）；长按=单次参谋（变色·灰白蒙层·旋转环·
+ * 锁定输入，完成自动弹分屏）；双击=连续参谋（红球 + 差分循环 + 红点计数）。
+ * 任务期间（OneShot）一切手势忽略；录制态仅保留单击红球（分屏开合）与
+ * 双击（停止），长按拒绝。「自动」=托管范围选择器、「更多」=次级入口，
+ * 均为贴球卡片弹窗（card menus 分节）；自动托管感知的是聊天 APP 的通知，
+ * 与当前屏幕无关（单次/连续才基于当前屏幕内容）。
  */
 @AndroidEntryPoint
 class FloatBallService : Service() {
@@ -113,6 +118,14 @@ class FloatBallService : Service() {
     /** M3-b 陪伴窗口：自动档的窗口治理面（互斥/硬审/拟人节奏/收尾汇总）。 */
     @Inject
     lateinit var companionController: CompanionWindowController
+
+    /** 联系人档案与会话查询（自动托管范围选择器的数据面，方案 §3.3）。 */
+    @Inject
+    lateinit var contactRepository: com.verlintas.baic2.floatball.advisor.ContactRepository
+
+    /** 范围选定后拉起目标聊天页（RPA 搜索导航，方案 §3.3 接线）。 */
+    @Inject
+    lateinit var imChatNavigator: com.verlintas.baic2.floatball.auto.ImChatNavigator
 
     private enum class Mode { IDLE, ONESHOT, RECORDING }
 
@@ -149,6 +162,10 @@ class FloatBallService : Service() {
     private var fanWidth = 0
     private var fanHeight = 0
     private var menuParams: WindowManager.LayoutParams? = null
+
+    /** 更多/范围选择卡片窗（全屏接罩，方案 §3.2/§3.3）：与 menuView 同步清理。 */
+    private var cardMenuView: View? = null
+    private var cardMenuParams: WindowManager.LayoutParams? = null
 
     /** 扇形菜单整体拖动开始时主球窗口的起点（onDragBy 累计位移的基准）。 */
     private var fanDragStartX = 0
@@ -1659,7 +1676,7 @@ class FloatBallService : Service() {
 
     // ------------------------------------------------------------- menu
 
-    /** 单击：朝屏幕中央的水平扇形弹出 6 个子球（问答/主界面/设置/自动/帮助/退出）。 */
+    /** 单击：朝屏幕中央的水平扇形弹出 6 个子球（单次/连续/自动/主界面/更多/退出）。 */
     private fun expandMenu() {
         if (menuView != null || ball == null) return
         val from = ballParams ?: return
@@ -1676,14 +1693,16 @@ class FloatBallService : Service() {
         val fan = FloatUi.buildFanMenu(
             this,
             items = listOf(
+                // 「单次/连续」与长按/双击主球同一状态机入口（方案 §3.1）。
                 FloatUi.FanItem(R.string.float_fan_oneshot) { startOneShot() },
+                FloatUi.FanItem(R.string.float_fan_continuous) { startRecording() },
+                // 「自动」= 托管范围选择器（就绪门 + 联系人×APP，方案 §3.3）：
+                // 感知面是聊天 APP 的通知，与当前屏幕无关；选定后进陪伴窗口。
+                FloatUi.FanItem(R.string.float_split_auto) { openAutoScopePicker() },
                 FloatUi.FanItem(R.string.float_fan_main) { showMainUi() },
-                FloatUi.FanItem(R.string.float_fan_settings) { openMainSettings() },
-                // 「自动」= M3-b 陪伴窗口：对当前绑定联系人开启 30 分钟自动参谋
-                // （白名单+硬审+拟人节奏，见 CompanionWindowController）；
+                // 「更多」= 次级入口卡片（设置/帮助/老参谋设置/联系人画像，§3.2）；
                 // 悬浮球常驻，不再提供手动隐藏（不想显示请走「退出」）。
-                FloatUi.FanItem(R.string.float_split_auto) { startCompanionWindow() },
-                FloatUi.FanItem(R.string.float_fan_help) { openHelp() },
+                FloatUi.FanItem(R.string.float_fan_more) { openMoreMenu() },
                 FloatUi.FanItem(R.string.float_fan_exit) { exitApp() },
             ),
             facing = facing,
@@ -1802,6 +1821,173 @@ class FloatBallService : Service() {
                 runCatching { windowManager.removeView(fan.root) }
             }
         }, FloatUi.FAN_ANIM_MS * 3)
+    }
+
+    // ------------------------------------------------------ card menus
+
+    /**
+     * 「更多」子球：贴球弹出次级入口卡片（方案 §3.2）：设置 / 帮助 / 老参谋
+     * 设置 / 联系人画像。点行=关弹窗再执行；点空白或「✕」=仅关弹窗。
+     */
+    private fun openMoreMenu() {
+        if (cardMenuView != null || ball == null) return
+        val params = ballParams ?: return
+        val metrics = resources.displayMetrics
+        val menu = FloatUi.buildListMenu(
+            this,
+            items = listOf(
+                FloatUi.ListMenuItem(R.string.float_fan_settings) { openMainSettings() },
+                FloatUi.ListMenuItem(R.string.float_fan_help) { openHelp() },
+                FloatUi.ListMenuItem(R.string.float_more_advisor_settings) {
+                    openAdvisorSettings()
+                },
+                FloatUi.ListMenuItem(R.string.float_more_profile) { openProfileList() },
+            ),
+            ballCenterX = params.x + dp(FloatUi.BALL_SIZE_DP) / 2,
+            ballCenterY = params.y + dp(FloatUi.BALL_SIZE_DP) / 2,
+            screenWidth = metrics.widthPixels,
+            screenHeight = metrics.heightPixels,
+            onDismiss = { dismissCardMenu() },
+        )
+        attachCardMenu(menu)
+    }
+
+    /** 「老参谋设置」：老参谋专属设置页（抓帧节奏/权限直达/会话管理等）。 */
+    private fun openAdvisorSettings() {
+        startActivity(
+            Intent(this, FloatSettingsActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+
+    /** 「联系人画像」：画像管理列表页（完整管理面，术语铁律 §1.5）。 */
+    private fun openProfileList() {
+        startActivity(
+            Intent(this, AdvisorProfileActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+
+    /**
+     * 「自动」子球：托管范围选择器（方案 §3.3）。就绪门——本机没有任何
+     * 「联系人 × 关联 APP」聊天会话时提示 [R.string.float_auto_no_apps]
+     * 并终止（自动托管监控的是聊天 APP 的通知，与当前屏幕无关）。有数据
+     * 才弹选择器：全部联系人 / 某联系人所有 APP / 某联系人的具体 APP 会话。
+     */
+    private fun openAutoScopePicker() {
+        if (cardMenuView != null || ball == null) return
+        scope.launch {
+            val entries = runCatching { contactRepository.autoScopeEntries() }
+                .getOrElse { emptyList() }
+            if (entries.isEmpty()) {
+                toast(R.string.float_auto_no_apps)
+                return@launch
+            }
+            if (cardMenuView != null) return@launch
+            val params = ballParams ?: return@launch
+            val metrics = resources.displayMetrics
+            val menu = FloatUi.buildScopePicker(
+                this@FloatBallService,
+                contacts = entries.map { (profile, channels) ->
+                    FloatUi.ScopeContact(
+                        contactId = profile.id,
+                        displayName = profile.displayName,
+                        apps = channels.map {
+                            FloatUi.ScopeApp(it.imPackage, it.channelKey, it.displayName)
+                        },
+                    )
+                },
+                ballCenterX = params.x + dp(FloatUi.BALL_SIZE_DP) / 2,
+                ballCenterY = params.y + dp(FloatUi.BALL_SIZE_DP) / 2,
+                screenWidth = metrics.widthPixels,
+                screenHeight = metrics.heightPixels,
+                onDismiss = { dismissCardMenu() },
+                callbacks = object : FloatUi.ScopePickerCallbacks {
+                    override fun onPickAll() {
+                        startAutoForAll()
+                    }
+
+                    override fun onPickContact(contact: FloatUi.ScopeContact) {
+                        startAutoForContact(contact.contactId, navPkg = null, navEntryName = null)
+                    }
+
+                    override fun onPickApp(contact: FloatUi.ScopeContact, app: FloatUi.ScopeApp) {
+                        startAutoForContact(contact.contactId, app.imPackage, app.entryName)
+                    }
+                },
+            )
+            attachCardMenu(menu)
+        }
+    }
+
+    /**
+     * 「全部联系人」托管：纯通知拟稿模式（方案 §3.3，安全边界——不自动
+     * 发送）：开启通知拟稿 + 陌生来信通知，感知面是聊天 APP 的通知。通知
+     * 监听未开时提示缺因并引导去系统设置（不静默失效，铁律 §4.5）。
+     */
+    private fun startAutoForAll() {
+        if (!NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)) {
+            toast(R.string.float_auto_need_listener)
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+            return
+        }
+        if (!advisorPrefs.state.value.draftEnabled) {
+            advisorPrefs.setDraftEnabled(true)
+        }
+        toast(R.string.float_auto_draft_enabled)
+    }
+
+    /**
+     * 选定范围的托管（方案 §3.3）：联系人入自动白名单（满
+     * [AdvisorPrefs.MAX_AUTO_WHITELIST] 报因终止）→ 指定 APP 会话则 RPA
+     * 拉起该聊天页 → 进陪伴窗口（Gatekeeper 硬审在窗口内生效）。导航
+     * 失败不阻断托管。
+     */
+    private fun startAutoForContact(contactId: Long, navPkg: String?, navEntryName: String?) {
+        if (!advisorPrefs.addAutoWhitelistContact(contactId)) {
+            toast(
+                getString(
+                    R.string.float_auto_whitelist_full,
+                    AdvisorPrefs.MAX_AUTO_WHITELIST,
+                ),
+            )
+            return
+        }
+        scope.launch {
+            if (navPkg != null && navEntryName != null) {
+                val nav = imChatNavigator.openChat(navPkg, navEntryName)
+                imChatNavigator.toastResult(nav, navEntryName)
+            }
+            beginCompanion(companionController.contactRefFor(contactId))
+        }
+    }
+
+    /** 卡片弹窗挂窗：全屏接罩覆盖整屏，点空白由 root 回调关闭（方案 §3.2）。 */
+    private fun attachCardMenu(menu: FloatUi.CardMenu) {
+        dismissCardMenu()
+        val metrics = resources.displayMetrics
+        val params = overlayParams(metrics.widthPixels, metrics.heightPixels).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+        }
+        val added = runCatching { windowManager.addView(menu.root, params) }.isSuccess
+        if (!added) return
+        excludeSystemGestures(menu.root)
+        cardMenuView = menu.root
+        cardMenuParams = params
+    }
+
+    private fun dismissCardMenu() {
+        val view = cardMenuView ?: return
+        cardMenuView = null
+        cardMenuParams = null
+        runCatching { windowManager.removeView(view) }
     }
 
     // ------------------------------------------------ main / dialogs
@@ -1944,6 +2130,9 @@ class FloatBallService : Service() {
         menuView = null
         fanMenu = null
         menuParams = null
+        cardMenuView?.let { runCatching { windowManager.removeView(it) } }
+        cardMenuView = null
+        cardMenuParams = null
     }
 
     private fun removeAllOverlays() {

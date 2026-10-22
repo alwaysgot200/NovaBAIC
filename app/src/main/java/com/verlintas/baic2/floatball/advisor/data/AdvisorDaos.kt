@@ -200,6 +200,10 @@ interface ChatChannelDao {
         """,
     )
     suspend fun deleteDuplicatesWith(from: Long, to: Long)
+
+    /** 列表项删除（2026-10-22 方案 §3.4）：删一行登记记录，不碰真实聊天。 */
+    @Query("DELETE FROM chat_channels WHERE id = :id")
+    suspend fun delete(id: Long)
 }
 
 @Dao
@@ -308,6 +312,10 @@ interface SessionBindingDao {
 
     @Query("DELETE FROM session_bindings WHERE contactId = :contactId")
     suspend fun deleteForContact(contactId: Long)
+
+    /** 解除单条关联（2026-10-22 方案 §3.3）：删绑定行，会话与消息保留在上游。 */
+    @Query("DELETE FROM session_bindings WHERE conversationId = :conversationId")
+    suspend fun deleteByConversation(conversationId: Long)
 }
 
 /** 群成员二级画像（P5）。 */
