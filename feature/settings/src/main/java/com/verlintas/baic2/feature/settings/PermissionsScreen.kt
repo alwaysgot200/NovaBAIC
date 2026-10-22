@@ -61,6 +61,8 @@ data class PermissionsState(
     val filesAccess: Boolean = false,
     val accessibility: Boolean = false,
     val screenCaptureReady: Boolean = false,
+    val overlay: Boolean = false,
+    val batteryWhitelisted: Boolean = false,
     val notificationListener: Boolean = false,
     val usageAccess: Boolean = false,
     val writeSettings: Boolean = false,
@@ -92,6 +94,8 @@ class PermissionsViewModel @Inject constructor(
             filesAccess = filesAccessEnabled(),
             accessibility = accessibility,
             screenCaptureReady = capture,
+            overlay = Settings.canDrawOverlays(context),
+            batteryWhitelisted = batteryWhitelisted(),
             notificationListener = notificationListenerEnabled(),
             usageAccess = usageAccessEnabled(),
             writeSettings = Settings.System.canWrite(context),
@@ -124,6 +128,11 @@ class PermissionsViewModel @Inject constructor(
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) ==
                 PackageManager.PERMISSION_GRANTED
         }
+
+    private fun batteryWhitelisted(): Boolean {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        return pm.isIgnoringBatteryOptimizations(context.packageName)
+    }
 
     private fun runtimeGranted(permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
@@ -222,10 +231,15 @@ fun PermissionsPage(
                     ShellState.PermissionRequired -> stringResource(R.string.settings_perm_shizuku_denied)
                     ShellState.Unavailable -> stringResource(R.string.settings_perm_shizuku_unavailable)
                 },
-                onClick = if (state.shizuku == ShellState.PermissionRequired) {
-                    { viewModel.requestShizukuPermission() }
-                } else {
-                    null
+                onClick = when (state.shizuku) {
+                    ShellState.PermissionRequired -> {
+                        { viewModel.requestShizukuPermission() }
+                    }
+                    // 就绪后点击进入一条龙授权页：本体已通，继续完成投影免弹窗（appops）。
+                    ShellState.Ready -> {
+                        { startGrantActivity(context, SHIZUKU_GRANT_ACTIVITY) }
+                    }
+                    ShellState.Unavailable -> null
                 },
                 trailing = {
                     Text(
@@ -250,7 +264,46 @@ fun PermissionsPage(
                 description = stringResource(R.string.settings_perm_capture_desc),
                 granted = state.screenCaptureReady,
                 actionLabel = stringResource(R.string.settings_perm_capture_action),
-                onGrant = { viewModel.refresh() },
+                // ShizukuGrantActivity 一条龙：Shizuku 三态检测 → 配对引导 →
+                // appops 投影免弹窗授权（docs/2026-10-21-投影免弹窗授权方案.md）。
+                onGrant = { startGrantActivity(context, SHIZUKU_GRANT_ACTIVITY) },
+            )
+        }
+        item(key = "overlay") {
+            PermissionRow(
+                title = stringResource(R.string.settings_perm_overlay_title),
+                description = stringResource(R.string.settings_perm_overlay_desc),
+                granted = state.overlay,
+                onGrant = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}"),
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                },
+            )
+        }
+        item(key = "keepalive") {
+            // 恒可点：电池白名单只是健康度之一，完整管理面（自启/闹钟/档位）在
+            // KeepAliveSettingsActivity，授权后仍需可进入。
+            SettingsRow(
+                title = stringResource(R.string.settings_perm_keepalive_title),
+                summary = if (state.batteryWhitelisted) {
+                    stringResource(R.string.settings_perm_keepalive_ready)
+                } else {
+                    stringResource(R.string.settings_perm_keepalive_desc)
+                },
+                onClick = { startGrantActivity(context, KEEPALIVE_SETTINGS_ACTIVITY) },
+                trailing = {
+                    Text(
+                        text = stringResource(R.string.settings_perm_keepalive_action),
+                        style = Baic2Mono.label,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                },
             )
         }
         item(key = "notif-listener") {
@@ -369,5 +422,19 @@ private fun PermissionRow(
 private fun openSettings(context: Context, action: String) {
     runCatching {
         context.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
+// app 模块页面按类名跳转（feature 模块不能反向依赖 app；类名与 Manifest 声明保持同步）。
+private const val SHIZUKU_GRANT_ACTIVITY =
+    "com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity"
+private const val KEEPALIVE_SETTINGS_ACTIVITY =
+    "com.verlintas.baic2.keepalive.KeepAliveSettingsActivity"
+
+private fun startGrantActivity(context: Context, className: String) {
+    runCatching {
+        context.startActivity(
+            Intent().setClassName(context, className).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 }

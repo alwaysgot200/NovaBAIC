@@ -22,7 +22,6 @@ package com.verlintas.baic2.floatball
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
-import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -54,7 +53,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.core.app.NotificationManagerCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -194,10 +192,6 @@ private fun AdvisorSettingsScreen(
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
-    val a11yConnected by advisor.a11yConnected.collectAsState()
-    val projectionSilentGranted by androidx.compose.runtime.produceState(initialValue = false) {
-        value = shizukuGate.projectionSilentGranted()
-    }
     var clearArmed by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scheme = MaterialTheme.colorScheme
@@ -328,55 +322,11 @@ private fun AdvisorSettingsScreen(
 
                 TokenUsageCard(prefs = prefs, balanceRepository = balanceRepository)
 
-                SectionLabel(stringResource(R.string.float_settings_permissions))
-                PermissionRow(
-                    title = stringResource(R.string.float_settings_perm_a11y),
-                    granted = a11yConnected,
-                    actionLabel = stringResource(R.string.float_settings_go_enable),
-                ) {
-                    runCatching {
-                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    }
-                }
-                PermissionRow(
-                    title = stringResource(R.string.float_settings_perm_overlay),
-                    granted = Settings.canDrawOverlays(context),
-                    actionLabel = stringResource(R.string.float_settings_go_enable),
-                ) {
-                    runCatching {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}"),
-                            ),
-                        )
-                    }
-                }
-                Text(
-                    text = stringResource(R.string.float_settings_perm_projection),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                )
-                PermissionRow(
-                    title = stringResource(R.string.float_settings_perm_projection_silent),
-                    granted = projectionSilentGranted,
-                    actionLabel = stringResource(R.string.float_shizuku_action_grant),
-                    onRowClick = {
-                        runCatching {
-                            context.startActivity(
-                                Intent(context, com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity::class.java),
-                            )
-                        }
-                    },
-                ) {
-                    runCatching {
-                        context.startActivity(
-                            Intent(context, com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity::class.java),
-                        )
-                    }
-                }
+                // 权限/授权类条目已统一收敛到主框架「设置 → 权限」页（方案见
+                // docs/2026-10-22-设置权限统一合并方案.md）：无障碍/悬浮窗/投影
+                // 免弹窗/通知监听/保活均在主权限页设置，此处不再重复。
 
-                // M2-a 起草档：总开关 + 通知读取权限跳转 + 白名单说明。
+                // M2-a 起草档：总开关 + 白名单说明。
                 SectionLabel(stringResource(R.string.float_settings_draft_section))
                 ToggleRow(
                     title = stringResource(R.string.float_settings_draft),
@@ -384,16 +334,6 @@ private fun AdvisorSettingsScreen(
                     checked = settings.draftEnabled,
                     onChange = { prefs.setDraftEnabled(it) },
                 )
-                PermissionRow(
-                    title = stringResource(R.string.float_settings_perm_notification),
-                    granted = NotificationManagerCompat.getEnabledListenerPackages(context)
-                        .contains(context.packageName),
-                    actionLabel = stringResource(R.string.float_settings_go_enable),
-                ) {
-                    runCatching {
-                        context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                    }
-                }
                 Text(
                     text = stringResource(R.string.float_settings_draft_packages_hint),
                     style = MaterialTheme.typography.bodySmall,
@@ -499,33 +439,7 @@ private fun AdvisorSettingsScreen(
                     settings = settings,
                     prefs = prefs,
                 )
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = scheme.surfaceContainer,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                        .clickable {
-                            context.startActivity(
-                                Intent(
-                                    context,
-                                    com.verlintas.baic2.keepalive.KeepAliveSettingsActivity::class.java,
-                                ),
-                            )
-                        },
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                        Text(
-                            text = stringResource(R.string.float_keepalive_entry),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            text = stringResource(R.string.float_keepalive_entry_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                // 保活入口卡已迁主框架「设置 → 权限」页（统一一处）。
 
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -1486,56 +1400,6 @@ private fun ToggleRow(
                 )
             }
             Switch(checked = checked, onCheckedChange = onChange)
-        }
-    }
-}
-
-@Composable
-private fun PermissionRow(
-    title: String,
-    granted: Boolean,
-    actionLabel: String,
-    onRowClick: (() -> Unit)? = null,
-    onAction: () -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = scheme.surfaceContainer,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .then(
-                if (onRowClick != null) {
-                    Modifier.clickable(onClick = onRowClick)
-                } else {
-                    Modifier
-                },
-            ),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
-            )
-            if (granted) {
-                Text(
-                    text = stringResource(R.string.float_settings_granted),
-                    color = scheme.primary,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            } else {
-                Text(
-                    text = actionLabel,
-                    color = scheme.primary,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.clickable(onClick = onAction),
-                )
-            }
         }
     }
 }

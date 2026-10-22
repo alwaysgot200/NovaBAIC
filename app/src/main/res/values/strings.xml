@@ -83,11 +83,7 @@
     <string name="float_settings_balance_refreshing">刷新中…</string>
     <string name="float_token_budget_exhausted">连续参谋 Token 预算已用完，已自动停止</string>
 
-    <string name="float_settings_permissions">权限状态</string>
-    <string name="float_settings_perm_a11y">无障碍服务（长按毫秒级识屏的前提）</string>
-    <string name="float_settings_perm_overlay">悬浮窗权限</string>
-    <string name="float_settings_perm_projection">屏幕投影：长按/双击时按需弹窗授权，拍完即关</string>
-    <string name="float_settings_perm_projection_silent">投影免弹窗授权（Shizuku）</string>
+    <!-- 权限类条目已收敛到主框架「设置 → 权限」页（2026-10-22 统一合并方案）。 -->
     <!-- 投影免弹窗授权引导页（docs/2026-10-21-投影免弹窗授权方案.md） -->
     <string name="float_shizuku_title">投影免弹窗授权</string>
     <string name="float_shizuku_intro">无障碍关闭时，屏幕投影是感知的唯一通道。本页授权让投影系统弹框永久静默（状态持久，重启不清），RPA 全程零打断。</string>
@@ -471,8 +467,7 @@
     <!-- 悬浮球 · 保活 -->
     <string name="float_keepalive_title">保活措施</string>
     <string name="float_keepalive_subtitle">悬浮球常驻的关键——完成授权引导，并在省电与存活之间选一档</string>
-    <string name="float_keepalive_entry">保活措施</string>
-    <string name="float_keepalive_entry_hint">开机自启、后台拉活、电池白名单与请求重试</string>
+    <!-- 保活入口已迁主框架「设置 → 权限」页（统一一处）。 -->
     <string name="float_keepalive_health_ok">保活状态：良好（%1$d/%2$d 项就绪）</string>
     <string name="float_keepalive_health_fair">保活状态：一般（%1$d/%2$d 项就绪）</string>
     <string name="float_keepalive_health_weak">保活状态：待完善（%1$d/%2$d 项就绪）</string>
@@ -748,7 +743,6 @@
     <string name="float_settings_draft_section">代拟回复（起草档）</string>
     <string name="float_settings_draft">通知到达时后台代拟回复</string>
     <string name="float_settings_draft_hint">匹配到已建档联系人后，老参谋在后台拟一条回复并发通知提醒；绝不自动发送，发送与否始终由你决定</string>
-    <string name="float_settings_perm_notification">通知读取权限（代拟回复的前提）</string>
     <string name="float_settings_draft_packages_hint">仅处理微信、QQ、TIM、企业微信、钉钉、飞书、Telegram 的通知；未建档的联系人静默忽略，通知文本即取即用不落盘。</string>
 
     <!-- M2-b 主动保温：周期检点 + 频控（ProactivePolicy / DirectorRoutes PROACTIVE 路） -->
