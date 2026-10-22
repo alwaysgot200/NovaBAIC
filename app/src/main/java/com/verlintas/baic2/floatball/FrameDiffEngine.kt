@@ -70,6 +70,9 @@ class FrameDiffEngine @Inject constructor(
 
         /** 达到单次时长上限，服务层应停止引擎并提示。 */
         data object SessionExpired : Signal
+
+        /** 工作段到点进入停歇（无人值守 RPA 休憩循环）：引擎内部等待后自动继续。 */
+        data class Resting(val restMs: Long) : Signal
     }
 
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -127,6 +130,9 @@ class FrameDiffEngine @Inject constructor(
         }
         loopJob = engineScope.launch {
             val startedAt = System.currentTimeMillis()
+            // 当前工作段起点：到 workMs 后歇 restMs（无人值守 RPA 休憩循环，
+            // 2026-10-22 需求——不能一直不停录，中间停歇降功耗降痕迹）。
+            var workStartedAt = startedAt
             var baseline: FrameQuality.GrayFrame? = null
             // 最近一帧有效画面：静止期投影 Reader 无新帧（acquire 返回 null）
             // 时复用它，等价于「本帧与上帧完全一致」。
@@ -147,6 +153,22 @@ class FrameDiffEngine @Inject constructor(
                 if (maxSession > 0 && System.currentTimeMillis() - startedAt > maxSession) {
                     onSignal(Signal.SessionExpired)
                     return@launch
+                }
+
+                // 工作段到点：停歇 restMs 再继续（restMs=0 不停歇）。停歇中
+                // 投影保持常驻、暂停取帧；醒来重建差分基线（画面可能大变），
+                // 但保留上次 OCR 灰度签名——停歇前后内容相同则去重不重发。
+                val work = prefs.state.value.workMs
+                val rest = prefs.state.value.restMs
+                if (work > 0 && rest > 0 && System.currentTimeMillis() - workStartedAt > work) {
+                    android.util.Log.i(TAG, "work segment done (${work}ms), resting ${rest}ms")
+                    onSignal(Signal.Resting(rest))
+                    delay(rest)
+                    workStartedAt = System.currentTimeMillis()
+                    baseline = null
+                    candidate = null
+                    motionAtMs = 0L
+                    continue
                 }
 
                 // 感知面：常驻投影 acquire（毫秒级）。null = 画面静止（无新帧）

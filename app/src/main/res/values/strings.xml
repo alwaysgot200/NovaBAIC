@@ -28,6 +28,7 @@
     <string name="float_recording_stopped">连续参谋已停止</string>
     <string name="float_recording_failed">屏幕捕获中断，已停止连续参谋</string>
     <string name="float_recording_session_expired">达到时长上限，连续参谋已自动停止</string>
+    <string name="float_recording_resting">本段录屏结束，休憩 %1$d 分钟后自动继续</string>
 
     <!-- 悬浮球 · 设置页 -->
     <string name="float_settings_title">老参谋设置</string>
@@ -45,6 +46,14 @@
     <string name="float_settings_session_30">30 分钟</string>
     <string name="float_settings_session_60">60 分钟</string>
     <string name="float_settings_session_unlimited">不限</string>
+    <string name="float_settings_workrest_hint">无人值守休憩循环：录屏工作一段时间后停歇再继续（停歇选「不停歇」则全程连续）</string>
+    <string name="float_settings_work_5">工作 5 分钟</string>
+    <string name="float_settings_work_10">工作 10 分钟</string>
+    <string name="float_settings_work_15">工作 15 分钟</string>
+    <string name="float_settings_rest_off">不停歇</string>
+    <string name="float_settings_rest_5">歇 5 分钟</string>
+    <string name="float_settings_rest_10">歇 10 分钟</string>
+    <string name="float_settings_rest_20">歇 20 分钟</string>
     <string name="float_settings_background">后台智能（会产生额外的模型调用）</string>
     <string name="float_settings_digest">自动滚动摘要</string>
     <string name="float_settings_digest_hint">每隔数个屏幕回合，后台调用一次模型把更早的聊天压成摘要；关闭可省流量</string>
@@ -327,7 +336,6 @@
     <string name="float_persona_engagement_proactive">主动维持热度</string>
     <string name="float_persona_engagement_reactive">问了才答（默认）</string>
     <string name="float_persona_engagement_mute">不参与</string>
-    <string name="float_persona_group">这是群聊</string>
     <string name="float_persona_merge">合并档案</string>
     <string name="float_persona_merge_pick">合并为同一人：选择另一档案</string>
     <string name="float_persona_merge_empty">没有可合并的同类型档案（跨包名同人才合并，绝不自动）</string>

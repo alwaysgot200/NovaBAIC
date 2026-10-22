@@ -256,6 +256,23 @@ private fun AdvisorSettingsScreen(
                     label = { res -> stringResource(res) },
                 ) { prefs.setMaxSession(it) }
 
+                Text(
+                    text = stringResource(R.string.float_settings_workrest_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                ChoiceRow(
+                    options = WORK_SEGMENT_OPTIONS,
+                    selected = settings.workMs,
+                    label = { res -> stringResource(res) },
+                ) { prefs.setWorkMs(it) }
+                ChoiceRow(
+                    options = REST_SEGMENT_OPTIONS,
+                    selected = settings.restMs,
+                    label = { res -> stringResource(res) },
+                ) { prefs.setRestMs(it) }
+
                 SectionLabel(stringResource(R.string.float_settings_background))
                 ToggleRow(
                     title = stringResource(R.string.float_settings_digest),
@@ -1214,6 +1231,20 @@ private val SESSION_OPTIONS = listOf(
     LabeledOption(30 * 60_000L, R.string.float_settings_session_30),
     LabeledOption(60 * 60_000L, R.string.float_settings_session_60),
     LabeledOption(0L, R.string.float_settings_session_unlimited),
+)
+
+/** 无人值守 RPA 休憩循环：工作段档（停歇=0 时该档不生效）。 */
+private val WORK_SEGMENT_OPTIONS = listOf(
+    LabeledOption(5 * 60_000L, R.string.float_settings_work_5),
+    LabeledOption(10 * 60_000L, R.string.float_settings_work_10),
+    LabeledOption(15 * 60_000L, R.string.float_settings_work_15),
+)
+
+private val REST_SEGMENT_OPTIONS = listOf(
+    LabeledOption(0L, R.string.float_settings_rest_off),
+    LabeledOption(5 * 60_000L, R.string.float_settings_rest_5),
+    LabeledOption(10 * 60_000L, R.string.float_settings_rest_10),
+    LabeledOption(20 * 60_000L, R.string.float_settings_rest_20),
 )
 
 private val BACKOFF_OPTIONS = listOf(

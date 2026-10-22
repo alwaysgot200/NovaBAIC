@@ -42,6 +42,14 @@ class AdvisorPrefs @Inject constructor(
         val pollIntervalMs: Long = 800L,
         /** 连续模式单次时长上限（毫秒），0 = 不限。 */
         val maxSessionMs: Long = 30 * 60_000L,
+        /**
+         * 连续模式工作段时长（毫秒）：到点后停歇 [restMs] 再继续（休憩循环，
+         * 无人值守 RPA 的录屏节奏——不能一直不停录，中间要停歇降功耗降痕迹）。
+         * restMs=0 时该值不生效。
+         */
+        val workMs: Long = 10 * 60_000L,
+        /** 工作段之间的停歇时长（毫秒），0 = 不停歇（连续抓帧）。 */
+        val restMs: Long = 10 * 60_000L,
         /** 单次参谋额外上滑几屏（0=单屏，上限 3；方案 §6.6）。 */
         val autoScrollScreens: Int = 2,
         /** 每次滑动后等待渲染的毫秒（600~1500）。 */
@@ -207,6 +215,10 @@ class AdvisorPrefs @Inject constructor(
         Settings(
             pollIntervalMs = prefs.getLong(KEY_POLL, 800L).coerceIn(300L, 5_000L),
             maxSessionMs = prefs.getLong(KEY_MAX_SESSION, DEFAULT_MAX_SESSION),
+            workMs = prefs.getLong(KEY_WORK_MS, 10 * 60_000L)
+                .takeIf { it in WORK_REST_OPTIONS } ?: 10 * 60_000L,
+            restMs = prefs.getLong(KEY_REST_MS, 10 * 60_000L)
+                .takeIf { it in WORK_REST_OPTIONS } ?: 10 * 60_000L,
             autoScrollScreens = prefs.getInt(KEY_SCROLL_SCREENS, 2).coerceIn(0, 3),
             scrollSettleMs = prefs.getLong(KEY_SCROLL_SETTLE, 800L).coerceIn(600L, 1_500L),
             scrollBack = prefs.getBoolean(KEY_SCROLL_BACK, true),
@@ -282,6 +294,19 @@ class AdvisorPrefs @Inject constructor(
     fun setMaxSession(ms: Long) {
         prefs.edit().putLong(KEY_MAX_SESSION, ms).apply()
         _state.update { it.copy(maxSessionMs = ms) }
+    }
+
+    /** 工作段/停歇档（毫秒）：0 仅对停歇合法（=不停歇）；运行中改下轮循环生效。 */
+    fun setWorkMs(ms: Long) {
+        val value = ms.takeIf { it in WORK_REST_OPTIONS } ?: 10 * 60_000L
+        prefs.edit().putLong(KEY_WORK_MS, value).apply()
+        _state.update { it.copy(workMs = value) }
+    }
+
+    fun setRestMs(ms: Long) {
+        val value = ms.takeIf { it in WORK_REST_OPTIONS } ?: 10 * 60_000L
+        prefs.edit().putLong(KEY_REST_MS, value).apply()
+        _state.update { it.copy(restMs = value) }
     }
 
     /** 连续模式静止降频倍数（仅接受 1/2/4，运行中改下一抓拍循环即生效）。 */
@@ -544,6 +569,8 @@ class AdvisorPrefs @Inject constructor(
         private const val PREFS_FILE = "floatball_advisor"
         const val KEY_POLL = "poll_interval_ms"
         const val KEY_MAX_SESSION = "max_session_ms"
+        const val KEY_WORK_MS = "work_segment_ms"
+        const val KEY_REST_MS = "rest_segment_ms"
         const val KEY_SCROLL_SCREENS = "auto_scroll_screens"
         const val KEY_SCROLL_SETTLE = "scroll_settle_ms"
         const val KEY_SCROLL_BACK = "scroll_back"
@@ -606,6 +633,9 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_SESSION_INPUT = "usage_session_input"
         const val KEY_SESSION_OUTPUT = "usage_session_output"
         const val DEFAULT_MAX_SESSION = 30 * 60_000L
+
+        /** 工作/停歇段允许档（毫秒）：5/10/15/20 分钟；0 仅停歇合法（=不停歇）。 */
+        val WORK_REST_OPTIONS = setOf(0L, 5 * 60_000L, 10 * 60_000L, 15 * 60_000L, 20 * 60_000L)
 
         /** 静止降频允许的倍数档。 */
         val BACKOFF_OPTIONS = setOf(1, 2, 4)

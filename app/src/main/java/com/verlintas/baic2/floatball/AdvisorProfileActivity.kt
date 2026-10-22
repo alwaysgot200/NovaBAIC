@@ -426,19 +426,24 @@ private fun ContactListScreen(
                 onDismissRequest = { showCreate = false },
                 title = { Text(stringResource(R.string.float_profile_create_contact)) },
                 text = {
-                    OutlinedTextField(
-                        value = createName,
-                        onValueChange = { createName = it },
-                        label = { Text(stringResource(R.string.float_profile_create_name_hint)) },
-                        singleLine = true,
-                    )
-                    // 所属 APP 单选（§1.5：聊天会话记录「哪个 APP 的什么人」，
-                    // 清单与分屏绑定条共用 FloatUi.IM_APPS 单一来源）。
-                    FlowChips(
-                        options = FloatUi.IM_APPS,
-                        selected = createPkg,
-                        onSelect = { createPkg = it },
-                    )
+                    // AlertDialog 的 text 不会自动纵向排列，必须显式 Column，
+                    // 否则输入框与 APP 单选 chips 叠画在同一位置（2026-10-22 修复）。
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedTextField(
+                            value = createName,
+                            onValueChange = { createName = it },
+                            label = { Text(stringResource(R.string.float_profile_create_name_hint)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        // 所属 APP 单选（§1.5：聊天会话记录「哪个 APP 的什么人」，
+                        // 清单与分屏绑定条共用 FloatUi.IM_APPS 单一来源）。
+                        FlowChips(
+                            options = FloatUi.IM_APPS,
+                            selected = createPkg,
+                            onSelect = { createPkg = it },
+                        )
+                    }
                 },
                 confirmButton = {
                     TextButton(

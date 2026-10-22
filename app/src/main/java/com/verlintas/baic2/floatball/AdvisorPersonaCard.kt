@@ -378,26 +378,6 @@ internal fun AdvisorPersonaCard(
                 }
             }
 
-            // ── 群标识开关（§1.4 误判修正）：isGroup 与 contactType 同步写在 Repository ──
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.float_persona_group),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                Switch(
-                    checked = profile?.isGroup == true,
-                    onCheckedChange = { checked ->
-                        scope.launch { contacts.setGroup(contactId, checked) }
-                    },
-                )
-            }
-
             // ── 手动合并入口（§2.5）：选候选档案 → 选主档案，绝不自动 ──
             OutlinedButton(
                 onClick = { mergePicking = true },

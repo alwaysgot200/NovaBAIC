@@ -43,7 +43,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.verlintas.baic2.designsystem.Baic2Mono
 import com.verlintas.baic2.device.api.AccessibilityBridge
-import com.verlintas.baic2.device.api.ScreenshotProvider
 import com.verlintas.baic2.device.api.ShellBridge
 import com.verlintas.baic2.device.api.ShellState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -60,7 +59,6 @@ data class PermissionsState(
     val shizuku: ShellState = ShellState.Unavailable,
     val filesAccess: Boolean = false,
     val accessibility: Boolean = false,
-    val screenCaptureReady: Boolean = false,
     val overlay: Boolean = false,
     val batteryWhitelisted: Boolean = false,
     val notificationListener: Boolean = false,
@@ -77,7 +75,6 @@ data class PermissionsState(
 class PermissionsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     accessibilityBridge: AccessibilityBridge,
-    screenshotProvider: ScreenshotProvider,
     private val shellBridge: ShellBridge,
 ) : ViewModel() {
 
@@ -85,15 +82,13 @@ class PermissionsViewModel @Inject constructor(
 
     val state: StateFlow<PermissionsState> = combine(
         accessibilityBridge.connected,
-        screenshotProvider.ready,
         shellBridge.state,
         refreshTick,
-    ) { accessibility, capture, shizuku, _ ->
+    ) { accessibility, shizuku, _ ->
         PermissionsState(
             shizuku = shizuku,
             filesAccess = filesAccessEnabled(),
             accessibility = accessibility,
-            screenCaptureReady = capture,
             overlay = Settings.canDrawOverlays(context),
             batteryWhitelisted = batteryWhitelisted(),
             notificationListener = notificationListenerEnabled(),
@@ -256,17 +251,6 @@ fun PermissionsPage(
                         },
                     )
                 },
-            )
-        }
-        item(key = "capture") {
-            PermissionRow(
-                title = stringResource(R.string.settings_perm_capture_title),
-                description = stringResource(R.string.settings_perm_capture_desc),
-                granted = state.screenCaptureReady,
-                actionLabel = stringResource(R.string.settings_perm_capture_action),
-                // ShizukuGrantActivity 一条龙：Shizuku 三态检测 → 配对引导 →
-                // appops 投影免弹窗授权（docs/2026-10-21-投影免弹窗授权方案.md）。
-                onGrant = { startGrantActivity(context, SHIZUKU_GRANT_ACTIVITY) },
             )
         }
         item(key = "overlay") {

@@ -39,9 +39,6 @@
     <string name="settings_permissions_hint">核心权限决定 AI 能否看屏与操作设备；运行时权限仅在对应工具被调用时使用。</string>
     <string name="settings_permissions_core">核心能力</string>
     <string name="settings_permissions_runtime">运行时权限</string>
-    <string name="settings_perm_capture_title">屏幕截图</string>
-    <string name="settings_perm_capture_desc">投影授权：Shizuku 就绪时可免弹窗一键授权，用完即失效</string>
-    <string name="settings_perm_capture_action">一键授权</string>
     <string name="settings_perm_overlay_title">悬浮窗</string>
     <string name="settings_perm_overlay_desc">老参谋悬浮球与分屏浮窗显示在其他应用上层</string>
     <string name="settings_perm_keepalive_title">保活</string>

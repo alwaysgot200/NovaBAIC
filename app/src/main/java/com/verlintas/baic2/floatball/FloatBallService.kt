@@ -778,6 +778,10 @@ class FloatBallService : Service() {
                 toast(R.string.float_recording_session_expired)
                 stopRecording()
             }
+            is FrameDiffEngine.Signal.Resting -> {
+                // 休憩循环不停止录制：提示后引擎自动继续（无人值守 RPA 节奏）。
+                toast(getString(R.string.float_recording_resting, signal.restMs / 60_000L))
+            }
         }
     }
 
@@ -1955,6 +1959,10 @@ class FloatBallService : Service() {
 
     private fun toast(res: Int) {
         Toast.makeText(this, res, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun toast(text: String) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
