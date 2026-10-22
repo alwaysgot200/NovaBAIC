@@ -99,6 +99,9 @@
     <string name="float_shizuku_go_settings">去设置</string>
     <string name="float_shizuku_grant_ok">授权成功：投影授权框已静默。</string>
     <string name="float_shizuku_error_title">执行失败——若提示权限不足，请先检查前置第 1 条（USB 调试（安全设置））。</string>
+    <string name="float_shizuku_install_title">第一步 · 安装 Shizuku</string>
+    <string name="float_shizuku_install_hint">从官网 shizuku.rikka.app 下载安装（也可在应用商店搜索「Shizuku」）——这是后续所有操作的前提</string>
+    <string name="float_shizuku_download">去下载</string>
     <string name="float_shizuku_prereq_title">前置设置（一次性，决定成败）</string>
     <string name="float_shizuku_prereq_dev">开发者选项里打开「USB 调试（安全设置）」——它与普通「USB 调试」是两个独立开关；不开它，配对成功后执行命令仍会权限不足。</string>
     <string name="float_shizuku_prereq_notif">把通知样式切换为「原生 Android」（设置→通知→通知显示设置）——部分定制系统的自定义通知会吞掉 Shizuku 配对弹窗，6 位配对码出不来，卡在「正在搜索配对服务」。</string>

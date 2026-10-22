@@ -203,6 +203,20 @@ internal fun ShizukuGrantScreen(
                 }
             }
 
+            // ---- 第一步：安装 Shizuku（未装时引导，已装也常驻展示下载地址）----
+            SectionCard(stringResource(R.string.float_shizuku_install_title)) {
+                StepItem(
+                    text = stringResource(R.string.float_shizuku_install_hint),
+                    actionLabel = stringResource(R.string.float_shizuku_download),
+                ) {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(SHIZUKU_SITE)),
+                        )
+                    }
+                }
+            }
+
             // ---- 前置（一次性，决定成败）----
             SectionCard(stringResource(R.string.float_shizuku_prereq_title)) {
                 StepItem(stringResource(R.string.float_shizuku_prereq_dev)) {
@@ -211,10 +225,7 @@ internal fun ShizukuGrantScreen(
                     }
                 }
                 StepItem(stringResource(R.string.float_shizuku_prereq_notif)) {
-                    runCatching {
-                        // android.provider.Settings 常量名各版本不一，直接用 action 串。
-                        context.startActivity(Intent("android.settings.NOTIFICATION_SETTINGS"))
-                    }
+                    openNotificationStyleSettings(context)
                 }
             }
 
@@ -284,9 +295,13 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
     }
 }
 
-/** 步骤行：数字圆点 + 文案 + 可选「去设置」动作（[onAction] 为 null 时隐藏）。 */
+/** 步骤行：数字圆点 + 文案 + 可选动作按钮（[onAction] 为 null 时隐藏）。 */
 @Composable
-private fun StepItem(text: String, onAction: (() -> Unit)? = null) {
+private fun StepItem(
+    text: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
     val scheme = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -297,10 +312,53 @@ private fun StepItem(text: String, onAction: (() -> Unit)? = null) {
         )
         if (onAction != null) {
             TextButton(onClick = onAction) {
-                Text(stringResource(R.string.float_shizuku_go_settings))
+                Text(actionLabel ?: stringResource(R.string.float_shizuku_go_settings))
             }
         }
     }
 }
 
 private const val SHIZUKU_SITE = "https://shizuku.rikka.app/"
+
+/**
+ * 逐级降级打开通知样式设置（配对弹窗需要系统原生通知通道才显示 6 位配对码）。
+ * 按厂商排优先级：小米/HyperOS 直达「通知样式设置」，其余 ROM 的样式开关
+ * 都收在自家通知主页里，落到标准「通知」页即是可用的最深入口。
+ * action 不存在时 startActivity 抛 ActivityNotFoundException，逐级捕获。
+ */
+private fun openNotificationStyleSettings(context: android.content.Context) {
+    val chain = when (android.os.Build.MANUFACTURER?.lowercase()) {
+        "xiaomi", "redmi" -> listOf(                                        // HyperOS/MIUI
+            "miui.settings.NOTIFICATION_DISPLAY_SETTINGS",                 // 通知样式设置（真机实测）
+            "android.settings.NOTIFICATION_SETTINGS",                      // 通知页兜底
+        )
+        "honor", "huawei" -> listOf(                                        // MagicOS/EMUI 通知和状态栏
+            "android.settings.NOTIFICATION_AND_STATUS_BAR_SETTINGS",
+            "android.settings.NOTIFICATION_SETTINGS",
+        )
+        "oppo", "realme", "oneplus" -> listOf(                              // ColorOS 通知与状态栏
+            "android.settings.NOTIFICATION_AND_STATUS_BAR_SETTINGS",
+            "com.coloros.settings.notification.NOTIFICATION_SETTINGS",
+            "android.settings.NOTIFICATION_SETTINGS",
+        )
+        "vivo", "iqoo" -> listOf(                                           // OriginOS 通知与状态栏
+            "android.settings.NOTIFICATION_AND_STATUS_BAR_SETTINGS",
+            "com.vivo.settings.notification.SETTINGS",
+            "android.settings.NOTIFICATION_SETTINGS",
+        )
+        "samsung" -> listOf(                                                // OneUI 通知（样式在各 App 通知设置内）
+            "android.settings.NOTIFICATION_SETTINGS",
+        )
+        else -> listOf(
+            "android.settings.NOTIFICATION_STYLE_SETTINGS",                  // 未知 ROM 先试样式页
+            "android.settings.NOTIFICATION_AND_STATUS_BAR_SETTINGS",
+            "android.settings.NOTIFICATION_SETTINGS",
+        )
+    }
+    for (action in chain) {
+        val ok = runCatching {
+            context.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.isSuccess
+        if (ok) return
+    }
+}
