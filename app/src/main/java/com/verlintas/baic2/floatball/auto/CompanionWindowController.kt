@@ -491,8 +491,17 @@ class CompanionWindowController @Inject constructor(
         // runAdvisorTurn 本回合写入 ScreenAdvisor.tacticRulings（90s 缓存共享，
         // 零重复 LLM）；无在途回合/未触发时为 null，走既有 auto 四类硬审兜底。
         val tactics = screenAdvisor.tacticRulingFor(window.contactId)
-        val rejection = gatekeeper.deterministicReview(draft, priorReplies, maxChars, auto = true, tactics = tactics)
-            ?: gatekeeper.llmReview(draft, priorReplies)
+        // E-f 情绪红线（方案 §4.5 行 11）同口径：盛怒稿玩笑/推进命中也拦，
+        // 自动档拒绝 = 降级起草档（tally.onBlocked 同款处置，绝不自动发）。
+        val emotion = screenAdvisor.emotionRouteFor(window.contactId)
+        val rejection = gatekeeper.deterministicReview(
+            draft,
+            priorReplies,
+            maxChars,
+            auto = true,
+            tactics = tactics,
+            emotion = emotion,
+        ) ?: gatekeeper.llmReview(draft, priorReplies)
         if (rejection != null) {
             tally.onBlocked()
             runCatching { dispatcher.logGateBlocked(request, rejection.reason) }

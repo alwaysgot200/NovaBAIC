@@ -35,6 +35,8 @@ import kotlin.math.abs
  * @property bannedDims 禁用敏感维（[StrategistRules.DIM_*]，enforce 层剥 use）
  * @property bannedNote 语义禁令（推进/长篇等非词表手段，进提示词约束；盛怒的
  * 玩笑/推进硬红线由审查官 E-f 拦截降级重写）
+ * @property redline 审查官情绪红线启用位（方案 §4.5 行 11）：true 时稿件玩笑/推进
+ * 词表命中即拦截降级重写——**仅盛怒行**开启（误报保守：其余行一律放行）
  * @property guidance 话术方向（提示词引导句）
  */
 data class EmotionRoute(
@@ -46,6 +48,7 @@ data class EmotionRoute(
     val bannedApproaches: List<String> = emptyList(),
     val bannedDims: Set<String> = emptySet(),
     val bannedNote: String = "",
+    val redline: Boolean = false,
     val guidance: String = "",
 ) {
     companion object {
@@ -101,6 +104,7 @@ internal object EmotionRouting {
         bannedApproaches = listOf(APPROACH_HUMOR, APPROACH_STORY),
         bannedDims = setOf(StrategistRules.DIM_EXEMPLIFYING),
         bannedNote = "推进（不逼单、不营销下一步）、开玩笑玩梗",
+        redline = true,
         guidance = "短句、先道歉再解释、给出补救行动",
     )
 

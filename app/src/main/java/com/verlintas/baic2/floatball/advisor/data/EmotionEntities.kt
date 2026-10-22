@@ -49,6 +49,9 @@ const val EMOTION_CONFIDENCE_LOW = "low"
 const val EMOTION_REASON_JUDGE = "emotion_judge"
 const val EMOTION_REASON_REFINE = "emotion_refine"
 
+/** 审查官情绪红线降级（E-f，方案 §4.5 行 11）：盛怒稿被拦下换安抚稿时落此键。 */
+const val EMOTION_REASON_VETO = "emotion_veto"
+
 /**
  * 情绪信号词条（方案 §4.3.2）：**可运营数据资产**——用户可查看/增补/调权重/停用/
  * 按联系人限定；AI 挖词与判错反馈只产生人审建议，入库以 source 区分。

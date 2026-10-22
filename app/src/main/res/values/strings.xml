@@ -252,6 +252,7 @@
     <string name="float_gate_reason_auto_promise">自动档硬审：草稿替你答应了事项或承诺了期限，已降级为草稿，请人工确认后再发</string>
     <string name="float_gate_reason_auto_privacy">自动档硬审：草稿涉及敏感隐私（住址/证件/收入/年龄等），已降级为草稿，请人工确认后再发</string>
     <string name="float_gate_reason_auto_overstep">自动档硬审：草稿提出见面/送礼等超阶段动作，已降级为草稿，请人工确认后再发</string>
+    <string name="float_gate_reason_emotion_veto">情绪红线：对方正在盛怒，草稿带玩笑或催促推进内容，已降级为安抚稿，原稿保留可查</string>
     <string name="float_gate_blocked_empty">截断后已无可保留内容，原稿整体拦截，请长按气泡重新生成</string>
     <string name="float_dir_chip">方向 ▾</string>
     <string name="float_dir_set">方向：%1$s ▾</string>

@@ -23,6 +23,7 @@ import com.verlintas.baic2.core.data.repository.AgentRepository
 import com.verlintas.baic2.core.engine.AuxiliaryTasks
 import com.verlintas.baic2.floatball.FrameQuality
 import com.verlintas.baic2.floatball.advisor.strategy.strategyJson
+import com.verlintas.baic2.floatball.experts.strategist.EmotionRoute
 import com.verlintas.baic2.floatball.experts.strategist.RuledPermit
 import com.verlintas.baic2.floatball.experts.strategist.StrategistAssets
 import javax.inject.Inject
@@ -73,6 +74,11 @@ object GateReasons {
 
     /** 我方隐私自曝语命中而 disclosure 未获许可。 */
     const val TACTIC_DISCLOSURE = "tactic_veto_disclosure"
+
+    // ── E-f：情绪红线（情感分析师方案 §4.5 行 11，盛怒禁玩笑/推进） ──
+
+    /** 盛怒情绪红线：草稿带玩笑/梗/推进词表命中，降级重写为安抚稿（不丢稿）。 */
+    const val EMOTION_VETO = "emotion_veto"
 }
 
 /**
@@ -184,6 +190,10 @@ object GateRules {
      * T1-c 追加 [tactics]（军师许可单，null=未触发/失败）：四查之后、auto 四类
      * 之前执行越许可检测（裁量层方案 §五）——许可单在场时，红线死清单与
      * 未批敏感词一律拦截降级。
+     *
+     * E-f 追加 [emotion]（情绪映射行，[EmotionRoute.INACTIVE]=不干预）：越许可
+     * 检测之后、auto 四类之前执行情绪红线（方案 §4.5 行 11）——仅 [EmotionRoute.redline]
+     * 行（盛怒）生效，玩笑/推进命中降级重写为安抚稿。
      */
     fun deterministicReview(
         draft: String,
@@ -191,6 +201,7 @@ object GateRules {
         maxChars: Int,
         auto: Boolean,
         tactics: RuledPermit? = null,
+        emotion: EmotionRoute = EmotionRoute.INACTIVE,
     ): GateRejection? {
         val hit = findRedline(draft)
         if (hit != null) {
@@ -203,6 +214,7 @@ object GateRules {
             return GateRejection(GateReasons.REPETITIVE, null)
         }
         tacticReview(draft, tactics)?.let { return it }
+        emotionReview(draft, emotion)?.let { return it }
         if (auto) {
             val blocked = findAutoBlock(draft)
             if (blocked != null) {
@@ -243,6 +255,54 @@ object GateRules {
             return GateRejection(GateReasons.TACTIC_DISCLOSURE, null)
         }
         return null
+    }
+
+    // ── E-f：情绪红线（情感分析师方案 §4.5 行 11，纯函数 JVM 可单测） ─────
+
+    /**
+     * 玩笑/梗词表：盛怒时的玩笑是关系杀手（方案 §三.2 防翻车），命中即拦。
+     * 只收「几乎不可能出现在正经安抚/解释稿里」的玩笑标记（误报保守：漏报可由
+     * 提示词约束与用户预览兜底，误报会把正常稿错换成安抚稿）。
+     */
+    internal val EMOTION_JOKES: Regex = Regex(
+        "开个玩笑|开玩笑|别当真|逗你玩|逗您玩|讲个笑话|笑话一则|笑死|笑不活|笑不活了|" +
+            "搞笑|幽默一下|调侃|损你|损您|戏精|惊不惊喜|意不意外|玩梗|梗图|老梗|烂梗|" +
+            "狗头|滑稽|233+|666+|yyds|绝绝子|lol|😂|🤣|😅|😏|😜|😝|🙃",
+    )
+
+    /**
+     * 推进词表（不逼单、不营销下一步）：催促决定 / 逼单 / 约下一步的营销句式。
+     * 与 AUTO_MONEY 等自动档词表互补（那边管钱与超阶段动作，这边管「催」）。
+     */
+    internal val EMOTION_PUSHES: Regex = Regex(
+        "考虑(得|的)?怎么样|考虑好了吗|什么时候(下单|付款|购买|买|定)|" +
+            "今天(就|之内)(下单|定|买|付款)|名额(有限|不多)|抓紧(时间|下单|报名|决定)|" +
+            "机不可失|时不再来|错过(就|再)[^，。！？]{0,6}(没有|无)|优惠(今天|马上|即将)(结束|截止)|" +
+            "要不要(来|试试|办|买)|约(个|一下)?(时间|见面|出来)|赶紧(决定|下单|定)|" +
+            "快点(决定|下单|定)|定下来吧|别犹豫了|先(付|转)(定金|款)",
+    )
+
+    /**
+     * 盛怒降级安抚稿模板（确定性零 LLM，方案 §4.5 行 11「降级重写为安抚稿」）：
+     * 纯认错安抚、零业务主张、零玩笑零推进，任何场景都不至于说错话；
+     * 原稿不丢（gateOverlays 只换渲染副本，落库原文不动）。
+     */
+    const val EMOTION_SOOTHING_DRAFT: String =
+        "看得出这件事让你很生气，是我没处理好。你先消消气，把最在意的地方直接告诉我，" +
+            "我在认真听，也一定会认真对待。"
+
+    /**
+     * E-f 情绪红线：仅 [EmotionRoute.redline] 行（盛怒）生效——玩笑/梗或推进
+     * 词表命中即拦，替换为 [EMOTION_SOOTHING_DRAFT] 安抚稿；其余行（不满/低落/
+     * 试探等）与 [EmotionRoute.INACTIVE] 一律放行（范围纪律：红线只锁盛怒，
+     * 误报保守）。无命中返回 null = 放行。
+     */
+    fun emotionReview(draft: String, emotion: EmotionRoute): GateRejection? {
+        if (!emotion.redline) return null
+        val joke = EMOTION_JOKES.find(draft)?.value
+        val push = EMOTION_PUSHES.find(draft)?.value
+        if (joke == null && push == null) return null
+        return GateRejection(GateReasons.EMOTION_VETO, EMOTION_SOOTHING_DRAFT)
     }
 
     // ── M3-a：自动档四类词表（方案 §8.2，纯函数 JVM 可单测） ─────────────
@@ -372,14 +432,17 @@ class Gatekeeper @Inject constructor(
 
     /** 第一道：确定性审（转发纯函数；调用方选线程，本方法不做 IO）。
      * [auto]=true 时追加四类自动档硬审（钱/承诺/敏感隐私/超阶段，M3-a）；
-     * [tactics] 非空时追加军师许可单越许可检测（T1-c，裁量层方案 §五）。 */
+     * [tactics] 非空时追加军师许可单越许可检测（T1-c，裁量层方案 §五）；
+     * [emotion] 为盛怒行时追加情绪红线（E-f，方案 §4.5 行 11）。 */
     fun deterministicReview(
         draft: String,
         recentReplies: List<String>,
         maxChars: Int,
         auto: Boolean = false,
         tactics: RuledPermit? = null,
-    ): GateRejection? = GateRules.deterministicReview(draft, recentReplies, maxChars, auto, tactics)
+        emotion: EmotionRoute = EmotionRoute.INACTIVE,
+    ): GateRejection? =
+        GateRules.deterministicReview(draft, recentReplies, maxChars, auto, tactics, emotion)
 
     /**
      * 第二道：轻 LLM 审。返回 null = 放行（含一切失败路径）。

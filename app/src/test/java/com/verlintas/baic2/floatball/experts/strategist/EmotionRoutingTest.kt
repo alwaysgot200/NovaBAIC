@@ -210,6 +210,28 @@ class EmotionRoutingTest {
         }
     }
 
+    @Test
+    fun redlineArmedOnlyOnRageRow() {
+        // E-f 情绪红线只锁盛怒行：盛怒裁决映射出的行带 redline，其余行恒 false。
+        val rage = EmotionRouting.route(verdict(labels = listOf(ls(EmotionLabels.ANGER, 2.0)), intensity = 4))
+        assertEquals("rage", rage.key)
+        assertTrue(rage.redline)
+        val rows = listOf(
+            EmotionRouting.UNHAPPY,
+            EmotionRouting.HESITANT,
+            EmotionRouting.EXCITED,
+            EmotionRouting.PERFUNCTORY,
+            EmotionRouting.DISAPPOINTED,
+            EmotionRouting.PROBING,
+            EmotionRouting.LOW,
+            EmotionRouting.NEGATIVE_FALLBACK,
+            EmotionRoute.INACTIVE,
+        )
+        for (row in rows) {
+            assertFalse("row=${row.key}", row.redline)
+        }
+    }
+
     // ── 测试辅助 ─────────────────────────────────────────────────────────
 
     private fun verdict(

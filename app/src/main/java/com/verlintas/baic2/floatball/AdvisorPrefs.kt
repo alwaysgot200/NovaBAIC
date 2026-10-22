@@ -157,6 +157,11 @@ class AdvisorPrefs @Inject constructor(
         val smtpFromEmail: String = DEFAULT_SMTP_FROM_EMAIL,
         /** SMTP 连接/读超时（秒）。 */
         val smtpTimeoutSec: Int = DEFAULT_SMTP_TIMEOUT_SEC,
+        /**
+         * 审查官情绪红线开关（E-f，情感分析师方案 D3）：盛怒稿玩笑/推进词表命中
+         * 拦截换安抚稿（不丢稿 + 台账 emotion_veto）。默认开启，设置页可关。
+         */
+        val emotionRedlineEnabled: Boolean = true,
     ) {
         /** 白名单的 Long 视图（非法项静默忽略；与 [addAutoWhitelistContact] 同口径）。 */
         val autoWhitelistIds: Set<Long>
@@ -280,6 +285,7 @@ class AdvisorPrefs @Inject constructor(
             smtpFromName = prefs.getString(KEY_SMTP_FROM_NAME, DEFAULT_SMTP_FROM_NAME)?.trim().orEmpty(),
             smtpFromEmail = prefs.getString(KEY_SMTP_FROM_EMAIL, DEFAULT_SMTP_FROM_EMAIL)?.trim().orEmpty(),
             smtpTimeoutSec = prefs.getInt(KEY_SMTP_TIMEOUT, DEFAULT_SMTP_TIMEOUT_SEC).coerceIn(5, 120),
+            emotionRedlineEnabled = prefs.getBoolean(KEY_EMOTION_REDLINE, true),
         )
 
     private val _tokenStats = MutableStateFlow(loadTokenStats())
@@ -457,6 +463,12 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(escalationMailEnabled = enabled) }
     }
 
+    /** 审查官情绪红线开关（E-f，方案 D3：默认开，设置页可关）。 */
+    fun setEmotionRedlineEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_EMOTION_REDLINE, enabled).apply()
+        _state.update { it.copy(emotionRedlineEnabled = enabled) }
+    }
+
     /** SMTP 配置一次性保存（设置页对话框提交；主机留空回退默认）。 */
     fun setSmtpConfig(
         host: String,
@@ -608,6 +620,7 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_SMTP_FROM_NAME = "escalation_smtp_from_name"
         const val KEY_SMTP_FROM_EMAIL = "escalation_smtp_from_email"
         const val KEY_SMTP_TIMEOUT = "escalation_smtp_timeout"
+        const val KEY_EMOTION_REDLINE = "emotion_redline_enabled"
 
         // ── 通报邮件 SMTP 缺省（测试环境：阿里企业邮，用户 2026-10-20 口径） ──
         const val DEFAULT_SMTP_HOST = "smtp.qiye.aliyun.com"

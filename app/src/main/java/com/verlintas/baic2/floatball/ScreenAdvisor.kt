@@ -48,8 +48,10 @@ import com.verlintas.baic2.floatball.advisor.GoalRepository
 import com.verlintas.baic2.floatball.advisor.HeatRules
 import com.verlintas.baic2.floatball.advisor.MissionJudgeRunner
 import com.verlintas.baic2.floatball.advisor.StrategyBrief
+import com.verlintas.baic2.floatball.advisor.emotion.EmotionAssessor
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionCueExtractor
 import com.verlintas.baic2.floatball.advisor.emotion.EmotionJudge
+import com.verlintas.baic2.floatball.advisor.data.EMOTION_REASON_VETO
 import com.verlintas.baic2.floatball.advisor.data.TalkMissionEntity
 import com.verlintas.baic2.floatball.advisor.data.GOAL_ACTIVE
 import com.verlintas.baic2.floatball.advisor.data.HORIZON_L1
@@ -97,6 +99,7 @@ import com.verlintas.baic2.floatball.experts.EmotionTurn
 import com.verlintas.baic2.floatball.experts.ExpertPanel
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyAssets
 import com.verlintas.baic2.floatball.experts.privacy.PrivacyDomain
+import com.verlintas.baic2.floatball.experts.strategist.EmotionRoute
 import com.verlintas.baic2.floatball.experts.strategist.EmotionRouting
 import com.verlintas.baic2.floatball.experts.strategist.RuledPermit
 import com.verlintas.baic2.floatball.experts.strategist.Strategist
@@ -178,6 +181,7 @@ class ScreenAdvisor @Inject constructor(
     private val expertPanel: ExpertPanel,
     private val strategist: Strategist,
     private val escalationNotifier: EscalationNotifier,
+    private val emotionAssessor: EmotionAssessor,
 ) {
 
     /** 面板渲染所需的一切：会话消息 + 正在流式的回答 + 阶段状态。 */
@@ -247,6 +251,25 @@ class ScreenAdvisor @Inject constructor(
 
     /** 自动发送路径取当回合许可单（无在途回合/军师未触发时为 null，走兜底硬审）。 */
     fun tacticRulingFor(contactId: Long): RuledPermit? = tacticRulings[contactId]
+
+    /**
+     * E-f：最近回合的情绪裁决（contactId → verdict）。runAdvisorTurn 组装提示词时
+     * 写入；自动发送路径（CompanionWindowController → Gatekeeper 情绪红线）经
+     * [emotionRouteFor] 复用同一份——零重复判定、零额外 LLM。
+     */
+    private val emotionVerdicts = ConcurrentHashMap<Long, EmotionJudge.EmotionVerdict>()
+
+    /** 自动发送路径取当回合情绪红线行（无裁决/关闸时 = [EmotionRoute.INACTIVE]）。 */
+    fun emotionRouteFor(contactId: Long): EmotionRoute =
+        gatedEmotion(EmotionRouting.route(emotionVerdicts[contactId]))
+
+    /**
+     * D3 开关收口（方案 D3：情绪红线默认开、设置页可关）：关闸时恒不干预。
+     * 只闸审查官红线消费面（Gatekeeper），不闸 E-e 提示词情绪段（那是方针引导，
+     * 非拦截）。
+     */
+    private fun gatedEmotion(route: EmotionRoute): EmotionRoute =
+        if (prefs.state.value.emotionRedlineEnabled) route else EmotionRoute.INACTIVE
 
     /**
      * 最近一次参谋回合的会话 ID（分屏「未绑定 → 快速绑定」透传给画像页做
@@ -2156,6 +2179,11 @@ class ScreenAdvisor @Inject constructor(
         // 不干预（原则 5）。映射层纯函数无失败面，不进 runCatching。
         val emotionRoute = EmotionRouting.route(emotionVerdict)
         val emotionSection = StrategistPrompt.emotionSection(emotionRoute)
+        // E-f：记住本回合情绪裁决，自动发送路径审查时经 emotionRouteFor 复用
+        // （同 tacticRulings 口径；按联系人覆盖，量级=联系人数）。
+        if (contact != null && emotionVerdict != null) {
+            emotionVerdicts[contact.contactId] = emotionVerdict
+        }
         var tacticToolkit: String? = null
         var tacticCommand: String? = null
         var tacticFallback: String? = null
@@ -2338,6 +2366,9 @@ class ScreenAdvisor @Inject constructor(
                                     .map { it.content },
                                 maxChars = (settings.answerTargetChars * 2)
                                     .coerceAtLeast(GATE_LENGTH_FLOOR),
+                                contactId = contact?.contactId ?: 0L,
+                                turnMessageId = question.id,
+                                emotionVerdict = emotionVerdict,
                             )
                         }
                         // 后台滚动摘要 + 画像萃取：独立协程，不占串行队列、不阻塞 UI。
@@ -2986,12 +3017,19 @@ class ScreenAdvisor @Inject constructor(
      * 纯函数零成本，命中立刻挂降级层，抢在 Room 观察者首次发射之前；未命中
      * 再在后台发起轻 LLM 审（≤120tok，只看 AI 腔/换皮重复）。批准偏置
      * （方案 §5.3）：LLM 审任何失败一律放行，只拦阻断项，不挑刺文风。
+     *
+     * E-f 情绪红线（方案 §4.5 行 11）：[emotionVerdict] 映射到盛怒行时，玩笑/
+     * 推进词表命中拦截换安抚稿（不丢稿），并落台账 [EMOTION_REASON_VETO]；
+     * D3 开关经 [gatedEmotion] 收口（默认开）。
      */
     private suspend fun gateTurn(
         conversationId: Long,
         assistantMessageId: Long,
         priorReplies: List<String>,
         maxChars: Int,
+        contactId: Long = 0L,
+        turnMessageId: Long = 0L,
+        emotionVerdict: EmotionJudge.EmotionVerdict? = null,
     ) {
         if (assistantMessageId <= 0L) return
         // 本回合成稿是会话最新一条消息（回合内无并发写入）；LIMIT 1 有界读取。
@@ -2999,9 +3037,29 @@ class ScreenAdvisor @Inject constructor(
             historyGateway.recentMessages(conversationId, 1).lastOrNull()?.content.orEmpty()
         }.getOrDefault("")
         if (draft.isBlank()) return
-        val rejection = gatekeeper.deterministicReview(draft, priorReplies, maxChars)
+        val rejection = gatekeeper.deterministicReview(
+            draft,
+            priorReplies,
+            maxChars,
+            emotion = gatedEmotion(EmotionRouting.route(emotionVerdict)),
+        )
         if (rejection != null) {
             applyGateRejection(assistantMessageId, draft, rejection)
+            if (rejection.reason == GateReasons.EMOTION_VETO &&
+                emotionVerdict != null && contactId > 0L
+            ) {
+                // E-f 台账：情绪红线降级落 emotion_events（emotion_* 同族键可按
+                // 前缀检索回放）。旁路纪律：失败只静默，绝不阻断回合。
+                runCatching {
+                    emotionAssessor.record(
+                        contactId = contactId,
+                        conversationId = conversationId,
+                        turnMessageId = turnMessageId,
+                        verdict = emotionVerdict,
+                        reason = EMOTION_REASON_VETO,
+                    )
+                }
+            }
             return
         }
         advisorScope.launch {
@@ -3032,6 +3090,7 @@ class ScreenAdvisor @Inject constructor(
                 GateReasons.AUTO_PROMISE -> R.string.float_gate_reason_auto_promise
                 GateReasons.AUTO_PRIVACY -> R.string.float_gate_reason_auto_privacy
                 GateReasons.AUTO_OVERSTEP -> R.string.float_gate_reason_auto_overstep
+                GateReasons.EMOTION_VETO -> R.string.float_gate_reason_emotion_veto
                 else -> R.string.float_gate_reason_ai_tone
             },
         )
