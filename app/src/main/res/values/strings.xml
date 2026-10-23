@@ -344,7 +344,7 @@
     <string name="float_im_nav_shizuku_off">无障碍与 Shizuku 均未就绪，无法自动进入对话：已为你打开聊天 App，请手动点击「%1$s」。开启任一通道即可：设置 → 无障碍，或老参谋设置 → Shizuku</string>
     <string name="float_im_nav_projection_fail">屏幕投影建立失败，无法识别屏幕内容：请检查 Shizuku 是否在运行后重试，或手动点击「%1$s」</string>
     <string name="float_im_nav_app_missing">未找到对应的聊天应用，无法打开</string>
-    <string name="float_im_nav_generic_fail">未能自动进入与 %1$s 的对话（界面未能定位），已为你打开聊天 App，请手动点击该联系人</string>
+    <string name="float_im_nav_generic_fail">未能自动进入与 %1$s 的对话（界面未能定位：%2$s），已为你打开聊天 App，请手动点击该联系人</string>
     <!-- VA-2 U3（v10 §1.3）：NON_CHAT 分屏隐藏人设区，只显示纯问答标识 -->
     <string name="float_profile_status_nonchat">屏幕参谋 · 纯问答</string>
     <!-- VA-2 U2（v10 §2.4/§2.5/§2.6）：GoalTab 双方人设与维持度区块 -->

@@ -743,7 +743,7 @@
     <!-- IM 直达导航 -->
     <string name="float_im_nav_a11y_off">Accessibility is off, so the conversation cannot be opened automatically. The chat app is open — tap “%1$s” yourself. To enable: Settings → Accessibility → BetterAIChat2</string>
     <string name="float_im_nav_app_missing">The matching chat app was not found and cannot be opened</string>
-    <string name="float_im_nav_generic_fail">Could not enter the chat with %1$s automatically (the target UI was not found). The chat app is open — tap that contact yourself</string>
+    <string name="float_im_nav_generic_fail">Could not enter the chat with %1$s automatically (target UI not located: %2$s). The chat app is open — tap that contact yourself</string>
     <string name="float_im_nav_ok">Entered the chat with %1$s</string>
     <string name="float_im_nav_projection_fail">Screen projection failed, so the screen cannot be read. Check that Shizuku is running and retry, or tap “%1$s” yourself</string>
     <string name="float_im_nav_shizuku_off">Neither accessibility nor Shizuku is ready, so the conversation cannot be opened automatically. The chat app is open — tap “%1$s” yourself. Enable either channel: Settings → Accessibility, or 老参谋 settings → Shizuku</string>
