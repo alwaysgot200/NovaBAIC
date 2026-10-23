@@ -143,6 +143,12 @@
             android:exported="false"
             android:label="@string/float_help_title" />
 
+        <!-- 关于（「更多」弹窗末项入口，复用主框架设置的关于页内容） -->
+        <activity
+            android:name=".floatball.AdvisorAboutActivity"
+            android:exported="false"
+            android:label="@string/float_more_about" />
+
         <!-- 老参谋保活：开机/更新自启（受保护广播，exported 必须 true） -->
         <receiver
             android:name=".keepalive.KeepAliveBootReceiver"
@@ -184,6 +190,15 @@
             android:name=".keepalive.KeepAliveSettingsActivity"
             android:exported="false"
             android:label="@string/float_keepalive_title" />
+
+        <!-- 首启保活引导卡片（2026-10-22）：初装首次启动弹一次，三项授权逐项去开启。
+             不设 noHistory：跳系统页后必须能返回卡片刷新状态，卡片靠「完成」收尾 -->
+        <activity
+            android:name=".keepalive.KeepAliveSetupGuideActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- M2-a 起草档：聊天通知监听（仅白名单 IM、未建档联系人静默忽略） -->
         <service

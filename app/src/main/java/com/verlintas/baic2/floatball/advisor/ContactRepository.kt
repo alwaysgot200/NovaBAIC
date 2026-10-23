@@ -148,11 +148,26 @@ class ContactRepository @Inject constructor(
         // 建档即双建（v10，方案 §2.4）：我方侧面从全局 self_personas 复制为起点，
         // 对方侧 identity/chatStyle/closeness 留空待萃取；建档+登记别名同事务原子。
         val facetSeed = SelfFacets.encode(db.selfPersonaDao().listAll().map { it.tag })
+        val key = ContactNames.contactKey(imPackage, normalized)
         val id = db.withTransaction {
+            // 同键软删行让位/复活（2026-10-22）：(imPackage, contactKey) 唯一索引
+            // 被软删行占用时直接插入会抛约束异常，且被上层 runCatching 静默吞掉
+            // ——「删除联系人后重建同名，创建点了没反应」的真因。显式重建
+            // （bypassTombstone）复活原行（清 deletedAt、刷显示名，别名/画像
+            // 等档案历史一并回归，等同撤销删除）；自动归档路径（登记行已单独
+            // 删除、墓碑不在的场景）把软删行改键让位（保留合并史，不再挡新档）。
+            val dead = db.contactProfileDao().findDeletedByKey(imPackage, key)
+            if (dead != null) {
+                if (bypassTombstone && dead.mergedInto == null) {
+                    db.contactProfileDao().revive(dead.id, rawTitle.trim(), now)
+                    return@withTransaction dead.id
+                }
+                db.contactProfileDao().rekey(dead.id, "deleted:${dead.id}:${dead.contactKey}", now)
+            }
             val newId = db.contactProfileDao().insert(
                 ContactProfileEntity(
                     imPackage = imPackage,
-                    contactKey = ContactNames.contactKey(imPackage, normalized),
+                    contactKey = key,
                     displayName = rawTitle.trim(),
                     selfFacetJson = facetSeed,
                     createdAt = now,

@@ -47,6 +47,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -54,6 +55,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -83,9 +85,11 @@ import com.verlintas.baic2.floatball.auto.InjectorSelector
 import com.verlintas.baic2.floatball.auto.ReadinessGate
 import com.verlintas.baic2.floatball.auto.ReadinessReport
 import com.verlintas.baic2.floatball.auto.ScreenCapture
+import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /** 「在主界面打开」用的会话深链键（mirror MainActivity/RunService 的私有常量）。 */
@@ -136,6 +140,10 @@ class FloatSettingsActivity : ComponentActivity() {
     @Inject
     lateinit var screenCapture: ScreenCapture
 
+    /** LLM 请求重试参数（消费方是 ScreenAdvisor 的重试循环；设置 UI 归位本页）。 */
+    @Inject
+    lateinit var keepAlivePrefs: KeepAlivePrefs
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -176,6 +184,7 @@ class FloatSettingsActivity : ComponentActivity() {
                     readinessGate = readinessGate,
                     shizukuGate = shizukuGate,
                     screenCapture = screenCapture,
+                    keepAlivePrefs = keepAlivePrefs,
                     onClose = { finish() },
                 )
             }
@@ -195,6 +204,7 @@ private fun AdvisorSettingsScreen(
     readinessGate: ReadinessGate,
     shizukuGate: com.verlintas.baic2.floatball.shizuku.ShizukuGate,
     screenCapture: ScreenCapture,
+    keepAlivePrefs: KeepAlivePrefs,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
@@ -344,6 +354,38 @@ private fun AdvisorSettingsScreen(
                 ) { prefs.setSessionTokenBudget(it) }
 
                 TokenUsageCard(prefs = prefs, balanceRepository = balanceRepository)
+
+                // LLM 请求重试（2026-10-22 自保活设置页迁入）：实际消费方是
+                // ScreenAdvisor 的 LLM 调用重试循环，语义归位老参谋设置。
+                val kaConfig by keepAlivePrefs.state.collectAsState()
+                SectionLabel(stringResource(R.string.float_settings_llm_retry_section))
+                RetrySlider(
+                    label = stringResource(R.string.float_settings_retry_times_label),
+                    value = kaConfig.retryTimes.toFloat(),
+                    valueRange = 0f..10f,
+                    steps = 9,
+                    valueText = stringResource(R.string.float_settings_retry_times_value, kaConfig.retryTimes),
+                ) { keepAlivePrefs.setRetryTimes(it.roundToInt()) }
+                RetrySlider(
+                    label = stringResource(R.string.float_settings_retry_delay_label),
+                    value = kaConfig.retryDelaySec.toFloat(),
+                    valueRange = 1f..60f,
+                    steps = 58,
+                    valueText = stringResource(R.string.float_settings_retry_seconds_value, kaConfig.retryDelaySec),
+                ) { keepAlivePrefs.setRetryDelaySec(it.roundToInt()) }
+                RetrySlider(
+                    label = stringResource(R.string.float_settings_retry_timeout_label),
+                    value = kaConfig.retryTimeoutSec.toFloat(),
+                    valueRange = 5f..120f,
+                    steps = 114,
+                    valueText = stringResource(R.string.float_settings_retry_seconds_value, kaConfig.retryTimeoutSec),
+                ) { keepAlivePrefs.setRetryTimeoutSec(it.roundToInt()) }
+                Text(
+                    text = stringResource(R.string.float_settings_retry_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
 
                 // 权限/授权类条目已统一收敛到主框架「设置 → 权限」页（方案见
                 // docs/2026-10-22-设置权限统一合并方案.md）：无障碍/悬浮窗/投影
@@ -609,6 +651,41 @@ private fun AdvisorSettingsScreen(
         }
     }
 }
+
+/** LLM 请求重试滑杆（2026-10-22 自保活设置页迁入）：松手才落盘。 */
+@Composable
+private fun RetrySlider(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    valueText: String,
+    onChangeFinished: (Float) -> Unit,
+) {
+    val sliderValue = remember(value) { mutableFloatStateOf(value) }
+    Column(modifier = Modifier.padding(top = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = valueText,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Slider(
+            value = sliderValue.floatValue,
+            onValueChange = { sliderValue.floatValue = it },
+            valueRange = valueRange,
+            steps = steps,
+            onValueChangeFinished = { onChangeFinished(sliderValue.floatValue) },
+        )
+    }
+}
+
 /** P2「我的聊天策略」：模式三档（P3 §七 增强档已解锁）+ 默认策略卡入口与手动编译。 */
 @Composable
 private fun StrategySettingsSection(

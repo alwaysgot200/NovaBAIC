@@ -48,14 +48,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,11 +81,11 @@ import com.verlintas.baic2.floatball.AdvisorPage
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
-import kotlin.math.roundToInt
 
 /**
- * 保活设置页：保活体检卡 + 强度三档（低耗电/智能/永久）+ 授权引导 +
- * 请求重试参数。入口在老参谋设置页（FloatSettingsActivity），不进扇形菜单。
+ * 保活设置页：保活体检卡 + 强度三档（低耗电/智能/永久）+ 授权引导。
+ * 入口在老参谋设置页（FloatSettingsActivity），不进扇形菜单。
+ * LLM 请求重试参数已于 2026-10-22 迁至老参谋设置页（语义归位）。
  * 全部设置即时落盘、无保存按钮；系统状态（权限/调度）一律实时查询、
  * 从系统设置返回时 onResume 重算。
  */
@@ -344,36 +342,6 @@ private fun KeepAliveScreen(
                         manager.applyRecentsExclusion(enabled)
                     }
 
-                    // ---- 请求重试 --------------------------------------------------------
-                    SectionLabel(stringResource(R.string.float_keepalive_section_retry))
-                    RetrySlider(
-                        label = stringResource(R.string.float_keepalive_retry_times_label),
-                        value = config.retryTimes.toFloat(),
-                        valueRange = 0f..10f,
-                        steps = 9,
-                        valueText = stringResource(R.string.float_keepalive_retry_times_value, config.retryTimes),
-                    ) { prefs.setRetryTimes(it.roundToInt()) }
-                    RetrySlider(
-                        label = stringResource(R.string.float_keepalive_retry_delay_label),
-                        value = config.retryDelaySec.toFloat(),
-                        valueRange = 1f..60f,
-                        steps = 58,
-                        valueText = stringResource(R.string.float_keepalive_retry_seconds_value, config.retryDelaySec),
-                    ) { prefs.setRetryDelaySec(it.roundToInt()) }
-                    RetrySlider(
-                        label = stringResource(R.string.float_keepalive_retry_timeout_label),
-                        value = config.retryTimeoutSec.toFloat(),
-                        valueRange = 5f..120f,
-                        steps = 114,
-                        valueText = stringResource(R.string.float_keepalive_retry_seconds_value, config.retryTimeoutSec),
-                    ) { prefs.setRetryTimeoutSec(it.roundToInt()) }
-                    Text(
-                        text = stringResource(R.string.float_keepalive_retry_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = scheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-
                     // ---- 底部诚实说明 -----------------------------------------------------
                     Card(
                         modifier = Modifier
@@ -619,39 +587,6 @@ private fun SwitchRow(
             }
             Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
-    }
-}
-
-@Composable
-private fun RetrySlider(
-    label: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    valueText: String,
-    onChangeFinished: (Float) -> Unit,
-) {
-    val sliderValue = remember(value) { mutableFloatStateOf(value) }
-    Column(modifier = Modifier.padding(top = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = valueText,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-        Slider(
-            value = sliderValue.floatValue,
-            onValueChange = { sliderValue.floatValue = it },
-            valueRange = valueRange,
-            steps = steps,
-            onValueChangeFinished = { onChangeFinished(sliderValue.floatValue) },
-        )
     }
 }
 

@@ -29,6 +29,7 @@
     <string name="float_more_title">更多</string>
     <string name="float_more_advisor_settings">老参谋设置</string>
     <string name="float_more_profile">联系人画像</string>
+    <string name="float_more_about">关于</string>
     <string name="float_more_close">关闭</string>
 
     <!-- 悬浮球 · 自动托管 -->
@@ -553,13 +554,21 @@
     <string name="float_keepalive_music_channel">保活无声音乐</string>
     <string name="float_keepalive_music_notification_title">老参谋保活中</string>
     <string name="float_keepalive_music_notification_text">无声音乐用于保持悬浮球存活</string>
-    <string name="float_keepalive_section_retry">请求重试机制（次数 = 0 禁用，等待时间逐次递增）</string>
-    <string name="float_keepalive_retry_times_label">最多重试</string>
-    <string name="float_keepalive_retry_delay_label">递增间隔基数</string>
-    <string name="float_keepalive_retry_timeout_label">首字超时（含思考过程）</string>
-    <string name="float_keepalive_retry_times_value">%1$d 次</string>
-    <string name="float_keepalive_retry_seconds_value">%1$d 秒</string>
-    <string name="float_keepalive_retry_hint">超时 = 等多久没有出第一个字（含推理模型的思考过程）才重试；开始回答后流式总时长不设限。连续参谋模式固定为 1 次重试 / 8 秒超时。</string>
+    <string name="float_settings_llm_retry_section">LLM 请求重试（次数 = 0 禁用，等待时间逐次递增）</string>
+    <string name="float_settings_retry_times_label">最多重试</string>
+    <string name="float_settings_retry_delay_label">递增间隔基数</string>
+    <string name="float_settings_retry_timeout_label">首字超时（含思考过程）</string>
+    <string name="float_settings_retry_times_value">%1$d 次</string>
+    <string name="float_settings_retry_seconds_value">%1$d 秒</string>
+    <string name="float_settings_retry_hint">超时 = 等多久没有出第一个字（含推理模型的思考过程）才重试；开始回答后流式总时长不设限。连续参谋模式固定为 1 次重试 / 8 秒超时。</string>
+    <!-- 首启保活引导卡片（2026-10-22）：初装首次启动弹一次，三项授权逐项去开启 -->
+    <string name="float_keepalive_guide_title">保活配置引导</string>
+    <string name="float_keepalive_guide_desc">为保证老参谋在后台稳定运行，建议完成以下三项授权。点击「去开启」跳转对应系统页面，完成后返回本卡片即可。</string>
+    <string name="float_keepalive_guide_jump">去开启</string>
+    <string name="float_keepalive_guide_ready">已开启</string>
+    <string name="float_keepalive_guide_pending">未开启</string>
+    <string name="float_keepalive_guide_done">完成</string>
+    <string name="float_keepalive_guide_jump_failed">无法打开系统设置页面，请手动到系统设置中开启对应授权</string>
     <string name="float_ask_retrying">第 %1$d/%2$d 次重试…</string>
     <string name="float_keepalive_footer_force_stop">· 「强行停止 / 一键清理」任何保活手段都无法防御。</string>
     <string name="float_keepalive_footer_vendor">· 各厂商深度清理力度不同，完成授权引导可显著提升存活率。</string>

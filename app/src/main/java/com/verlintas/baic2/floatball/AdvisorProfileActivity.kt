@@ -22,6 +22,7 @@ package com.verlintas.baic2.floatball
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -492,6 +493,9 @@ private fun ContactListScreen(
                                         toast(context, R.string.float_profile_create_exists)
                                     }
                                 }
+                                    // 静默吞异常会掩盖建档失败（如唯一键冲突曾在此
+                                    // 无声无息，2026-10-22 踩坑）——至少留日志可查。
+                                    .onFailure { Log.w("AdvisorProfile", "create contact failed", it) }
                             }
                         },
                     ) { Text(stringResource(R.string.float_profile_create_confirm)) }

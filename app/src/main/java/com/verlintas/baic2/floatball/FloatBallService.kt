@@ -1827,7 +1827,7 @@ class FloatBallService : Service() {
 
     /**
      * 「更多」子球：贴球弹出次级入口卡片（方案 §3.2）：设置 / 帮助 / 老参谋
-     * 设置 / 联系人画像。点行=关弹窗再执行；点空白或「✕」=仅关弹窗。
+     * 设置 / 联系人画像 / 关于。点行=关弹窗再执行；点空白或「✕」=仅关弹窗。
      */
     private fun openMoreMenu() {
         if (cardMenuView != null || ball == null) return
@@ -1842,6 +1842,7 @@ class FloatBallService : Service() {
                     openAdvisorSettings()
                 },
                 FloatUi.ListMenuItem(R.string.float_more_profile) { openProfileList() },
+                FloatUi.ListMenuItem(R.string.float_more_about) { openAbout() },
             ),
             ballCenterX = params.x + dp(FloatUi.BALL_SIZE_DP) / 2,
             ballCenterY = params.y + dp(FloatUi.BALL_SIZE_DP) / 2,
@@ -1856,6 +1857,14 @@ class FloatBallService : Service() {
     private fun openAdvisorSettings() {
         startActivity(
             Intent(this, FloatSettingsActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+
+    /** 「关于」：关于页（复用主框架设置的关于页内容，品牌/版本/版权）。 */
+    private fun openAbout() {
+        startActivity(
+            Intent(this, AdvisorAboutActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
     }

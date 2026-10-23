@@ -128,6 +128,7 @@ class KeepAliveManager @Inject constructor(
     /** 用户从扇形菜单显式退出：心跳/闹钟此后不再复活。 */
     fun onUserExit() {
         prefs.serviceDesired = false
+        cancelHeartbeat()
         cancelNextAlarm()
         stopMusic()
     }

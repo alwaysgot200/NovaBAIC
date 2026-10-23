@@ -50,6 +50,23 @@ interface ContactProfileDao {
     )
     suspend fun findByKey(imPackage: String, key: String): ContactProfileEntity?
 
+    /** 同键软删行（2026-10-22 重建让位/复活用）：不含合并档案，只找已软删。 */
+    @Query(
+        """
+        SELECT * FROM contact_profiles
+        WHERE imPackage = :imPackage AND contactKey = :key AND deletedAt IS NOT NULL
+        """,
+    )
+    suspend fun findDeletedByKey(imPackage: String, key: String): ContactProfileEntity?
+
+    /** 显式重建同名联系人：复活软删行（清 deletedAt、刷显示名），档案历史回归。 */
+    @Query("UPDATE contact_profiles SET deletedAt = NULL, displayName = :displayName, updatedAt = :now WHERE id = :id")
+    suspend fun revive(id: Long, displayName: String, now: Long)
+
+    /** 软删行改键让位（自动归档路径）：键加 deleted:<id>: 前缀，释放唯一索引。 */
+    @Query("UPDATE contact_profiles SET contactKey = :newKey, updatedAt = :now WHERE id = :id")
+    suspend fun rekey(id: Long, newKey: String, now: Long)
+
     @Query(
         """
         SELECT p.* FROM contact_profiles p

@@ -111,6 +111,11 @@ class KeepAlivePrefs @Inject constructor(
         get() = prefs.getBoolean(KEY_SERVICE_DESIRED, true)
         set(value) = persist { putBoolean(KEY_SERVICE_DESIRED, value) }
 
+    /** 首启保活引导已弹过（2026-10-22）：初装首次启动弹一次，之后不再打扰。 */
+    var firstRunGuideShown: Boolean
+        get() = prefs.getBoolean(KEY_FIRST_RUN_GUIDE_SHOWN, false)
+        set(value) = persist { putBoolean(KEY_FIRST_RUN_GUIDE_SHOWN, value) }
+
     private companion object {
         const val PREFS_FILE = "floatball_keepalive"
         const val KEY_MODE = "mode"
@@ -121,6 +126,7 @@ class KeepAlivePrefs @Inject constructor(
         const val KEY_RETRY_DELAY = "retry_delay_sec"
         const val KEY_RETRY_TIMEOUT = "retry_timeout_sec"
         const val KEY_SERVICE_DESIRED = "service_desired"
+        const val KEY_FIRST_RUN_GUIDE_SHOWN = "first_run_guide_shown"
 
         const val DEFAULT_RETRY_TIMES = 3
         const val DEFAULT_RETRY_DELAY_SEC = 5

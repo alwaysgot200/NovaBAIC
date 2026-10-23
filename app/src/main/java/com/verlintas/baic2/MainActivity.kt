@@ -45,6 +45,8 @@ import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
 import com.verlintas.baic2.floatball.FloatBallService
 import com.verlintas.baic2.floatball.OverlayPermissionScreen
+import com.verlintas.baic2.keepalive.KeepAlivePrefs
+import com.verlintas.baic2.keepalive.KeepAliveSetupGuideActivity
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -66,6 +68,10 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var settingsRepository: SettingsRepository
+
+    /** 首启保活引导旗标（弹一次即消费）。 */
+    @Inject
+    lateinit var keepAlivePrefs: KeepAlivePrefs
 
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
@@ -160,6 +166,10 @@ class MainActivity : ComponentActivity() {
             ContextCompat.startForegroundService(this, Intent(this, FloatBallService::class.java))
             // 启动后只留悬浮球，主窗口退到后台。
             moveTaskToBack(true)
+        }
+        // 首次安装首次启动：弹一次保活授权引导（三项逐项去开启，旗标消费后不再弹）。
+        if (granted) {
+            KeepAliveSetupGuideActivity.maybeLaunch(this, keepAlivePrefs)
         }
     }
 
