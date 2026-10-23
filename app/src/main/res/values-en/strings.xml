@@ -713,4 +713,221 @@
     <string name="float_material_add_confirm">Save</string>
     <string name="float_material_created">Added %1$s</string>
     <string name="float_material_used">Last used for small talk %1$s</string>
+
+    <!-- ===== Sync additions (2026-10-23): translations for keys added on the
+         zh side after the last values-en sweep. ===== -->
+    <!-- 悬浮球 · 自动托管 -->
+    <string name="float_auto_draft_enabled">Full inbox monitoring is on: incoming messages from all linked contacts will be auto-drafted and announced</string>
+    <string name="float_auto_need_listener">Auto-pilot needs notification access: allow this app’s notification reader in system settings first</string>
+    <string name="float_auto_no_apps">No apps are linked on this device, so auto-pilot cannot run. Link a contact’s app on the chat page or contact profile first</string>
+    <string name="float_auto_scope_all">All contacts</string>
+    <string name="float_auto_scope_all_desc">Watch incoming messages from all linked contacts across all linked apps</string>
+    <string name="float_auto_scope_app_count">%1$d apps</string>
+    <string name="float_auto_scope_apps_all">All apps</string>
+    <string name="float_auto_scope_started">Auto-pilot started: %1$s</string>
+    <string name="float_auto_scope_title">Choose auto-pilot scope</string>
+    <string name="float_auto_whitelist_full">Auto whitelist is full (max %1$d). Clear it in 老参谋 settings before enabling</string>
+    <!-- 通用按钮 -->
+    <string name="float_back">Back</string>
+    <string name="float_cancel">Cancel</string>
+    <string name="float_delete">Delete</string>
+    <string name="float_paste">Paste</string>
+    <!-- 聊天会话列表 -->
+    <string name="float_channels_add">Add IM chat</string>
+    <string name="float_channels_add_btn">Add</string>
+    <string name="float_channels_add_name_hint">Chat partner name (display name inside that app)</string>
+    <string name="float_channels_delete_hint">Only removes the record in this app; your real chat is untouched. Entering that chat again will re-register it automatically</string>
+    <string name="float_channels_delete_title">Delete IM chat</string>
+    <string name="float_channels_open">Open</string>
+    <string name="float_channels_search_hint">Search IM chats</string>
+    <!-- 目标漂移 -->
+    <string name="float_drift_fix">Adjust goal</string>
+    <string name="float_drift_hint">The task order may have drifted from this goal: %1$d consecutive turns without touching the goal criteria. Consider revising the goal or criteria</string>
+    <string name="float_drift_title">Goal drift alert</string>
+    <!-- 接管/达成通报 -->
+    <string name="float_escalation_channel">老参谋 alerts</string>
+    <string name="float_escalation_goal_text">%1$s</string>
+    <string name="float_escalation_goal_title">%1$s reports goal achieved</string>
+    <string name="float_escalation_handoff_text">[%1$s] %2$s</string>
+    <string name="float_escalation_handoff_text_plain">%1$s</string>
+    <string name="float_escalation_handoff_title">%1$s needs you to take over</string>
+    <!-- 扇形子球 -->
+    <string name="float_fan_continuous">Continuous</string>
+    <string name="float_fan_more">More</string>
+    <string name="float_fan_oneshot">One-shot</string>
+    <!-- Gatekeeper 事前审 -->
+    <string name="float_gate_reason_emotion_veto">Emotion red line: the other person is furious and the draft jokes or pushes forward, so it was downgraded to a soothing draft; the original is kept for review</string>
+    <!-- IM 直达导航 -->
+    <string name="float_im_nav_a11y_off">Accessibility is off, so the conversation cannot be opened automatically. The chat app is open — tap “%1$s” yourself. To enable: Settings → Accessibility → BetterAIChat2</string>
+    <string name="float_im_nav_app_missing">The matching chat app was not found and cannot be opened</string>
+    <string name="float_im_nav_generic_fail">Could not enter the chat with %1$s automatically (the target UI was not found). The chat app is open — tap that contact yourself</string>
+    <string name="float_im_nav_ok">Entered the chat with %1$s</string>
+    <string name="float_im_nav_projection_fail">Screen projection failed, so the screen cannot be read. Check that Shizuku is running and retry, or tap “%1$s” yourself</string>
+    <string name="float_im_nav_shizuku_off">Neither accessibility nor Shizuku is ready, so the conversation cannot be opened automatically. The chat app is open — tap “%1$s” yourself. Enable either channel: Settings → Accessibility, or 老参谋 settings → Shizuku</string>
+    <!-- 首启保活引导卡片 -->
+    <string name="float_keepalive_guide_desc">To keep 老参谋 running stably in the background, we recommend these three grants. Tap “Enable” to jump to the matching system page, then return to this card.</string>
+    <string name="float_keepalive_guide_done">Done</string>
+    <string name="float_keepalive_guide_jump">Enable</string>
+    <string name="float_keepalive_guide_jump_failed">Could not open the system settings page; please enable the grant manually in system settings</string>
+    <string name="float_keepalive_guide_pending">Not enabled</string>
+    <string name="float_keepalive_guide_ready">Enabled</string>
+    <string name="float_keepalive_guide_title">Keep-alive setup guide</string>
+    <!-- 更多弹窗 -->
+    <string name="float_more_about">About</string>
+    <string name="float_more_advisor_settings">老参谋 settings</string>
+    <string name="float_more_close">Close</string>
+    <string name="float_more_profile">Contact profile</string>
+    <string name="float_more_title">More</string>
+    <!-- 双方人设 -->
+    <string name="float_persona_privacy_policy">Privacy policy</string>
+    <string name="float_persona_privacy_policy_assess">Self-assess and report</string>
+    <string name="float_persona_privacy_policy_bypass">Sidestep and report</string>
+    <string name="float_persona_privacy_policy_handoff">Hand to owner to reply</string>
+    <string name="float_persona_stage_intent">Stage goal (what to advance in this stage)</string>
+    <string name="float_persona_stage_intent_hint">e.g. get a meeting this week</string>
+    <string name="float_persona_stage_intent_save">Save stage goal</string>
+    <string name="float_persona_talker_assess">Self-assess</string>
+    <string name="float_persona_talker_exemplifying">Anecdotes (analogy &amp; examples)</string>
+    <string name="float_persona_talker_free">Allow</string>
+    <string name="float_persona_talker_lying">Lying (false statements)</string>
+    <string name="float_persona_talker_never">Never</string>
+    <string name="float_persona_talker_promising">Promising (commitments &amp; guarantees)</string>
+    <string name="float_persona_talker_strategy">Chat tactics policy</string>
+    <!-- 隐私绕行通报 -->
+    <string name="float_privacy_bypass_text">They asked about [%1$s]: %2$s kept the chat going without answering directly. Tap to view the turn and the ledger.</string>
+    <string name="float_privacy_bypass_title">%1$s topic sidestepped</string>
+    <string name="float_privacy_channel">老参谋 privacy notices</string>
+    <!-- 联系人快速绑定 -->
+    <string name="float_profile_bind_as_this">This is them ▸ bind to this chat</string>
+    <string name="float_profile_candidate_create">Create new profile and bind</string>
+    <string name="float_profile_candidate_hint">Recognized from the current chat window. After binding, this chat belongs to that contact and will be recognized automatically next time.</string>
+    <string name="float_profile_candidate_title">Bind “%1$s” as a contact</string>
+    <!-- 就绪门 -->
+    <string name="float_readiness_fix_input">Check Shizuku and clipboard access</string>
+    <string name="float_readiness_fix_notify">Enable</string>
+    <string name="float_readiness_fix_ocr">Retry later</string>
+    <string name="float_readiness_fix_projection">Grant screen recording</string>
+    <string name="float_readiness_fix_quiet">Retry after quiet/power-saving hours</string>
+    <string name="float_readiness_fix_shizuku">Grant</string>
+    <string name="float_readiness_fix_templates">Pending capture</string>
+    <string name="float_readiness_fix_whitelist">Add and bind a chat in the whitelist above</string>
+    <string name="float_readiness_input">Input channel check</string>
+    <string name="float_readiness_notify">Notification listener connected</string>
+    <string name="float_readiness_ocr">OCR engine ready</string>
+    <string name="float_readiness_projection">Screen recording authorized</string>
+    <string name="float_readiness_quiet">Do-not-disturb baseline</string>
+    <string name="float_readiness_shizuku">Shizuku bridge ready</string>
+    <string name="float_readiness_templates">Image-match templates ready</string>
+    <string name="float_readiness_whitelist">Hosting whitelist ready</string>
+    <!-- 录制态 -->
+    <string name="float_recording_resting">This recording session has ended; resuming automatically in %1$d min</string>
+    <!-- 参谋会话列表 -->
+    <string name="float_sessions_delete_forever">Delete forever</string>
+    <string name="float_sessions_delete_forever_hint">Permanently deletes all messages and removes the entry from the home Chats list. Cannot be undone</string>
+    <string name="float_sessions_delete_title">Delete advisor session</string>
+    <string name="float_sessions_link_btn">Link existing</string>
+    <string name="float_sessions_link_existing">Link existing session</string>
+    <string name="float_sessions_search_hint">Search advisor sessions</string>
+    <string name="float_sessions_unbind">Unlink</string>
+    <string name="float_sessions_unbind_hint">Only removes it from this contact. The advisor session and its messages are kept and can still be opened from the home Chats list</string>
+    <!-- 设置：接管与达成通报 -->
+    <string name="float_settings_escalation">Notify me on takeover / goal achieved</string>
+    <string name="float_settings_escalation_hint">When they ask for something only you can answer (schedule, requests, decisions) or a goal is achieved (meeting, deal), ring an alert for you to step in. Alerts only — never answers on your behalf; auto-send pauses until you return</string>
+    <string name="float_settings_escalation_section">Takeover &amp; achievement alerts</string>
+    <string name="float_settings_escalation_strict">Strict (alert when unsure)</string>
+    <string name="float_settings_escalation_strict_hint">Off = lenient: on suspected takeover it keeps advising and avoids private facts. On = better safe than sorry: any suspicion triggers a takeover alert</string>
+    <!-- 设置：执行通道与就绪门 -->
+    <string name="float_settings_executor_a11y">Accessibility only</string>
+    <string name="float_settings_executor_auto">Auto fallback</string>
+    <string name="float_settings_executor_hint">Auto fallback = use accessibility when available, else Shizuku without accessibility, else fall back to draft mode. Shizuku mode needs no accessibility and leaves a smaller detection footprint, but requires Shizuku to stay online and screen-recording authorization (status bar indicator); image matching is slightly slower.</string>
+    <string name="float_settings_executor_section">Execution channel</string>
+    <string name="float_settings_executor_shizuku">Shizuku (no accessibility)</string>
+    <string name="float_settings_readiness_blocked">Some items are missing, so the current channel is kept. Resolve them and tap “Re-check”; it switches automatically when all green.</string>
+    <string name="float_settings_readiness_checking">Checking readiness item by item…</string>
+    <string name="float_settings_readiness_rerun">Re-check</string>
+    <!-- 设置：LLM 请求重试 -->
+    <string name="float_settings_llm_retry_section">LLM request retries (0 = disabled; wait time grows each attempt)</string>
+    <string name="float_settings_retry_delay_label">Backoff base interval</string>
+    <string name="float_settings_retry_hint">Timeout = how long to wait for the first token (including a reasoning model’s thinking) before retrying; once the answer starts streaming, total duration is unlimited. Continuous advisor mode is fixed at 1 retry / 8 s timeout.</string>
+    <string name="float_settings_retry_seconds_value">%1$d s</string>
+    <string name="float_settings_retry_timeout_label">First-token timeout (incl. thinking)</string>
+    <string name="float_settings_retry_times_label">Max retries</string>
+    <string name="float_settings_retry_times_value">%1$d</string>
+    <!-- 设置：无人值守休憩循环 -->
+    <string name="float_settings_rest_10">Rest 10 min</string>
+    <string name="float_settings_rest_20">Rest 20 min</string>
+    <string name="float_settings_rest_5">Rest 5 min</string>
+    <string name="float_settings_rest_off">No rest</string>
+    <string name="float_settings_work_10">Work 10 min</string>
+    <string name="float_settings_work_15">Work 15 min</string>
+    <string name="float_settings_work_5">Work 5 min</string>
+    <string name="float_settings_workrest_hint">Unattended work/rest loop: record for a while, pause, then continue (choose “No rest” to run non-stop)</string>
+    <!-- 设置：SMTP 邮件服务器 -->
+    <string name="float_settings_smtp_cancel">Cancel</string>
+    <string name="float_settings_smtp_dialog_title">SMTP mail server</string>
+    <string name="float_settings_smtp_entry">SMTP mail server settings</string>
+    <string name="float_settings_smtp_entry_hint">Sender account for alert emails; currently defaults to the test-environment Alibaba business mail</string>
+    <string name="float_settings_smtp_from_email">From email</string>
+    <string name="float_settings_smtp_from_name">From name</string>
+    <string name="float_settings_smtp_host">Server address</string>
+    <string name="float_settings_smtp_password">Password / app token</string>
+    <string name="float_settings_smtp_port">Port</string>
+    <string name="float_settings_smtp_save">Save</string>
+    <string name="float_settings_smtp_ssl">Use SSL</string>
+    <string name="float_settings_smtp_timeout">Timeout (s)</string>
+    <string name="float_settings_smtp_user">Account</string>
+    <!-- 投影免弹窗授权引导页 -->
+    <string name="float_shizuku_action_grant">Grant in one tap</string>
+    <string name="float_shizuku_action_install">Install Shizuku</string>
+    <string name="float_shizuku_action_launch">Start Shizuku</string>
+    <string name="float_shizuku_action_permission">Grant Shizuku permission</string>
+    <string name="float_shizuku_action_regrant">Re-run</string>
+    <string name="float_shizuku_download">Download</string>
+    <string name="float_shizuku_error_title">Failed — if it reports insufficient permission, check prerequisite #1 (USB debugging (Security settings)) first.</string>
+    <string name="float_shizuku_executing">Working…</string>
+    <string name="float_shizuku_go_settings">Open settings</string>
+    <string name="float_shizuku_grant_ok">Granted: the projection dialog is now silent.</string>
+    <string name="float_shizuku_install_hint">Download and install from shizuku.rikka.app (or search “Shizuku” in your app store) — this is required for everything that follows</string>
+    <string name="float_shizuku_install_title">Step 1 · Install Shizuku</string>
+    <string name="float_shizuku_intro">With accessibility off, screen projection is the only way to see the screen. The grant on this page silences the projection system dialog permanently (persists across reboots), so RPA runs without interruption.</string>
+    <string name="float_shizuku_pair_1">In Shizuku tap “Start via wireless debugging”, then turn on “Wireless debugging” in developer options</string>
+    <string name="float_shizuku_pair_2">Tap “Pair device with pairing code” and note the 6-digit code shown</string>
+    <string name="float_shizuku_pair_3">Back in Shizuku, enter the pairing code and it starts</string>
+    <string name="float_shizuku_pair_title">Wireless pairing in three steps</string>
+    <string name="float_shizuku_prereq_dev">Turn on “USB debugging (Security settings)” in developer options — it is a separate switch from ordinary “USB debugging”. Without it, commands still fail with insufficient permission after pairing.</string>
+    <string name="float_shizuku_prereq_notif">Switch notification style to “Native Android” (Settings → Notifications → notification style) — custom notifications on some skins swallow the Shizuku pairing dialog, so the 6-digit code never appears and it sticks at “searching for pairing service”.</string>
+    <string name="float_shizuku_prereq_title">Prerequisites (one-time, make-or-break)</string>
+    <string name="float_shizuku_state_granted">Active</string>
+    <string name="float_shizuku_state_granted_hint">The projection dialog is silenced. If it lapses after a factory reset or major OS upgrade, come back here and grant again.</string>
+    <string name="float_shizuku_state_pending">Not active</string>
+    <string name="float_shizuku_title">Silent projection authorization</string>
+    <!-- 效果统计 -->
+    <string name="float_stats_adopt_rate">Adoption rate</string>
+    <string name="float_stats_fail_streak">Current losing streak</string>
+    <string name="float_stats_recap_bad">Recent suggestions have mostly backfired; ease off on pushing, lead with empathy, and soften the pace</string>
+    <string name="float_stats_recap_good">Recent suggestions have gone smoothly; keep the current pace and boundaries</string>
+    <string name="float_stats_recap_mixed">About half of recent suggestions were followed; match the other person’s state more closely</string>
+    <string name="float_stats_recap_title">Recent recap</string>
+    <string name="float_stats_recent_line">Last %1$d turns · %2$d%% adopted · %3$d%% succeeded</string>
+    <string name="float_stats_success_rate">Success rate</string>
+    <!-- 陌生来信 -->
+    <string name="float_stranger_channel">老参谋 stranger messages</string>
+    <string name="float_stranger_notif_body">%1$s: from %2$s, not yet in your contacts, no auto-reply. Tap the notification to open the chat</string>
+    <string name="float_stranger_notif_title">Stranger message: [%1$s]</string>
+    <!-- 画像页 Tab -->
+    <string name="float_tab_advisor_sessions">Advisor sessions</string>
+    <string name="float_tab_chat_channels">IM chats</string>
+    <!-- 聊天策略裁量层通报 -->
+    <string name="float_tactic_human_text">The spokesperson wants to use [%1$s]: %2$s — beyond its authority, so it is suspended until you decide.</string>
+    <string name="float_tactic_human_title">%1$s needs you to confirm a promise</string>
+    <string name="float_tactic_reason_none">No reason given</string>
+    <string name="float_tactic_use_text">Used [%1$s]: %2$s. Tap to view the turn and the ledger.</string>
+    <string name="float_tactic_use_title">%1$s used a sensitive tactic</string>
+    <!-- 战术约束（增强档） -->
+    <string name="float_tactical_avoid">Avoid: %1$s</string>
+    <string name="float_tactical_brief_label">Tactical constraints (enhanced tier)</string>
+    <string name="float_tactical_do">Must do: %1$s</string>
+    <string name="float_tactical_expand">Expand</string>
+    <string name="float_tactical_must">Must address: %1$s</string>
+    <string name="float_tactical_tone">Tone: %1$s</string>
 </resources>

@@ -156,4 +156,12 @@
     <string name="settings_developer_copy">Copy</string>
     <string name="settings_developer_copied">Copied</string>
     <string name="settings_developer_changelog">Changelog</string>
+
+    <!-- Sync additions (2026-10-23): keys added on the zh side after the last values-en sweep. -->
+    <string name="settings_perm_overlay_title">Overlay</string>
+    <string name="settings_perm_overlay_desc">Show the 老参谋 floating ball and split-screen panel over other apps</string>
+    <string name="settings_perm_keepalive_title">Keep-alive</string>
+    <string name="settings_perm_keepalive_desc">Battery whitelist, auto-start on boot and keep-alive policy management</string>
+    <string name="settings_perm_keepalive_ready">Battery whitelist active; manage auto-start and keep-alive tier here</string>
+    <string name="settings_perm_keepalive_action">Manage</string>
 </resources>

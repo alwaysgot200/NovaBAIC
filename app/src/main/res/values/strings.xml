@@ -971,4 +971,24 @@
     <string name="settings_about_copyright">© 2026 老参谋 保留权利</string>
     <string name="settings_about_share_chooser">分享老参谋</string>
 
+    <!-- ===== 双语同步补齐（2026-10-23）：values-en 已有、此处补中文的 key。
+         均为历史改名后的遗留条目，代码暂未引用，保留以保持双语 key 集一致。 ===== -->
+    <string name="float_conversations_title">与该联系人的参谋会话</string>
+    <string name="float_fan_ask">问答</string>
+    <string name="float_keepalive_entry">保活措施</string>
+    <string name="float_keepalive_entry_hint">开机自启、后台拉活、电池白名单与请求重试</string>
+    <string name="float_keepalive_section_retry">请求重试机制（次数 = 0 禁用，等待时间逐次递增）</string>
+    <string name="float_keepalive_retry_times_label">最多重试</string>
+    <string name="float_keepalive_retry_delay_label">递增间隔基数</string>
+    <string name="float_keepalive_retry_timeout_label">首字超时（含思考过程）</string>
+    <string name="float_keepalive_retry_times_value">%1$d 次</string>
+    <string name="float_keepalive_retry_seconds_value">%1$d 秒</string>
+    <string name="float_keepalive_retry_hint">超时 = 等多久没有出第一个字（含推理模型的思考过程）才重试；开始回答后流式总时长不设限。连续参谋模式固定为 1 次重试 / 8 秒超时。</string>
+    <string name="float_persona_group">这是一个群聊</string>
+    <string name="float_settings_permissions">权限状态</string>
+    <string name="float_settings_perm_a11y">无障碍服务（长按毫秒级识屏的前提）</string>
+    <string name="float_settings_perm_notification">通知读取权限（拟稿回复必需）</string>
+    <string name="float_settings_perm_overlay">悬浮窗权限</string>
+    <string name="float_settings_perm_projection">屏幕投影：长按/双击时按需弹窗授权，拍完即关</string>
+
 </resources>
