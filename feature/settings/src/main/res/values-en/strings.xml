@@ -129,6 +129,11 @@
     <string name="settings_perm_shizuku_unavailable">Not installed or service not running</string>
     <string name="settings_perm_files_title">Files access</string>
     <string name="settings_perm_files_desc">Read files in Downloads/Documents (Android 13+ needs "All files access")</string>
+    <string name="settings_about_requirements_title">System requirements</string>
+    <string name="settings_about_requirements_android">Android version</string>
+    <string name="settings_about_requirements_android_desc">Android 8.0 (API 26) or newer</string>
+    <string name="settings_about_requirements_chip">Chip architecture</string>
+    <string name="settings_about_requirements_chip_desc">arm64-v8a (64-bit ARM); not for 32-bit ARM / x86 devices</string>
     <string name="settings_about_update_title">Check for updates</string>
     <string name="settings_about_update_idle">Tap to check for a new version</string>
     <string name="settings_about_update_checking">Checking…</string>

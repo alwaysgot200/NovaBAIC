@@ -135,6 +135,11 @@
     <string name="settings_perm_shizuku_unavailable">未安装或服务未启动</string>
     <string name="settings_perm_files_title">文件访问</string>
     <string name="settings_perm_files_desc">读取 Downloads/Documents 中的文件（Android 13+ 需"所有文件访问"）</string>
+    <string name="settings_about_requirements_title">系统要求</string>
+    <string name="settings_about_requirements_android">Android 版本</string>
+    <string name="settings_about_requirements_android_desc">Android 8.0（API 26）及以上</string>
+    <string name="settings_about_requirements_chip">芯片架构</string>
+    <string name="settings_about_requirements_chip_desc">arm64-v8a（64 位 ARM 处理器）；32 位 ARM / x86 设备不适用</string>
     <string name="settings_about_update_title">检查更新</string>
     <string name="settings_about_update_idle">点击检查新版本</string>
     <string name="settings_about_update_checking">正在检查…</string>

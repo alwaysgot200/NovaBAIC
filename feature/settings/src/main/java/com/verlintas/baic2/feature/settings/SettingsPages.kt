@@ -711,6 +711,21 @@ fun AboutPage(
                 },
             )
         }
+        item(key = "requirements") {
+            SettingsSectionLabel(stringResource(R.string.settings_about_requirements_title))
+        }
+        item(key = "req-android") {
+            SettingsRow(
+                title = stringResource(R.string.settings_about_requirements_android),
+                summary = stringResource(R.string.settings_about_requirements_android_desc),
+            )
+        }
+        item(key = "req-chip") {
+            SettingsRow(
+                title = stringResource(R.string.settings_about_requirements_chip),
+                summary = stringResource(R.string.settings_about_requirements_chip_desc),
+            )
+        }
         item(key = "developer") { SettingsSectionLabel(stringResource(R.string.settings_developer_title)) }
         item(key = "dev-version") {
             SettingsRow(
