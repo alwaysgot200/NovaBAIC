@@ -43,15 +43,16 @@ class SelfFacetsTest {
 
     @Test
     fun mergePendingKeepsMainFacetAndCollectsOtherDifference() {
-        // 合并协议第 2 步：主档案 facet 原样为准；other 有而 main 没有的差异
-        // 连同主档案原有 pending 一起进待确认区（V-C 对象形态），不静默丢弃；
-        // style 待定值原样保留。
+        // 合并协议第 2 步：主档案补丁为准（extra/masked 都不覆写）；other 有而
+        // main 没有的专属差异连同主档案原有 pending 一起进待确认区（V-C 对象
+        // 形态），不静默丢弃；style 待定值原样保留。
         val (facet, pending) = SelfFacets.mergePending(
             mainJson = """["硬件","报价"]""",
             otherJson = """["报价","模具"]""",
             mainPendingJson = """{"facet":["电商"],"identity":"领导"}""",
         )
-        assertEquals("""["硬件","报价"]""", facet)
+        // 旧数组收进补丁 extra（一个不丢）。
+        assertEquals(listOf("硬件", "报价"), SelfFacets.decodePatch(facet).extra)
         val decoded = SelfFacets.decodePending(pending)!!
         assertEquals(listOf("电商", "模具"), decoded.facet)
         assertEquals("领导", decoded.identity)
@@ -64,8 +65,62 @@ class SelfFacetsTest {
             otherJson = """["硬件"]""",
             mainPendingJson = null,
         )
-        assertEquals("""["硬件"]""", facet)
+        assertEquals(listOf("硬件"), SelfFacets.decodePatch(facet).extra)
         assertNull(pending)
+    }
+
+    // ── 2026-10-23 §3.1 继承+补丁：FacetPatch 编解码与 resolve 生效集 ──
+
+    @Test
+    fun decodePatch_legacyArrayGoesToExtraNothingLost() {
+        val patch = SelfFacets.decodePatch("""["硬件","报价"]""")
+        assertEquals(listOf("硬件", "报价"), patch.extra)
+        assertTrue(patch.masked.isEmpty())
+    }
+
+    @Test
+    fun decodePatch_objectShapeAndDefensive() {
+        val patch = SelfFacets.decodePatch("""{"extra":["会来事"],"masked":["冷淡"]}""")
+        assertEquals(listOf("会来事"), patch.extra)
+        assertEquals(listOf("冷淡"), patch.masked)
+        // null/畸形/空 = 纯继承（空补丁），绝不抛。
+        assertTrue(SelfFacets.decodePatch(null).isEmpty)
+        assertTrue(SelfFacets.decodePatch("").isEmpty)
+        assertTrue(SelfFacets.decodePatch("not-json").isEmpty)
+        assertTrue(SelfFacets.decodePatch("""{"extra":[" "]}""").isEmpty)
+    }
+
+    @Test
+    fun encodePatch_emptyYieldsNullForPureInheritance() {
+        assertNull(SelfFacets.encodePatch(SelfFacets.FacetPatch()))
+        assertNull(SelfFacets.encodePatch(SelfFacets.FacetPatch(extra = listOf(" "))))
+        val roundTrip = SelfFacets.decodePatch(
+            SelfFacets.encodePatch(SelfFacets.FacetPatch(extra = listOf("会来事"), masked = listOf("冷淡"))),
+        )
+        assertEquals(listOf("会来事"), roundTrip.extra)
+        assertEquals(listOf("冷淡"), roundTrip.masked)
+    }
+
+    @Test
+    fun resolve_globalMinusMaskedUnionExtra() {
+        val global = listOf("博学", "风趣", "会吃喝")
+        // 默认全量继承：无补丁 = 全局库原样生效。
+        assertEquals(global, SelfFacets.resolve(null, global))
+        // 屏蔽生效：此关系不用「会吃喝」。
+        assertEquals(
+            listOf("博学", "风趣"),
+            SelfFacets.resolve("""{"masked":["会吃喝"]}""", global),
+        )
+        // 专属补充在全局序之后追加，全局序在前、去重保序。
+        assertEquals(
+            listOf("博学", "风趣", "会吃喝", "会来事"),
+            SelfFacets.resolve("""{"extra":["会来事"]}""", global),
+        )
+        // 旧快照数组数据：一个不丢收进 extra（= 曾经的快照语义近似）。
+        assertEquals(
+            listOf("博学", "风趣", "会吃喝", "模具"),
+            SelfFacets.resolve("""["模具"]""", global),
+        )
     }
 
     // ── V-C 通用待确认通道（StylePending 对象形态） ───────────────────────
@@ -127,10 +182,13 @@ class SelfFacetsTest {
     @Test
     fun promoteAll_mergesFacetAndCarriesStyleOnlyForCaller() {
         val promoted = SelfFacets.promoteAll(
-            facetJson = """["硬件"]""",
+            facetJson = """{"extra":["硬件"],"masked":["模具"]}""",
             pendingJson = """{"facet":["硬件","模具"],"identity":"领导","chatStyle":"严肃","closeness":2}""",
         )
-        assertEquals("""["硬件","模具"]""", promoted.facetJson)
+        // 提案标签并入 extra，且同名屏蔽被解除（§3.2 转正语义）。
+        val patch = SelfFacets.decodePatch(promoted.facetJson)
+        assertEquals(listOf("硬件", "模具"), patch.extra)
+        assertTrue(patch.masked.isEmpty())
         assertEquals("领导", promoted.identity)
         assertEquals("严肃", promoted.chatStyle)
         assertEquals(2, promoted.closeness)
@@ -139,7 +197,7 @@ class SelfFacetsTest {
     @Test
     fun promoteAll_noPending_yieldsNullStyleValues() {
         val promoted = SelfFacets.promoteAll(facetJson = """["硬件"]""", pendingJson = null)
-        assertEquals("""["硬件"]""", promoted.facetJson)
+        assertEquals(listOf("硬件"), SelfFacets.decodePatch(promoted.facetJson).extra)
         assertNull(promoted.identity)
         assertNull(promoted.chatStyle)
         assertNull(promoted.closeness)

@@ -21,6 +21,7 @@ package com.verlintas.baic2.floatball
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Point
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
@@ -304,12 +305,15 @@ internal object FloatUi {
     /**
      * 单击展开的扇形子球菜单：6 个子球围绕球心、在水平中轴 ±75°（共 150°）
      * 内均匀分度（相邻 30°）；只向屏幕中央一侧（[facing]）展开，轨道半径
-     * = 2 倍主球直径。球贴上下边缘、纯水平会导致子球出屏时，中轴向屏内
-     * 压最小倾角（[FanMenu.place] 重算），常态视觉始终是纯粹的「或左或右」。
+     * = 2 倍主球直径。球贴边缘、纯水平会导致子球出裁切面时，优先压最小
+     * 倾角（[FanMenu.place] 重算），仍容不下则收拢轨道向球心，常态视觉
+     * 始终是纯粹的「或左或右」。
      *
-     * 窗口高度包络整个上下分度，纵向位置钳制在屏内；子球与主球相对固定，
-     * 拖动时服务层调 [FanMenu.place] 同步。点击窗口空白处收起；子球从球心
-     * 错峰回弹弹出，收起时反向缩回。
+     * 窗口按「任意倾角下子球的全触及范围」定包络、球心锚定窗口中心
+     * （WMS 把窗口钳离中心时锚点回算兜底）；倾角/轨道判定以「窗口 ∩
+     * 屏幕」全可见为准（见 [FanMenu.solveFan]）。子球与主球相对固定，拖动时服务层调
+     * [FanMenu.place] 同步。点击窗口空白处收起；子球从球心错峰回弹
+     * 弹出，收起时反向缩回。
      */
     fun buildFanMenu(
         context: Context,
@@ -317,8 +321,7 @@ internal object FloatUi {
         facing: FanFacing,
         ballCenterX: Int,
         ballCenterY: Int,
-        screenWidth: Int,
-        screenHeight: Int,
+        screenSize: () -> Point,
         onDismiss: () -> Unit,
     ): FanMenu {
         val child = dp(context, FAN_CHILD_DP)
@@ -326,11 +329,13 @@ internal object FloatUi {
         val margin = dp(context, FAN_EDGE_MARGIN_DP).toFloat()
         val halfChild = child / 2f
 
-        // 只向朝向一侧伸展：宽 = 轨道 + 子球半径 + 两侧边距。
-        val width = (orbit + halfChild + margin * 2f).toInt()
-        // 高 = 2 ×（轨道在 75° 的上下投影 + 子球半径）+ 边距。
-        val halfSpan = orbit * kotlin.math.sin(Math.toRadians(75.0)).toFloat() + halfChild
-        val height = (halfSpan * 2f + margin * 2f).toInt()
+        // 窗口包络「任意倾角下子球的全触及范围」：倾角会把子球甩向锚点
+        // 两侧（最大 ±(轨道+半径)），窗口必须按全触及定尺寸且球心锚定
+        // 窗口中心——否则贴边压倾角时子球横向出窗被裁/消失（横屏贴顶
+        // 实测复现：纯水平包络只有 196px 宽，容不下倾角甩过来的子球）。
+        val reach = orbit + halfChild
+        val width = (reach * 2f + margin * 2f).toInt()
+        val height = (reach * 2f + margin * 2f).toInt()
 
         // 6 球在中轴 ±75° 内均匀分度（相邻 30°）。
         val offsets = listOf(-75.0, -45.0, -15.0, 15.0, 45.0, 75.0)
@@ -369,10 +374,10 @@ internal object FloatUi {
             facing = facing,
             children = children,
             orbit = orbit,
+            minOrbit = dp(context, BALL_SIZE_DP) / 2f + halfChild,
             halfChild = halfChild,
             margin = margin,
-            screenWidth = screenWidth,
-            screenHeight = screenHeight,
+            screenSize = screenSize,
         ).also { it.place(ballCenterX, ballCenterY) }
     }
 
@@ -385,20 +390,32 @@ internal object FloatUi {
         var pendingExpand: Runnable? = null,
     )
 
-    /** 扇形菜单句柄：root 进窗口；[place] 按球心位置重算子球布局与窗口坐标。 */
+    /**
+     * 扇形菜单句柄：root 进窗口；[place] 按摆放值重算窗口坐标与子球布局，
+     * [reanchor] 按真实落点校正弧心（WMS 钳制兜底），[updateFacing] 拖动
+     * 跨过屏幕中线时翻向。屏幕尺寸必须走 [screenSize] 实时现查——菜单可
+     * 跨旋转存活，构建时冻结的旧方向尺寸会在钳制时把窗口拉离主球。
+     */
     class FanMenu internal constructor(
         val root: FrameLayout,
         val widthPx: Int,
         val heightPx: Int,
-        private val facing: FanFacing,
+        private var facing: FanFacing,
         private val children: List<FanChild>,
         private val orbit: Float,
+        private val minOrbit: Float,
         private val halfChild: Float,
         private val margin: Float,
-        private val screenWidth: Int,
-        private val screenHeight: Int,
+        private val screenSize: () -> Point,
     ) {
         private var expanded = false
+
+        /** 最近一次布局的弧心锚点（窗口坐标；expand 播种回弹起点用）。 */
+        private var lastAnchorX = 0f
+        private var lastAnchorY = 0f
+
+        /** 最近一次布局实际使用的轨道（贴边收拢后 ≤ [orbit]；收起回缩用）。 */
+        private var layoutOrbit = 0f
 
         /** 窗口左上角屏幕坐标（[place] 后有效）。 */
         var windowX = 0
@@ -417,60 +434,144 @@ internal object FloatUi {
         }
 
         /**
-         * 按主球当前屏坐标重算：倾角（纯水平优先、贴边保护）、窗口位置
-         * （钳制在屏内）与各子球 margin。展开前把子球摆在球心（等弹出）。
+         * 按主球摆放值（params 坐标系）重算：倾角（纯水平优先、贴边保护）、
+         * 窗口位置与各子球 margin。展开前把子球摆在球心（等弹出）。
+         * 窗口请求「以球心为中心」，**不自行钳进屏内**——WMS 会把窗钳到
+         * 可见范围，自钳反而把窗口挡在状态栏/导航条之外，贴顶贴底时子球
+         * 被窗缘裁掉（横屏/竖屏贴顶实测复现）；钳走造成的锚点偏移由
+         * [reanchor] 按真实落点回算兜底。注意摆放值只是近似——悬浮窗
+         * x/y 是 WMS 父框架相对坐标且会被静默二次钳制。屏幕尺寸
+         * [screenSize] 现查现用：菜单跨旋转存活，构建时冻结的旧方向尺寸
+         * 会让窗口跟丢主球（弧心出窗 → 子球被裁/消失）。
          */
         fun place(ballCenterX: Int, ballCenterY: Int) {
-            val tilt = axisTiltDeg(ballCenterY.toFloat())
-            // 顶点（球心）在窗口内的位置：朝向侧在窗口对侧边缘。
-            val anchorX = if (facing == FanFacing.RIGHT) margin else widthPx - margin
-            windowX = (ballCenterX - anchorX).toInt()
-                .coerceIn(0, (screenWidth - widthPx).coerceAtLeast(0))
-            windowY = (ballCenterY - heightPx / 2f).toInt()
-                .coerceIn(0, (screenHeight - heightPx).coerceAtLeast(0))
-            val anchorY = ballCenterY - windowY
+            windowX = ballCenterX - widthPx / 2
+            windowY = ballCenterY - heightPx / 2
+            // 请求坐标系下球心即窗口中心；真实落点偏移由 reanchor 回算。
+            layoutChildren(widthPx / 2f, heightPx / 2f, resetTranslation = true)
+        }
 
+        /** 翻转展开方向（拖动跨过屏幕中线时服务层调用，开口恒朝屏幕中央）。 */
+        fun updateFacing(newFacing: FanFacing) {
+            facing = newFacing
+        }
+
+        /**
+         * 真实落点回算锚点（服务层每次全局布局后调用）：params 摆放值≠
+         * 真实落点（父框架坐标系 + WMS 静默钳制，且父框架尺寸无 API 可查），
+         * 唯一真值是两窗 `getLocationOnScreen` 之差。服务层传入「球心相对
+         * 本窗真实左上角」的坐标直接重排子球，免疫坐标系/钳制/挖孔屏。
+         * 不动 translation：收起动画期间重排不瞬跳。
+         */
+        fun reanchor(anchorX: Float, anchorY: Float) {
+            layoutChildren(anchorX, anchorY, resetTranslation = false)
+        }
+
+        private fun layoutChildren(anchorX: Float, anchorY: Float, resetTranslation: Boolean) {
+            lastAnchorX = anchorX
+            lastAnchorY = anchorY
+            val (tilt, orbitPx) = solveFan(anchorX, anchorY)
+            layoutOrbit = orbitPx
             children.forEach { child ->
                 val angle = Math.toRadians(tilt + child.offsetDeg)
                 val radialX = kotlin.math.cos(angle).toFloat()
                 child.dirX = if (facing == FanFacing.RIGHT) radialX else -radialX
                 child.dirY = kotlin.math.sin(angle).toFloat() // 屏幕坐标 y 向下
                 (child.view.layoutParams as FrameLayout.LayoutParams).apply {
-                    leftMargin = (anchorX + child.dirX * orbit - halfChild).toInt()
-                    topMargin = (anchorY + child.dirY * orbit - halfChild).toInt()
+                    val left = (anchorX + child.dirX * orbitPx - halfChild).toInt()
+                    val top = (anchorY + child.dirY * orbitPx - halfChild).toInt()
+                    if (leftMargin != left || topMargin != top) {
+                        leftMargin = left
+                        topMargin = top
+                        // 改 margin 不会自动 requestLayout；且仅在实际变化时
+                        // 请求，否则与全局布局监听互触发成死循环。
+                        child.view.requestLayout()
+                    }
                 }
-                if (!expanded) {
+                if (resetTranslation && !expanded) {
                     // 初始缩在球心；expand 动画归零即「弹出」。
-                    child.view.translationX = -child.dirX * orbit
-                    child.view.translationY = -child.dirY * orbit
+                    child.view.translationX = -child.dirX * orbitPx
+                    child.view.translationY = -child.dirY * orbitPx
                 }
             }
         }
 
         /**
-         * 中轴倾角（度）：0 = 纯水平。仅当水平扇形的上下包子球超出屏幕
-         * 时，以 1° 步进向屏幕内侧压，取能完整容纳的最小倾角。
+         * 求解扇形几何 (倾角°, 轨道px)：满轨道优先、同轨道下最小 |倾角|
+         * 优先（常态视觉是纯粹的「或左或右」）；满轨道任何倾角都容不下时
+         * 逐步收缩轨道重扫——贴边差几度弧就出裁切面，与其裁掉子球不如把
+         * 扇形收拢向球心（商业悬浮菜单的通行做法）；收到下限仍无解（球
+         * 贴屏角的物理无解位，无论如何倾都有子球出界）取「超出量最小」的
+         * 组合优雅降级。裁切面 = 窗口 ∩ 屏幕：WMS 会把窗钳进父框架
+         * （fitTypes=STATUS_BARS），锚点被挤到窗角时 ±75° 弧容不下，只查
+         * 屏幕管不住窗缘裁切、只查窗口管不住出屏。坐标真值 = 窗口真实
+         * 落点（root.getLocationOnScreen），摆放近似值由 [reanchor] 兜底
+         * 校正。轨道下限 = 主球半径 + 子球半径（子球不叠主球）。带界双
+         * 扫描保证必然终止：不能用「哪边出界往哪边压」的步进法——出界
+         * 判定不满足单调性时会 0↔1° 来回摆动死循环（锚点恰在窗口中央
+         * 附近时必现，实测 ANR 烧死主线程）。
          */
-        private fun axisTiltDeg(ballCenterY: Float): Double {
-            var tilt = 0.0
-            while (tilt > -90.0 && tilt < 90.0) {
-                var top = Float.MAX_VALUE
-                var bottom = -Float.MAX_VALUE
-                children.forEach {
-                    val sy = orbit * kotlin.math.sin(Math.toRadians(tilt + it.offsetDeg)).toFloat()
-                    if (sy < top) top = sy
-                    if (sy > bottom) bottom = sy
+        private fun solveFan(anchorX: Float, anchorY: Float): Pair<Double, Float> {
+            var bestTilt = 0.0
+            var bestOrbit = orbit
+            var bestOverflow = Float.MAX_VALUE
+            var r = orbit
+            val step = (orbit - minOrbit) / 28f
+            while (true) {
+                for (mag in 0..89) {
+                    val candidates =
+                        if (mag == 0) doubleArrayOf(0.0) else doubleArrayOf(mag.toDouble(), -mag.toDouble())
+                    for (tilt in candidates) {
+                        val overflow = clipOverflow(anchorX, anchorY, tilt, r)
+                        if (overflow <= 0f) return tilt to r
+                        if (overflow < bestOverflow) {
+                            bestOverflow = overflow
+                            bestTilt = tilt
+                            bestOrbit = r
+                        }
+                    }
                 }
-                val topBad = ballCenterY + top - halfChild < margin
-                val bottomBad = ballCenterY + bottom + halfChild > screenHeight - margin
-                if (!topBad && !bottomBad) break
-                tilt += if (topBad) 1.0 else -1.0
+                if (r <= minOrbit) break
+                r = kotlin.math.max(minOrbit, r - step)
             }
-            return tilt
+            return bestTilt to bestOrbit
+        }
+
+        /**
+         * [tilt] 倾角、[orbitPx] 轨道下 6 子球超出「窗口 ∩ 屏幕」裁切面的
+         * 最大超出量（px）；≤0 = 全部完整可见。子球位置在窗口坐标系
+         * （锚点 + 轨道偏移），屏幕矩形经 [root] 真实落点换算到同一坐标系。
+         */
+        private fun clipOverflow(anchorX: Float, anchorY: Float, tilt: Double, orbitPx: Float): Float {
+            val screen = screenSize()
+            val loc = IntArray(2)
+            root.getLocationOnScreen(loc)
+            val left = maxOf(0f, -loc[0].toFloat())
+            val top = maxOf(0f, -loc[1].toFloat())
+            val right = minOf(widthPx.toFloat(), screen.x - loc[0].toFloat())
+            val bottom = minOf(heightPx.toFloat(), screen.y - loc[1].toFloat())
+            var overflow = 0f
+            children.forEach {
+                val rad = Math.toRadians(tilt + it.offsetDeg)
+                val radialX = kotlin.math.cos(rad).toFloat()
+                val sx = orbitPx * (if (facing == FanFacing.RIGHT) radialX else -radialX)
+                val sy = orbitPx * kotlin.math.sin(rad).toFloat() // 屏幕坐标 y 向下
+                val cx = anchorX + sx
+                val cy = anchorY + sy
+                if (left + halfChild - cx > overflow) overflow = left + halfChild - cx
+                if (cx + halfChild - right > overflow) overflow = cx + halfChild - right
+                if (top + halfChild - cy > overflow) overflow = top + halfChild - cy
+                if (cy + halfChild - bottom > overflow) overflow = cy + halfChild - bottom
+            }
+            return overflow
         }
 
         /** 子球从球心错峰回弹弹出；错峰 Runnable 登记在册，收起时可撤销。 */
         fun expand() {
+            // 以最新弧心/倾角重播回弹起点：服务层在首次全局布局（锚点已按
+            // 真实落点校正）后才调本方法，起点必须用校正后的方向，否则贴边
+            // 时弹出弧线与最终弧线错位。
+            layoutChildren(lastAnchorX, lastAnchorY, resetTranslation = true)
             expanded = true
             val overshoot = android.view.animation.OvershootInterpolator(0.9f)
             children.forEach { child ->
@@ -509,8 +610,8 @@ internal object FloatUi {
             }
             children.forEach { child ->
                 val anim = child.view.animate()
-                    .translationX(-child.dirX * orbit)
-                    .translationY(-child.dirY * orbit)
+                    .translationX(-child.dirX * layoutOrbit)
+                    .translationY(-child.dirY * layoutOrbit)
                     .scaleX(0.6f)
                     .scaleY(0.6f)
                     .alpha(0f)

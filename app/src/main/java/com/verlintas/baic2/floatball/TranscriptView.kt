@@ -263,10 +263,11 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         val regenUsed = lastUserId != null && lastUserId in state.regeneratedTurns
         val basis = state.basisByMessage[message.id].orEmpty()
         val tactical = state.tacticalBriefs[message.id]
-        // 指纹短路：内容/任务令态/依据/战术约束都没变（典型：流式 token 触发的重渲染）
-        // 时跳过整块重建，避免每个 token 都 removeAllViews + 重建 Span。
+        val playbooks = state.playbooksByMessage[message.id].orEmpty()
+        // 指纹短路：内容/任务令态/依据/战术约束/参考话术都没变（典型：流式 token
+        // 触发的重渲染）时跳过整块重建，避免每个 token 都 removeAllViews + 重建 Span。
         val signature = "${message.content.hashCode()}|$isLastAssistant|" +
-            "${pendingMission != null}|${pendingMission?.adoptedIndex}|$regenUsed|$basis|$tactical"
+            "${pendingMission != null}|${pendingMission?.adoptedIndex}|$regenUsed|$basis|$tactical|$playbooks"
         if (bubble.bindSignature == signature) return
         bubble.bindSignature = signature
         box.removeAllViews()
@@ -297,6 +298,7 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
             }
         }
         tactical?.let { box.addView(buildTacticalFooter(it)) }
+        playbooks.takeIf { it.isNotEmpty() }?.let { box.addView(buildPlaybookFooter(it)) }
         basis.takeIf { it.isNotEmpty() }?.let { box.addView(buildBasisFooter(box, it)) }
         box.addView(buildCopyFooter(message, bubble))
     }
@@ -330,6 +332,38 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
         }.trimEnd()
         val footer = newAssistantText(12f, BASIS_COLOR)
         footer.tag = TAG_TACTICAL_FOOTER
+        footer.text = collapsed
+        footer.maxLines = 1
+        footer.ellipsize = TextUtils.TruncateAt.END
+        var expanded = false
+        footer.setOnClickListener {
+            expanded = !expanded
+            if (expanded) {
+                footer.text = expandedText
+                footer.maxLines = Int.MAX_VALUE
+                footer.ellipsize = null
+            } else {
+                footer.text = collapsed
+                footer.maxLines = 1
+                footer.ellipsize = TextUtils.TruncateAt.END
+            }
+        }
+        return footer
+    }
+
+    /**
+     * 2026-10-23 阶段 B：气泡下「参考话术」折叠条——本回合进提示词的
+     * 话术 Top-3（与【可参考的话术】段同源同序）对用户可见，让「参考」可感知。
+     * 默认单行省略摘要，点按展开完整 Top-3，再点收起（与战术约束折叠同款交互）。
+     */
+    private fun buildPlaybookFooter(lines: List<String>): View {
+        val label = context.getString(R.string.float_playbook_ref_label)
+        val collapsed = SpannableStringBuilder(label).append("：").append(lines.joinToString("；"))
+        val expandedText = buildString {
+            appendLine(label)
+            lines.forEach { appendLine(it) }
+        }.trimEnd()
+        val footer = newAssistantText(12f, BASIS_COLOR)
         footer.text = collapsed
         footer.maxLines = 1
         footer.ellipsize = TextUtils.TruncateAt.END

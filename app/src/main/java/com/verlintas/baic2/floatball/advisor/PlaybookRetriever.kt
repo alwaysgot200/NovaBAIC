@@ -71,6 +71,27 @@ object PlaybookIndex {
 }
 
 /**
+ * 话术库固定 9 分类（2026-10-23 需求 5，方案 §5.1）：通用哲理/情人/销售/职场/
+ * 官场/娱乐场/亲人/朋友/师友，顺序即管理页 Tab 顺序；「其他」兜底用户自定义
+ * 分类（只用于管理页展示，不参与身份定向召回）。
+ */
+object PlaybookCategories {
+    const val GENERAL = "通用哲理"
+    const val ROMANCE = "情人"
+    const val SALES = "销售"
+    const val WORKPLACE = "职场"
+    const val OFFICIAL = "官场"
+    const val ENTERTAINMENT = "娱乐场"
+    const val FAMILY = "亲人"
+    const val FRIEND = "朋友"
+    const val MENTOR = "师友"
+    const val OTHER = "其他"
+
+    /** 固定 9 类（管理页 Tab 顺序）。 */
+    val FIXED = listOf(GENERAL, ROMANCE, SALES, WORKPLACE, OFFICIAL, ENTERTAINMENT, FAMILY, FRIEND, MENTOR)
+}
+
+/**
  * 话术检索：FTS4 召回为主、LIKE 关键字打分为辅，category 过滤 + priority
  * 排序（方案 §6.2）。结构化小知识库，本地毫秒级，无需 embedding。
  */
@@ -125,6 +146,33 @@ class PlaybookRetriever @Inject constructor(
             .take(limit)
             .toList()
     }
+
+    /**
+     * 身份类型 → 优先话术类目（2026-10-23 需求 5，方案 §5.3 身份定向召回）：
+     * 聊天第一要务是确定身份——领导偏职场/官场、客户偏销售/职场、同事偏职场、
+     * 朋友偏朋友/娱乐场、家人偏亲人/通用哲理、暧昧对象偏情人/娱乐场；
+     * 其他/空身份返回 null = 全类（行为与定向召回之前一致）。
+     */
+    fun categoriesForIdentity(identity: String?): List<String>? = when (identity?.trim()) {
+        StyleVocab.IDENTITY_LEADER -> listOf(PlaybookCategories.WORKPLACE, PlaybookCategories.OFFICIAL)
+        StyleVocab.IDENTITY_CLIENT -> listOf(PlaybookCategories.SALES, PlaybookCategories.WORKPLACE)
+        StyleVocab.IDENTITY_COLLEAGUE -> listOf(PlaybookCategories.WORKPLACE)
+        StyleVocab.IDENTITY_FRIEND -> listOf(PlaybookCategories.FRIEND, PlaybookCategories.ENTERTAINMENT)
+        StyleVocab.IDENTITY_FAMILY -> listOf(PlaybookCategories.FAMILY, PlaybookCategories.GENERAL)
+        StyleVocab.IDENTITY_ROMANCE -> listOf(PlaybookCategories.ROMANCE, PlaybookCategories.ENTERTAINMENT)
+        else -> null
+    }
+
+    /**
+     * 多身份 → 优先话术类目**并集**（2026-10-23 方案 §2.2 身份多选）：
+     * 领导+家人 → 职场+官场+亲人+通用哲理；全部身份都无定向（其他/空）才返回
+     * null = 全类。调用方先经 [StyleVocab.decodeIdentities] 解码。
+     */
+    fun categoriesForIdentities(identities: List<String>): List<String>? =
+        identities.mapNotNull { categoriesForIdentity(it) }
+            .flatten()
+            .distinct()
+            .takeIf { it.isNotEmpty() }
 
     // -------------------------------------------------- 管理 UI（P5）
 

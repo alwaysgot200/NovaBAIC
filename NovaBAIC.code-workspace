@@ -1,14 +1,17 @@
 {
-	"folders": [
-		{
-			"path": "."
-		},
-		{
-			"path": "../Secrets"
-		}
-	],
-	"trae": {
-		"workspaceId": "398035703cce34e7fd770d7dea0f4363"
-	},
-	"settings": {}
+  "folders": [
+    {
+      "path": ".",
+    },
+    {
+      "path": "../Secrets",
+    },
+    {
+      "path": "D:/Users/HP/Downloads/app-release",
+    },
+  ],
+  "trae": {
+    "workspaceId": "398035703cce34e7fd770d7dea0f4363",
+  },
+  "settings": {},
 }

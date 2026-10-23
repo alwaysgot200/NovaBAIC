@@ -35,6 +35,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ContactAliasEntity::class,
         PersonaFieldEntity::class,
         ExtractionHoldEntity::class,
+        ContactInfoEntity::class,
         SessionBindingEntity::class,
         GroupMemberEntity::class,
         PlaybookEntity::class,
@@ -60,7 +61,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         EmotionBaselineEntity::class,
         EmotionMiningCandidateEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = false,
 )
 abstract class AdvisorDatabase : RoomDatabase() {
@@ -72,6 +73,8 @@ abstract class AdvisorDatabase : RoomDatabase() {
     abstract fun personaFieldDao(): PersonaFieldDao
 
     abstract fun extractionHoldDao(): ExtractionHoldDao
+
+    abstract fun contactInfoDao(): ContactInfoDao
 
     abstract fun sessionBindingDao(): SessionBindingDao
 
@@ -716,6 +719,47 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
         db.execSQL(
             "CREATE UNIQUE INDEX IF NOT EXISTS `index_emotion_mining_candidates_term` " +
                 "ON `emotion_mining_candidates` (`term`)",
+        )
+    }
+}
+
+/**
+ * v15 → v16（2026-10-23 联系方式 Tab）：新表 contact_infos（联系人联系方式
+ * 1:N：电话/邮件/地点/证件/IM/其他，(contactId, kind, value) 唯一防重，
+ * llm 草稿人工确认才生效）；merge_records 补 infoSnapshotJson（撤销合并时
+ * 按 id 整体还原联系方式）。建表 IF NOT EXISTS + ensureColumn 幂等补列，
+ * 不搬不删任何既有数据；DDL 与实体逐字对齐（Room 2.8 开库校验）。
+ */
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `contact_infos` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `contactId` INTEGER NOT NULL,
+                `kind` TEXT NOT NULL,
+                `label` TEXT NOT NULL DEFAULT '',
+                `value` TEXT NOT NULL,
+                `note` TEXT NOT NULL DEFAULT '',
+                `source` TEXT NOT NULL DEFAULT 'user',
+                `confirmed` INTEGER NOT NULL DEFAULT 0,
+                `evidence` TEXT,
+                `createdAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_contact_infos_contactId` " +
+                "ON `contact_infos` (`contactId`)",
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_contact_infos_contactId_kind_value` " +
+                "ON `contact_infos` (`contactId`, `kind`, `value`)",
+        )
+        ensureColumn(
+            db, "merge_records", "infoSnapshotJson",
+            "infoSnapshotJson TEXT NOT NULL DEFAULT '[]'",
         )
     }
 }

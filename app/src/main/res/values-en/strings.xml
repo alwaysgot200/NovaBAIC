@@ -236,11 +236,9 @@
     <string name="float_persona_chat_style">Chat style</string>
     <string name="float_persona_closeness">Closeness level</string>
     <string name="float_persona_mine">My self facet (who I am in this relationship)</string>
-    <string name="float_persona_facet_add">Add tag</string>
-    <string name="float_persona_facet_dialog_title">Edit my facet tags</string>
-    <string name="float_persona_facet_from_library">Pick from global persona library</string>
-    <string name="float_persona_facet_custom">Custom input (several entries, comma-separated)</string>
-    <string name="float_persona_facet_empty">No tags yet — pick from the global library or type your own.</string>
+    <string name="float_persona_facet_global">Global personas (check to use in this relationship, uncheck to mute here)</string>
+    <string name="float_persona_facet_extra">Extra for this relationship only</string>
+    <string name="float_persona_facet_go_library">Add new tags in the global persona library</string>
     <string name="float_persona_facet_pending_hint">Pending (brought in by AI extraction/merge; takes effect after confirmation)</string>
     <string name="float_persona_style_pending_identity">Their identity (pending): %1$s</string>
     <string name="float_persona_style_pending_chat_style">Chat style (pending): %1$s</string>

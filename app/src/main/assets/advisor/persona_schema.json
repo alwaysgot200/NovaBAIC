@@ -87,6 +87,17 @@
     { "key": "interests", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "兴趣爱好", "salience": "normal" },
     { "key": "recentTopics", "owner": "their", "group": "兴趣话题", "type": "tags", "label": "近期关注话题", "salience": "normal", "staleAfterDays": 90 },
 
+    { "key": "dietPrefs", "owner": "their", "group": "生活品味", "type": "tags", "label": "饮食口味", "salience": "normal",
+      "implTpl": "饮食口味：{v}，约饭/送礼/点单可直接对口" },
+    { "key": "entertain", "owner": "their", "group": "生活品味", "type": "tags", "label": "娱乐爱好", "salience": "normal",
+      "implTpl": "娱乐爱好：{v}，邀约与破冰优先从这里找话题" },
+    { "key": "favPlaces", "owner": "their", "group": "生活品味", "type": "tags", "label": "常去地点", "salience": "normal" },
+    { "key": "itemLikes", "owner": "their", "group": "生活品味", "type": "tags", "label": "物品爱好", "salience": "normal",
+      "implTpl": "物品爱好（服饰/玩物等）：{v}，送礼与聊物话题可直接对口" },
+    { "key": "bookLikes", "owner": "their", "group": "生活品味", "type": "tags", "label": "书籍爱好", "salience": "normal" },
+    { "key": "artLikes", "owner": "their", "group": "生活品味", "type": "tags", "label": "艺术爱好", "salience": "normal",
+      "implTpl": "艺术爱好（电影/绘画等）：{v}，共同体验邀约可直接对口" },
+
     { "key": "relationType", "owner": "their", "group": "关系", "type": "enum", "label": "关系类型", "salience": "normal",
       "options": [
         { "code": "customer", "label": "客户" },

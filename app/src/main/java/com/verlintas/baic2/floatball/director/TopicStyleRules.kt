@@ -120,7 +120,8 @@ object TopicStyleRules {
     ): TopicFilter {
         val forbidden = LinkedHashSet<String>()
         val penalty = LinkedHashSet<String>()
-        if (identity == StyleVocab.IDENTITY_LEADER) {
+        // 身份多选（2026-10-23 §2.2）：命中任一身份即生效（领导+家人 也守领导禁区）。
+        if (StyleVocab.hasIdentity(identity, StyleVocab.IDENTITY_LEADER)) {
             forbidden += listOf(TopicStyleTags.JOKE, TopicStyleTags.FOOD, TopicStyleTags.FUN)
         }
         if (chatStyle == StyleVocab.STYLE_SERIOUS) {

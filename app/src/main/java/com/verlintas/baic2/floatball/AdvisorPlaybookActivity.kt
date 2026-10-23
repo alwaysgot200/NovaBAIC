@@ -44,7 +44,9 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -67,6 +69,7 @@ import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
+import com.verlintas.baic2.floatball.advisor.PlaybookCategories
 import com.verlintas.baic2.floatball.advisor.PlaybookRetriever
 import com.verlintas.baic2.floatball.advisor.data.PlaybookEntity
 import dagger.hilt.android.AndroidEntryPoint
@@ -135,6 +138,9 @@ private fun PlaybookScreen(onClose: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var categories by remember { mutableStateOf<List<String>>(emptyList()) }
     var adding by remember { mutableStateOf(false) }
+    // 2026-10-23 需求 5 §5.2：固定 9 类 Tab +「其他」兜底（用户自定义分类）。
+    val tabs = remember { PlaybookCategories.FIXED + PlaybookCategories.OTHER }
+    var selectedTab by remember { mutableStateOf(PlaybookCategories.FIXED.first()) }
 
     suspend fun refresh() {
         all = playbooks.all()
@@ -143,11 +149,18 @@ private fun PlaybookScreen(onClose: () -> Unit) {
     LaunchedEffect(Unit) { refresh() }
 
     val keyword = query.trim()
-    val visible = all.filter { p ->
+    val matches = all.filter { p ->
         keyword.isEmpty() ||
             p.scenario.contains(keyword, ignoreCase = true) ||
             p.content.contains(keyword, ignoreCase = true) ||
             p.tags.split(",").any { it.trim().contains(keyword, ignoreCase = true) }
+    }
+    val visible = matches.filter { tabOf(it.category) == selectedTab }
+    // 跨 Tab 搜索命中时自动跳到对应 Tab。
+    LaunchedEffect(keyword, all) {
+        if (keyword.isEmpty()) return@LaunchedEffect
+        val first = matches.firstOrNull() ?: return@LaunchedEffect
+        selectedTab = tabOf(first.category)
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -175,6 +188,21 @@ private fun PlaybookScreen(onClose: () -> Unit) {
                 )
                 Button(onClick = { adding = true }, modifier = Modifier.padding(top = 8.dp)) {
                     Text(stringResource(R.string.float_playbook_add))
+                }
+
+                ScrollableTabRow(
+                    selectedTabIndex = tabs.indexOf(selectedTab).coerceAtLeast(0),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                ) {
+                    tabs.forEach { tab ->
+                        Tab(
+                            selected = tab == selectedTab,
+                            onClick = { selectedTab = tab },
+                            text = { Text(tab) },
+                        )
+                    }
                 }
 
                 visible.groupBy { it.category }.forEach { (category, list) ->
@@ -207,7 +235,9 @@ private fun PlaybookScreen(onClose: () -> Unit) {
 
     if (adding) {
         AddPlaybookDialog(
-            existingCategories = categories,
+            existingCategories = PlaybookCategories.FIXED +
+                categories.filterNot { it in PlaybookCategories.FIXED },
+            initialCategory = if (selectedTab == PlaybookCategories.OTHER) "" else selectedTab,
             onDismiss = { adding = false },
             onSave = { category, scenario, tags, content ->
                 adding = false
@@ -219,6 +249,10 @@ private fun PlaybookScreen(onClose: () -> Unit) {
         )
     }
 }
+
+/** 分类 → Tab 归属：固定 9 类各归各，词表外的用户自定义分类统一进「其他」。 */
+private fun tabOf(category: String): String =
+    if (category in PlaybookCategories.FIXED) category else PlaybookCategories.OTHER
 
 @Composable
 private fun PlaybookCard(p: PlaybookEntity, onDelete: () -> Unit) {
@@ -279,10 +313,11 @@ private fun PlaybookCard(p: PlaybookEntity, onDelete: () -> Unit) {
 @Composable
 private fun AddPlaybookDialog(
     existingCategories: List<String>,
+    initialCategory: String,
     onDismiss: () -> Unit,
     onSave: (category: String, scenario: String, tags: String, content: String) -> Unit,
 ) {
-    var category by remember { mutableStateOf(existingCategories.firstOrNull().orEmpty()) }
+    var category by remember { mutableStateOf(initialCategory) }
     var scenario by remember { mutableStateOf("") }
     var tags by remember { mutableStateOf("") }
     var content by remember { mutableStateOf("") }

@@ -22,6 +22,7 @@ package com.verlintas.baic2.floatball.advisor
 import com.verlintas.baic2.core.data.repository.MemoryRepository
 import com.verlintas.baic2.core.model.NoteKind
 import com.verlintas.baic2.core.model.NoteSource
+import com.verlintas.baic2.floatball.advisor.data.ContactInfoEntity
 import com.verlintas.baic2.floatball.advisor.data.MY_PERSONA_CONTACT_ID
 import com.verlintas.baic2.floatball.advisor.data.PersonaFieldEntity
 import java.time.LocalDate
@@ -169,6 +170,41 @@ class ProfileMemorySync @Inject constructor(
      */
     private fun renderValue(def: PersonaFieldDef, stored: String): String? =
         PersonaValueCodes.displayValue(def, stored).takeIf { it.isNotBlank() }
+
+    /**
+     * 确认联系方式草稿并双写（2026-10-23）：PROFILE 稳定事实、全别名进 entities，
+     * 与画像字段同纪律。返回固化行（不存在返回 null）。
+     */
+    suspend fun confirmInfoAndSync(
+        contactId: Long,
+        infoId: Long,
+        conversationId: Long? = null,
+    ): ContactInfoEntity? {
+        if (contactId == MY_PERSONA_CONTACT_ID) return null
+        val row = contacts.confirmInfo(infoId) ?: return null
+        runCatching { syncInfo(contactId, row, conversationId) }
+        return row
+    }
+
+    /** 手动新增/编辑联系方式后双写（2026-10-23）：与确认同款 PROFILE 行。 */
+    suspend fun syncInfo(contactId: Long, info: ContactInfoEntity, conversationId: Long? = null) {
+        if (contactId == MY_PERSONA_CONTACT_ID) return
+        if (info.value.isBlank()) return
+        val profile = contacts.profile(contactId) ?: return
+        val aliases = contacts.aliases(contactId).map { it.alias }
+        val entities = (listOf(profile.displayName) + aliases).filter { it.isNotBlank() }.distinct()
+        val label = info.label.trim().takeIf { it.isNotEmpty() }?.let { "（$it）" } ?: ""
+        runCatching {
+            memoryRepository.addNote(
+                kind = NoteKind.PROFILE,
+                content = "${profile.displayName}的${ContactInfoRules.kindWord(info.kind)}$label：${info.value.trim()}",
+                importance = IMPORTANCE_NORMAL,
+                conversationId = conversationId,
+                source = NoteSource.USER,
+                entities = entities,
+            )
+        }
+    }
 
     /** 宽松解析常见日期写法为当天 0 点毫秒；解析不了返回 null（回退调用方用当前时间）。 */
     private fun parseDate(text: String): Long? {

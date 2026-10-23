@@ -77,6 +77,28 @@ class TopicStyleRulesTest {
         assertEquals(3, filter.maxDepth)
     }
 
+    @Test
+    fun multiIdentity_leaderAmongThemStillForbids() {
+        // 身份多选（2026-10-23 §2.2）：「领导＋家人」命中任一即生效领导禁区。
+        val filter = TopicStyleRules.filterFor(
+            identity = StyleVocab.encodeIdentities(listOf(StyleVocab.IDENTITY_LEADER, StyleVocab.IDENTITY_FAMILY)),
+            chatStyle = null,
+            closeness = null,
+            facetTags = emptyList(),
+            heatScore = null,
+        )
+        assertEquals(setOf(TopicStyleTags.JOKE, TopicStyleTags.FOOD, TopicStyleTags.FUN), filter.forbiddenTags)
+        // 不含领导的多选不生效禁区。
+        val noLeader = TopicStyleRules.filterFor(
+            identity = StyleVocab.encodeIdentities(listOf(StyleVocab.IDENTITY_COLLEAGUE, StyleVocab.IDENTITY_ROMANCE)),
+            chatStyle = null,
+            closeness = null,
+            facetTags = emptyList(),
+            heatScore = null,
+        )
+        assertTrue(noLeader.forbiddenTags.isEmpty())
+    }
+
     // ── filterFor：chatStyle / facet 降权 ──────────────────────────────
 
     @Test

@@ -201,6 +201,11 @@ class ScreenAdvisor @Inject constructor(
         val basisByMessage: Map<Long, List<String>> = emptyMap(),
         /** 增强档战术约束（2026-10-22 方案 F3）：assistant 消息 id → 本回合预分析（内存态）。 */
         val tacticalBriefs: Map<Long, TacticalBrief> = emptyMap(),
+        /**
+         * 2026-10-23 阶段 B：assistant 消息 id → 本回合进提示词的参考话术 Top-3
+         * 渲染行（分屏「参考话术」折叠条数据源，内存态，随会话切换清空）。
+         */
+        val playbooksByMessage: Map<Long, List<String>> = emptyMap(),
         /** P3 §九：已用过一次长按重写的「被修正回合」触发消息 id（每回合限一次）。 */
         val regeneratedTurns: Set<Long> = emptySet(),
         /**
@@ -2332,6 +2337,17 @@ class ScreenAdvisor @Inject constructor(
                                     )
                                 }
                             }
+                            // 2026-10-23 阶段 B：本回合参考话术 Top-3 挂到参谋气泡，
+                            // 分屏折叠条可见（与话术段同源同序）。
+                            val playbookRefs = sources.brief?.playbookLines.orEmpty()
+                            if (playbookRefs.isNotEmpty()) {
+                                _transcript.update { st ->
+                                    st.copy(
+                                        playbooksByMessage = st.playbooksByMessage +
+                                            (outcome.assistantMessageId to playbookRefs),
+                                    )
+                                }
+                            }
                             // F3（2026-10-22 方案）：增强档战术约束挂到本回合参谋气泡，
                             // 分屏折叠小字可见；回退（brief=null）与智能档天然不出现。
                             tacticalBrief?.let { brief ->
@@ -2982,6 +2998,7 @@ class ScreenAdvisor @Inject constructor(
                 missions = emptyList(),
                 basisByMessage = emptyMap(),
                 tacticalBriefs = emptyMap(),
+                playbooksByMessage = emptyMap(),
                 regeneratedTurns = emptySet(),
             )
         }

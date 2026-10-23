@@ -29,6 +29,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -42,10 +43,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -91,9 +99,11 @@ import com.verlintas.baic2.floatball.advisor.PersonaSchemas
 import com.verlintas.baic2.floatball.advisor.PersonaValueCodes
 import com.verlintas.baic2.floatball.advisor.PersonaValues
 import com.verlintas.baic2.floatball.advisor.ProfileMemorySync
+import com.verlintas.baic2.floatball.advisor.SelfFacets
 import com.verlintas.baic2.floatball.advisor.StyleAssets
 import com.verlintas.baic2.floatball.advisor.StyleCardRepository
 import com.verlintas.baic2.floatball.advisor.StyleResolver
+import com.verlintas.baic2.floatball.advisor.StyleVocab
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_GROUP
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_PERSON
 import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
@@ -546,6 +556,19 @@ private fun ContactListScreen(
                 bindCandidate = bindCandidate,
                 bindText = bindText,
                 onDelete = { deleting = profile },
+                // 身份多选落库（2026-10-23 需求 1）：其余两标签透传不动，写后
+                // 刷新列表让卡片即显新值。
+                onSetIdentities = { ids ->
+                    scope.launch {
+                        contacts.setStyleTags(
+                            profile.id,
+                            StyleVocab.encodeIdentities(ids),
+                            profile.chatStyle,
+                            profile.closeness,
+                        )
+                        refresh()
+                    }
+                },
             ) { onOpen(profile.id) }
         }
 
@@ -574,6 +597,7 @@ private fun ContactCard(
     bindCandidate: (() -> Unit)? = null,
     bindText: String = "",
     onDelete: (() -> Unit)? = null,
+    onSetIdentities: ((List<String>) -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     Surface(
@@ -615,6 +639,60 @@ private fun ContactCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                 )
+            }
+            // 身份多选下拉（2026-10-23 需求 1，方案 §2.4）：列表卡片行内直设，
+            // 弹层点选/取消即落库不关弹层（可连选「领导＋亲人」），与详情页/
+            // 双方人设卡同字段同词表。
+            if (onSetIdentities != null) {
+                val identities = StyleVocab.decodeIdentities(profile.identity)
+                var menuOpen by remember { mutableStateOf(false) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.float_persona_identity),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = identities.joinToString("＋")
+                            .ifBlank { stringResource(R.string.float_identity_quick_undecided) },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .weight(1f),
+                    )
+                    Box {
+                        TextButton(onClick = { menuOpen = true }) {
+                            Text(stringResource(R.string.float_identity_list_set))
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            StyleVocab.IDENTITIES.forEach { option ->
+                                val on = option in identities
+                                DropdownMenuItem(
+                                    text = { Text(option) },
+                                    leadingIcon = {
+                                        if (on) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        onSetIdentities(
+                                            if (on) identities - option else identities + option,
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
             }
             if (bindCandidate != null) {
                 TextButton(onClick = bindCandidate, modifier = Modifier.padding(top = 2.dp)) {
@@ -680,6 +758,9 @@ private const val TAB_INDEX_GOALS = 1
 private const val TAB_INDEX_SESSIONS = 2
 private const val TAB_INDEX_CHATS = 3
 
+// 联系方式 Tab（2026-10-23 需求 3，方案 §3.3）：电话/邮件/地点/证件 1:N + AI 自动沉淀。
+private const val TAB_INDEX_CONTACTS = 4
+
 @Composable
 private fun ContactDetailScreen(
     contactId: Long,
@@ -743,6 +824,13 @@ private fun ContactDetailScreen(
                     onClick = { tab = TAB_INDEX_CHATS },
                     text = { Text(stringResource(R.string.float_tab_chat_channels)) },
                 )
+                // 联系方式（2026-10-23 需求 3）：电话/邮件/地点/证件等 1:N 档案，
+                // 手动编辑 + 聊天自动沉淀（AI 草稿人工确认）。
+                Tab(
+                    selected = tab == TAB_INDEX_CONTACTS,
+                    onClick = { tab = TAB_INDEX_CONTACTS },
+                    text = { Text(stringResource(R.string.float_tab_contact_infos)) },
+                )
             }
         },
     ) { tabScroll ->
@@ -752,6 +840,14 @@ private fun ContactDetailScreen(
             if (cur != null) {
                 var goal by remember(cur.id, cur.goal) { mutableStateOf(cur.goal.orEmpty()) }
                 LabeledField(stringResource(R.string.float_profile_goal), goal, { goal = it }, minLines = 2)
+                // 归属说明（2026-10-23 需求 2，方案 §2）：业务目标写的是我方意图，
+                // 不是对方人设——一行讲清归属，免得和下方双方人设卡混淆。
+                Text(
+                    text = stringResource(R.string.float_goal_biz_owner_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
                 Button(
                     onClick = {
                         scope.launch {
@@ -799,9 +895,16 @@ private fun ContactDetailScreen(
         } else if (tab == TAB_INDEX_CHATS) {
             // 聊天会话 Tab（§1.5）：搜索 + ImChatNavigator 直达 + 新增。
             ChatChannelsTab(contactId = contactId, scroll = tabScroll)
+        } else if (tab == TAB_INDEX_CONTACTS) {
+            // 联系方式 Tab（2026-10-23 需求 3）：kind 分组卡片 + AI 草稿核阅。
+            ContactInfosTab(contactId = contactId, scroll = tabScroll)
         } else if (current == null) {
             Text(stringResource(R.string.float_profile_gone))
         } else {
+            // 身份类型快捷下拉（2026-10-23 需求 1，方案 §1）：聊天第一要务是
+            // 确定对方身份——常驻画像 Tab 顶部，与「目标」Tab 双方人设卡同字段。
+            IdentityQuickPick(contactId = contactId, profile = current, contacts = contacts)
+
             // 类型 + 改名
             FlowChips(
                 options = listOf(CONTACT_TYPE_PERSON to R.string.float_profile_type_person,
@@ -1804,7 +1907,7 @@ internal fun rememberContactRepository(): ContactRepository = advisorActivity().
 private fun rememberPersonaSchemas(): PersonaSchemas = advisorActivity().schemas
 
 @Composable
-private fun rememberProfileSync(): ProfileMemorySync = advisorActivity().profileSync
+internal fun rememberProfileSync(): ProfileMemorySync = advisorActivity().profileSync
 
 @Composable
 private fun rememberHistoryGateway(): ContactHistoryGateway = advisorActivity().historyGateway
@@ -1812,6 +1915,106 @@ private fun rememberHistoryGateway(): ContactHistoryGateway = advisorActivity().
 @Composable
 internal fun rememberConversationRepository(): ConversationRepository =
     advisorActivity().conversationRepository
+
+/**
+ * 身份类型快捷多选下拉（2026-10-23 需求 1，方案 §2.4）：聊天第一要务是确定
+ * 对方身份，其次才是聊天风格——画像 Tab 顶部常驻一行直设
+ * `contact_profiles.identity` 编码多值（与「目标」Tab 双方人设卡、联系人列表
+ * 卡片同一字段同一词表，observeProfile Flow 多处同源）。一人多身份（领导＋
+ * 亲人=你爸兼直属领导）；弹层内点选/取消即落库、不关弹层，便于连选。
+ * 手动选择优先并清掉对应 AI 待确认建议；有待确认身份时「AI 建议：xx」一键
+ * 采纳=并入已有多选（不覆盖手动值）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun IdentityQuickPick(
+    contactId: Long,
+    profile: ContactProfileEntity?,
+    contacts: ContactRepository,
+) {
+    val scope = rememberCoroutineScope()
+    val pending = SelfFacets.decodePending(profile?.selfFacetPendingJson)
+    var expanded by remember { mutableStateOf(false) }
+    val selected = StyleVocab.decodeIdentities(profile?.identity)
+
+    /** 落库 identity 多值（其余两标签透传不动）+ 清对应 AI 建议（手动选择优先）。 */
+    fun setIdentities(values: List<String>) {
+        scope.launch {
+            contacts.setStyleTags(
+                contactId,
+                StyleVocab.encodeIdentities(values),
+                profile?.chatStyle,
+                profile?.closeness,
+            )
+            contacts.clearStylePendingIdentity(contactId)
+        }
+    }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+    ) {
+        OutlinedTextField(
+            value = selected.joinToString("＋")
+                .ifBlank { stringResource(R.string.float_identity_quick_undecided) },
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(stringResource(R.string.float_identity_quick_label)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            StyleVocab.IDENTITIES.forEach { option ->
+                val on = option in selected
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    leadingIcon = {
+                        if (on) {
+                            Icon(
+                                imageVector = Icons.Outlined.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    },
+                    // 多选：点选/取消即落库但不关弹层，便于连续勾多个身份。
+                    onClick = {
+                        setIdentities(if (on) selected - option else selected + option)
+                    },
+                )
+            }
+        }
+    }
+    val suggested = pending?.identity
+    if (!suggested.isNullOrBlank()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(
+                    R.string.float_identity_quick_ai_suggest,
+                    StyleVocab.decodeIdentities(suggested).joinToString("＋"),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                onClick = {
+                    // 采纳=并入已有多选（去重），绝不覆盖手动值。
+                    setIdentities(
+                        (selected + StyleVocab.decodeIdentities(suggested)).distinct(),
+                    )
+                },
+            ) {
+                Text(stringResource(R.string.float_identity_quick_adopt))
+            }
+        }
+    }
+}
 
 /** 「说话风格」入口卡：contactId=0 显示全局卡摘要；>0 显示联系人卡，缺卡时显示跟随默认。 */
 @Composable

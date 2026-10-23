@@ -102,7 +102,7 @@ class AdvisorAssetSeeder @Inject constructor(
         const val PREFS = "advisor_data"
         const val KEY_VERSION = "playbook_seed_version"
         const val PLAYBOOK_DIR = "playbooks"
-        const val SEED_VERSION = 2
+        const val SEED_VERSION = 3
     }
 }
 

@@ -72,6 +72,44 @@ object StyleVocab {
         return IDENTITIES.firstOrNull { text.contains(it) }
     }
 
+    // ── 身份多选（2026-10-23 方案 §2.1）：一人多身份（领导+亲人、同事+恋人），
+    //    列存编码多值（JSON 数组），decode 向后兼容旧单值裸字符串。写库走
+    //    [encodeIdentities]，判定走 [hasIdentity]，展示走 [decodeIdentities]。 ──
+
+    /** 身份列表 → 编码多值（去重保序；空集返回 null，落库保持列空语义）。 */
+    fun encodeIdentities(tags: List<String>): String? {
+        val clean = tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        return if (clean.isEmpty()) null else PersonaValues.encodeTags(clean)
+    }
+
+    /**
+     * 编码多值/旧单值 → 身份列表（词表外丢弃，防御不抛）：
+     * `["领导","家人"]` → `[领导, 家人]`；旧裸字符串 `领导` → `[领导]`；
+     * `领导+亲人`/`领导、亲人` 式拼接按分隔符拆段逐段归一。
+     */
+    fun decodeIdentities(raw: String?): List<String> {
+        val text = raw?.trim().takeUnless { it.isNullOrEmpty() } ?: return emptyList()
+        val parts = if (text.firstOrNull() == '[') {
+            PersonaValues.decodeTags(text)
+        } else {
+            text.split('+', '、', '，', ',', '/', '／').map { it.trim() }.filter { it.isNotEmpty() }
+        }
+        return parts.mapNotNull { part -> IDENTITIES.firstOrNull { part == it } ?: IDENTITIES.firstOrNull { part.contains(it) } }
+            .distinct()
+    }
+
+    /**
+     * 模型输出的多身份归一：收集文本中**全部**词表命中（声明序、去重、默认
+     * 封顶 3 个），词表外丢弃——「他是我的领导也是我爸」→ `[领导, 家人]`。
+     */
+    fun normalizeIdentities(raw: String?, limit: Int = 3): List<String> {
+        val text = raw?.trim().takeUnless { it.isNullOrEmpty() } ?: return emptyList()
+        return IDENTITIES.filter { text.contains(it) }.distinct().take(limit.coerceAtLeast(1))
+    }
+
+    /** 判定侧统一入口：多身份命中任一即 true（兼容旧单值列数据）。 */
+    fun hasIdentity(raw: String?, identity: String): Boolean = decodeIdentities(raw).contains(identity)
+
     /** 模型输出的聊天风格归一（口径同 [normalizeIdentity]）。 */
     fun normalizeChatStyle(raw: String?): String? {
         val text = raw?.trim().takeUnless { it.isNullOrEmpty() } ?: return null

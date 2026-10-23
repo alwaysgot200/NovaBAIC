@@ -357,11 +357,10 @@
          直接引用词表，值=展示词），原 float_persona_identity_*/style_*/closeness_*
          词值键随之移除，防双份手抄漂移。 -->
     <string name="float_persona_mine">我方侧面（我在这个关系里是谁）</string>
-    <string name="float_persona_facet_add">添加标签</string>
-    <string name="float_persona_facet_dialog_title">编辑我方侧面标签</string>
-    <string name="float_persona_facet_from_library">从全局人设库选</string>
-    <string name="float_persona_facet_custom">自定义输入（顿号/逗号分隔可多个）</string>
-    <string name="float_persona_facet_empty">还没有标签，从全局库选或自行输入。</string>
+    <!-- 2026-10-23 §3 继承+补丁：我的人设不再自由输入，全局库点选 + 专属补充 -->
+    <string name="float_persona_facet_global">全局人设（勾选=在与 TA 的关系里启用，取消=此关系不用）</string>
+    <string name="float_persona_facet_extra">专属补充（只用于与 TA 的关系）</string>
+    <string name="float_persona_facet_go_library">去全局人设库添加新标签</string>
     <string name="float_persona_facet_pending_hint">待确认（AI 萃取/合并带入，确认后才生效）</string>
     <string name="float_persona_style_pending_identity">对方身份（待定）：%1$s</string>
     <string name="float_persona_style_pending_chat_style">聊天风格（待定）：%1$s</string>
@@ -460,10 +459,11 @@
     <string name="float_playbook_builtin">内置</string>
     <string name="float_playbook_custom">自定义</string>
     <string name="float_playbook_delete">删除</string>
-    <string name="float_playbook_field_category">分类（如：销售/职场/政务/情感）</string>
+    <string name="float_playbook_field_category">分类（点选上方 9 类，或自定义输入）</string>
     <string name="float_playbook_field_scenario">适用场景</string>
     <string name="float_playbook_field_tags">标签（逗号分隔，如：报价,异议）</string>
     <string name="float_playbook_field_content">话术正文</string>
+    <string name="float_playbook_ref_label">参考话术</string>
     <string name="float_settings_playbooks">话术库管理</string>
     <string name="float_settings_playbooks_hint">浏览内置话术，增删自己的参考话术</string>
     <string name="float_settings_profiles">联系人画像</string>
@@ -970,5 +970,47 @@
     <string name="settings_developer_note">好参谋遵循 GPL-3.0-or-later 许可。</string>
     <string name="settings_about_copyright">© 2026 好参谋 保留权利</string>
     <string name="settings_about_share_chooser">分享好参谋</string>
+
+    <!-- 2026-10-23 联系人画像增强（需求 1 身份快捷下拉 / 需求 2 归属分区 / 需求 3 联系方式） -->
+    <string name="float_identity_quick_label">身份（可多选，如：领导＋亲人）</string>
+    <string name="float_identity_quick_undecided">待确定</string>
+    <string name="float_identity_quick_ai_suggest">AI 建议：%1$s</string>
+    <string name="float_identity_quick_adopt">采纳</string>
+    <!-- 2026-10-23 需求 1：联系人画像列表卡片的身份多选下拉 -->
+    <string name="float_identity_list_set">＋设置身份</string>
+    <string name="float_goal_biz_owner_hint">本关系要达成的目标（我方意图）</string>
+    <string name="float_persona_zone_theirs_title">TA 的人设（对方是谁）</string>
+    <string name="float_persona_zone_theirs_hint">以下设置的都是对方</string>
+    <string name="float_persona_zone_mine_title">我的人设（默认用全局人设，可为 TA 专属调整）</string>
+    <string name="float_persona_zone_mine_hint">全局人设默认全量生效；此处勾选/补充只影响与 TA 的关系</string>
+    <string name="float_persona_zone_relation_title">关系维持与聊天策略</string>
+    <string name="float_persona_zone_relation_hint">这是你和 TA 的相处方式</string>
+    <string name="float_tab_contact_infos">联系方式</string>
+    <string name="float_info_hint">聊天中提到的电话、地址会自动沉淀到这里，确认后长期记忆</string>
+    <string name="float_info_empty_hint">还没有联系方式：手动添加，或在聊天中提到后由 AI 自动沉淀</string>
+    <string name="float_info_add">添加</string>
+    <string name="float_info_add_title">添加联系方式</string>
+    <string name="float_info_edit_title">编辑联系方式</string>
+    <string name="float_info_kind_label">分类</string>
+    <string name="float_info_kind_phone">电话</string>
+    <string name="float_info_kind_email">邮箱</string>
+    <string name="float_info_kind_address">地点</string>
+    <string name="float_info_kind_id_doc">证件</string>
+    <string name="float_info_kind_im">IM 账号</string>
+    <string name="float_info_kind_other">其他</string>
+    <string name="float_info_label_hint">标签（如：单位座机、老家地址）</string>
+    <string name="float_info_value_hint">值（必填）</string>
+    <string name="float_info_note_hint">备注</string>
+    <string name="float_info_draft_badge">AI 待确认</string>
+    <string name="float_info_confirmed_badge">已确认</string>
+    <string name="float_info_confirm">确认</string>
+    <string name="float_info_discard">丢弃</string>
+    <string name="float_info_edit">编辑</string>
+    <string name="float_info_evidence">原文：%1$s</string>
+    <string name="float_info_invalid">值不能为空，且不超过 80 字</string>
+    <string name="float_info_dup">该分类下已有相同的值</string>
+    <string name="float_info_delete_title">删除这条联系方式？</string>
+    <string name="float_info_delete_hint">只删除本应用的档案记录，不影响真实通讯录。</string>
+    <string name="float_info_confirmed_toast">已确认并写入长期记忆</string>
 
 </resources>

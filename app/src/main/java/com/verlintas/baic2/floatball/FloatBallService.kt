@@ -32,8 +32,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
@@ -191,6 +193,18 @@ class FloatBallService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * 旋转/分屏等配置变化：悬浮窗 attrs 是旧屏坐标系的摆放值，跨旋转会
+     * 落到新屏的错误位置（扇形菜单构建时冻结的旧方向尺寸还会把窗口钳离
+     * 主球，子球被裁/消失）。立即按新屏重钳主球并重摆菜单，不等下次拖动。
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val params = ballParams ?: return
+        val view = ball?.root ?: return
+        moveBallWithFollow(view, params, params.x, params.y)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -635,14 +649,14 @@ class FloatBallService : Service() {
         x: Int,
         y: Int,
     ) {
-        val metrics = resources.displayMetrics
+        val screen = screenSize()
         params.x = x.coerceIn(
             -dp(FloatUi.BALL_SIZE_DP / 2),
-            metrics.widthPixels - dp(FloatUi.BALL_SIZE_DP / 2),
+            screen.x - dp(FloatUi.BALL_SIZE_DP / 2),
         )
         params.y = y.coerceIn(
             dp(FloatUi.MARGIN_DP),
-            metrics.heightPixels - dp(FloatUi.BALL_SIZE_DP + FloatUi.MARGIN_DP),
+            screen.y - dp(FloatUi.BALL_SIZE_DP + FloatUi.MARGIN_DP),
         )
         runCatching { windowManager.updateViewLayout(view, params) }
         // 回写拖动落点：摘窗复挂（单次参谋投影/拒绝授权等）走 showBall()
@@ -890,14 +904,14 @@ class FloatBallService : Service() {
     /** 连续模式的 OCR 前掩膜：自身分屏 + 悬浮球的屏幕矩形。 */
     private fun currentOverlayRects(): List<Rect> {
         val rects = mutableListOf<Rect>()
-        val metrics = resources.displayMetrics
+        val screen = screenSize()
         split?.root?.let { root ->
             // 用窗口真实屏坐标：键盘避让后面板被收高且 BOTTOM 落在键盘上沿，
             // 不能再按 params.height/y 推算。
             val location = IntArray(2)
             root.getLocationOnScreen(location)
             if (location[1] >= 0 && root.height > 0) {
-                rects.add(Rect(0, location[1], metrics.widthPixels, location[1] + root.height))
+                rects.add(Rect(0, location[1], screen.x, location[1] + root.height))
             }
         }
         ballParams?.let {
@@ -955,10 +969,10 @@ class FloatBallService : Service() {
 
     private fun showBall() {
         if (ball != null) return
-        val metrics = resources.displayMetrics
+        val screen = screenSize()
         if (ballX == Int.MIN_VALUE) {
-            ballX = metrics.widthPixels - dp(FloatUi.BALL_SIZE_DP + FloatUi.MARGIN_DP)
-            ballY = metrics.heightPixels / 3
+            ballX = screen.x - dp(FloatUi.BALL_SIZE_DP + FloatUi.MARGIN_DP)
+            ballY = screen.y / 3
         }
         val params = overlayParams(
             width = dp(FloatUi.BALL_SIZE_DP),
@@ -995,10 +1009,10 @@ class FloatBallService : Service() {
         // 分屏与扇形菜单不共存；悬浮球保留可见（面板开着也能再触发参谋，
         // 球可拖动避让面板；录制态掩膜本就盖住红球）。
         dismissMenuNow()
-        val metrics = resources.displayMetrics
+        val screen = screenSize()
         val params = overlayParams(
             width = WindowManager.LayoutParams.MATCH_PARENT,
-            height = (metrics.heightPixels * FloatUi.SPLIT_DEFAULT_RATIO).toInt(),
+            height = (screen.y * FloatUi.SPLIT_DEFAULT_RATIO).toInt(),
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.START
             x = 0
@@ -1157,16 +1171,16 @@ class FloatBallService : Service() {
             restoreSplitImeLayout(view)
             return
         }
-        val metrics = view.resources.displayMetrics
+        val screenHeight = screenSize().y
         if (splitHeightBeforeIme < 0) {
             // 记录键盘弹出前的面板高（用户拖出的分界线高度）；异常时序下
             // 可能拿到已收缩的高度，低于 minHeight 时保底，防 coerceIn 空区间。
             splitHeightBeforeIme = p.height.coerceAtLeast(
-                dp(IME_MIN_PANEL_DP).coerceAtLeast((metrics.heightPixels * FloatUi.SPLIT_MIN_RATIO).toInt()),
+                dp(IME_MIN_PANEL_DP).coerceAtLeast((screenHeight * FloatUi.SPLIT_MIN_RATIO).toInt()),
             )
         }
         val minHeight = dp(IME_MIN_PANEL_DP)
-            .coerceAtLeast((metrics.heightPixels * FloatUi.SPLIT_MIN_RATIO).toInt())
+            .coerceAtLeast((screenHeight * FloatUi.SPLIT_MIN_RATIO).toInt())
         var changed = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // API30+：ime.bottom 即窗口底边探入键盘的重叠量。新高度 = 当前高度
@@ -1183,7 +1197,7 @@ class FloatBallService : Service() {
             }
         } else {
             // API30 以下父框架不按 IME 收缩：整体上移键盘全高并收高。
-            val available = (metrics.heightPixels - overlap).coerceAtLeast(minHeight)
+            val available = (screenHeight - overlap).coerceAtLeast(minHeight)
             val target = minOf(splitHeightBeforeIme, available).coerceAtLeast(minHeight)
             if (p.y != overlap) {
                 p.y = overlap
@@ -1357,8 +1371,8 @@ class FloatBallService : Service() {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val metrics = resources.displayMetrics
-                    val minHeight = (metrics.heightPixels * FloatUi.SPLIT_MIN_RATIO).toInt()
+                    val screen = screenSize()
+                    val minHeight = (screen.y * FloatUi.SPLIT_MIN_RATIO).toInt()
                     // 键盘跟随中可用高度只到键盘上沿，把手高度也钳制在此范围内。
                     val root = split?.root
                     val rootInsets = root?.let { ViewCompat.getRootWindowInsets(it) }
@@ -1369,7 +1383,7 @@ class FloatBallService : Service() {
                     val maxHeight = if (root != null && overlap > 0) {
                         (root.height - overlap).coerceAtLeast(minHeight)
                     } else {
-                        (metrics.heightPixels * FloatUi.SPLIT_MAX_RATIO).toInt()
+                        (screen.y * FloatUi.SPLIT_MAX_RATIO).toInt()
                     }
                     val height = (startHeight + (downY - event.rawY)).toInt()
                         .coerceIn(minHeight, maxHeight)
@@ -1681,15 +1695,8 @@ class FloatBallService : Service() {
         if (menuView != null || ball == null) return
         val from = ballParams ?: return
 
-        val metrics = resources.displayMetrics
         val ballCenterX = from.x + dp(FloatUi.BALL_SIZE_DP) / 2
         val ballCenterY = from.y + dp(FloatUi.BALL_SIZE_DP) / 2
-        // 或左或右：贴左半屏向右展开，贴右半屏向左展开，开口恒朝屏幕中央。
-        val facing = if (ballCenterX <= metrics.widthPixels / 2) {
-            FloatUi.FanFacing.RIGHT
-        } else {
-            FloatUi.FanFacing.LEFT
-        }
         val fan = FloatUi.buildFanMenu(
             this,
             items = listOf(
@@ -1705,11 +1712,12 @@ class FloatBallService : Service() {
                 FloatUi.FanItem(R.string.float_fan_more) { openMoreMenu() },
                 FloatUi.FanItem(R.string.float_fan_exit) { exitApp() },
             ),
-            facing = facing,
+            facing = fanFacingFor(ballCenterX),
             ballCenterX = ballCenterX,
             ballCenterY = ballCenterY,
-            screenWidth = metrics.widthPixels,
-            screenHeight = metrics.heightPixels,
+            // 屏幕尺寸实时现查：菜单跨旋转存活，构建时冻结的旧方向尺寸
+            // 会在钳制时把窗口拉离主球（子球被裁/消失）。
+            screenSize = { screenSize() },
             onDismiss = { collapseMenu() },
         )
         fanWidth = fan.widthPx
@@ -1739,6 +1747,12 @@ class FloatBallService : Service() {
         fan.setBlankTapListener { x, y -> forwardDoubleTapIfNeeded(x, y) }
         val params = overlayParams(width = fanWidth, height = fanHeight).apply {
             gravity = Gravity.TOP or Gravity.START
+            // 免 WMS 钳制：不加此 flag 时 WMS 会把窗静默钳进父框架
+            // （fitTypes=STATUS_BARS，横屏实测 360×360 窗请求 (1056,436) 被钳到
+            // frame=[920,312][1280,672]），球贴屏角时锚点被挤进窗角、±75° 弧
+            // 物理容不下 → 子球被窗缘裁掉/消失。加此后窗可放屏外，锚点恒为
+            // 窗口中心，裁切面只剩屏幕本身（solveFan 的屏幕判定管辖）。
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             x = fan.windowX
             y = fan.windowY
         }
@@ -1748,7 +1762,17 @@ class FloatBallService : Service() {
         menuParams = params
         fanMenu = fan
         menuOpenedAt = SystemClock.uptimeMillis()
-        fan.expand()
+        // 首次全局布局后才弹出：此时 syncFanAnchor 已按真实落点定好弧心/
+        // 倾角，expand 播种的回弹起点才是精确值（否则贴边时弹出弧线与
+        // 最终弧线错位，锚点校正瞬间还会跳变）。
+        var expandedOnce = false
+        fan.root.viewTreeObserver.addOnGlobalLayoutListener {
+            syncFanAnchor()
+            if (!expandedOnce) {
+                expandedOnce = true
+                fan.expand()
+            }
+        }
     }
 
     /** 扇形菜单挂窗时刻（双击转发仲裁用）。 */
@@ -1775,16 +1799,53 @@ class FloatBallService : Service() {
         }
     }
 
+    /**
+     * 扇形展开方向：或左或右——贴左半屏向右展开，贴右半屏向左展开，
+     * 开口恒朝屏幕中央（展开与拖动跨中线翻向共用同一判定）。
+     */
+    private fun fanFacingFor(ballCenterX: Int): FloatUi.FanFacing =
+        if (ballCenterX <= screenSize().x / 2) {
+            FloatUi.FanFacing.RIGHT
+        } else {
+            FloatUi.FanFacing.LEFT
+        }
+
     /** 拖动主球时，展开中的扇形菜单跟随球心（几何/窗口位置整体重算）。 */
     private fun followMenu(ballParams: WindowManager.LayoutParams) {
         val fan = fanMenu ?: return
         val p = menuParams ?: return
         val ballCenterX = ballParams.x + dp(FloatUi.BALL_SIZE_DP) / 2
         val ballCenterY = ballParams.y + dp(FloatUi.BALL_SIZE_DP) / 2
+        // 拖动跨过屏幕中线即翻向：开口恒朝屏幕中央，否则子球会朝着
+        // 近侧屏幕边缘被窗口/屏幕裁掉。
+        fan.updateFacing(fanFacingFor(ballCenterX))
         fan.place(ballCenterX, ballCenterY)
         p.x = fan.windowX
         p.y = fan.windowY
         runCatching { windowManager.updateViewLayout(fan.root, p) }
+    }
+
+    /**
+     * 扇形弧心锚点校正（菜单窗每次全局布局后调用）：悬浮窗 x/y 是 WMS
+     * 父框架相对坐标且会被静默二次钳制（父框架尺寸无任何 API 可查），
+     * params 摆放值≠真实落点。用两窗 `getLocationOnScreen`（唯一真值）
+     * 反推球心相对扇形窗的真实坐标重排子球，让弧心钉死在主球上，免疫
+     * 旋转陈旧度量/钳制/挖孔屏。
+     */
+    private fun syncFanAnchor() {
+        val fan = fanMenu ?: return
+        val ballRoot = ball?.root ?: return
+        val fanLoc = IntArray(2)
+        val ballLoc = IntArray(2)
+        runCatching {
+            fan.root.getLocationOnScreen(fanLoc)
+            ballRoot.getLocationOnScreen(ballLoc)
+        }.getOrElse { return }
+        val half = dp(FloatUi.BALL_SIZE_DP) / 2f
+        fan.reanchor(
+            ballLoc[0] + half - fanLoc[0],
+            ballLoc[1] + half - fanLoc[1],
+        )
     }
 
     /** 立即撤除扇形菜单（无动画）：单次参谋启动时防 OCR 污染/忙碌态误触。 */
@@ -1832,7 +1893,7 @@ class FloatBallService : Service() {
     private fun openMoreMenu() {
         if (cardMenuView != null || ball == null) return
         val params = ballParams ?: return
-        val metrics = resources.displayMetrics
+        val screen = screenSize()
         val menu = FloatUi.buildListMenu(
             this,
             items = listOf(
@@ -1846,8 +1907,8 @@ class FloatBallService : Service() {
             ),
             ballCenterX = params.x + dp(FloatUi.BALL_SIZE_DP) / 2,
             ballCenterY = params.y + dp(FloatUi.BALL_SIZE_DP) / 2,
-            screenWidth = metrics.widthPixels,
-            screenHeight = metrics.heightPixels,
+            screenWidth = screen.x,
+            screenHeight = screen.y,
             onDismiss = { dismissCardMenu() },
         )
         attachCardMenu(menu)
@@ -1894,7 +1955,7 @@ class FloatBallService : Service() {
             }
             if (cardMenuView != null) return@launch
             val params = ballParams ?: return@launch
-            val metrics = resources.displayMetrics
+            val screen = screenSize()
             val menu = FloatUi.buildScopePicker(
                 this@FloatBallService,
                 contacts = entries.map { (profile, channels) ->
@@ -1908,8 +1969,8 @@ class FloatBallService : Service() {
                 },
                 ballCenterX = params.x + dp(FloatUi.BALL_SIZE_DP) / 2,
                 ballCenterY = params.y + dp(FloatUi.BALL_SIZE_DP) / 2,
-                screenWidth = metrics.widthPixels,
-                screenHeight = metrics.heightPixels,
+                screenWidth = screen.x,
+                screenHeight = screen.y,
                 onDismiss = { dismissCardMenu() },
                 callbacks = object : FloatUi.ScopePickerCallbacks {
                     override fun onPickAll() {
@@ -1979,8 +2040,8 @@ class FloatBallService : Service() {
     /** 卡片弹窗挂窗：全屏接罩覆盖整屏，点空白由 root 回调关闭（方案 §3.2）。 */
     private fun attachCardMenu(menu: FloatUi.CardMenu) {
         dismissCardMenu()
-        val metrics = resources.displayMetrics
-        val params = overlayParams(metrics.widthPixels, metrics.heightPixels).apply {
+        val screen = screenSize()
+        val params = overlayParams(screen.x, screen.y).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 0
@@ -2164,6 +2225,23 @@ class FloatBallService : Service() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    /**
+     * 整屏尺寸（px，含系统装饰）——悬浮球/菜单摆放的近似上界。悬浮窗
+     * x/y 实际是 WMS 父框架（整屏减状态栏/导航条）坐标，且 WMS 会静默
+     * 二次钳制；父框架真实尺寸无任何 API 可查（displayMetrics / getRectSize
+     * / maximumWindowMetrics / currentWindowMetrics 实测均返回整屏），
+     * 真实落点由 [syncFanAnchor] 用 getLocationOnScreen 回算兜底。两条铁则：
+     * ① 必须走 Display 实时查询——Service 的 Resources.displayMetrics 旋转后
+     * 会停留在旧方向（横屏实测 widthPixels 仍是竖屏宽），扇形菜单被误钳制；
+     * ② 上界宁大勿小（超界部分由 WMS 最终钳掉），误差由真实落点回算吸收。
+     */
+    private fun screenSize(): Point {
+        val rect = Rect()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRectSize(rect)
+        return Point(rect.width(), rect.height())
+    }
 
     companion object {
         /** 服务存活旗标（onCreate/onDestroy 维护），供心跳拉活判断。 */

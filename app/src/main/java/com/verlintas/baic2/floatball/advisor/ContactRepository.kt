@@ -25,6 +25,7 @@ import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_PERSON
 import com.verlintas.baic2.floatball.advisor.data.SCENE_CHAT
 import com.verlintas.baic2.floatball.advisor.data.SCENE_NON_CHAT
 import com.verlintas.baic2.floatball.advisor.data.ContactAliasEntity
+import com.verlintas.baic2.floatball.advisor.data.ContactInfoEntity
 import com.verlintas.baic2.floatball.advisor.data.ChatChannelEntity
 import com.verlintas.baic2.floatball.advisor.data.ContactProfileEntity
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
@@ -75,6 +76,7 @@ class ContactRepository @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true }
     private val aliasListSerializer = ListSerializer(AliasSnapshot.serializer())
     private val fieldListSerializer = ListSerializer(FieldSnapshot.serializer())
+    private val infoListSerializer = ListSerializer(InfoSnapshot.serializer())
 
     // ---- 识别与懒创建（§11.1/§11.2） ----
 
@@ -145,9 +147,10 @@ class ContactRepository @Inject constructor(
 
         if (!createStub) return ResolveOutcome.Unknown(normalized)
         val now = System.currentTimeMillis()
-        // 建档即双建（v10，方案 §2.4）：我方侧面从全局 self_personas 复制为起点，
-        // 对方侧 identity/chatStyle/closeness 留空待萃取；建档+登记别名同事务原子。
-        val facetSeed = SelfFacets.encode(db.selfPersonaDao().listAll().map { it.tag })
+        // 建档即双建（v10，方案 §2.4；2026-10-23 §3.1 改继承+补丁）：我方侧面
+        // 不再快照复制全局标签——selfFacetJson 留空 = 纯继承全局人设，此后全局
+        // 改动自动跟随；对方侧 identity/chatStyle/closeness 留空待萃取。
+        // 建档+登记别名同事务原子。
         val key = ContactNames.contactKey(imPackage, normalized)
         val id = db.withTransaction {
             // 同键软删行让位/复活（2026-10-22）：(imPackage, contactKey) 唯一索引
@@ -169,7 +172,6 @@ class ContactRepository @Inject constructor(
                     imPackage = imPackage,
                     contactKey = key,
                     displayName = rawTitle.trim(),
-                    selfFacetJson = facetSeed,
                     createdAt = now,
                     updatedAt = now,
                 ),
@@ -427,13 +429,17 @@ class ContactRepository @Inject constructor(
     /** 群档案标记（EntityResolver GROUP 自动建群壳后调用）：isGroup 与 contactType 一并落定。 */
     suspend fun markGroup(contactId: Long) = setGroup(contactId, true)
 
-    /** 我方侧面整集改写（画像页手动增删改，v10 §2.4 每关系独立）。
+    /** 「我的人设」补丁整写（2026-10-23 §3.1 继承+补丁，画像页增删/屏蔽用）：
+     * extra=此关系专属补充、masked=此关系屏蔽的全局标签；全空=纯继承全局人设。
      * 读改写包单事务（F4）：与并发 facet/pending 通道互覆竞态由此消除。 */
-    suspend fun setSelfFacet(contactId: Long, tags: List<String>) {
+    suspend fun setFacetPatch(contactId: Long, extra: List<String>, masked: List<String>) {
         db.withTransaction {
             val p = db.contactProfileDao().findById(contactId) ?: return@withTransaction
             db.contactProfileDao().update(
-                p.copy(selfFacetJson = SelfFacets.encode(tags), updatedAt = System.currentTimeMillis()),
+                p.copy(
+                    selfFacetJson = SelfFacets.encodePatch(SelfFacets.FacetPatch(extra = extra, masked = masked)),
+                    updatedAt = System.currentTimeMillis(),
+                ),
             )
         }
     }
@@ -447,8 +453,11 @@ class ContactRepository @Inject constructor(
                 p.copy(
                     selfFacetJson = promoted.facetJson,
                     selfFacetPendingJson = null,
-                    // style 三值只在列为空时转正（promoteAll 契约）：手动设置绝不覆盖。
-                    identity = p.identity ?: promoted.identity,
+                    // 身份多选（2026-10-23 §2.3）：提案**并入**已有多选，不覆盖手动值；
+                    // style 两值只在列为空时转正（promoteAll 契约）：手动设置绝不覆盖。
+                    identity = StyleVocab.encodeIdentities(
+                        StyleVocab.decodeIdentities(p.identity) + StyleVocab.decodeIdentities(promoted.identity),
+                    ) ?: p.identity,
                     chatStyle = p.chatStyle ?: promoted.chatStyle,
                     closeness = p.closeness ?: promoted.closeness,
                     updatedAt = System.currentTimeMillis(),
@@ -469,9 +478,13 @@ class ContactRepository @Inject constructor(
         db.withTransaction {
             val p = db.contactProfileDao().findById(contactId) ?: return@withTransaction
             val old = SelfFacets.decodePending(p.selfFacetPendingJson) ?: SelfFacets.StylePending()
+            // 身份多选（2026-10-23 §2.3）：只提「已有身份里缺的」新身份（并入语义），
+            // 已覆盖的不再进待确认；新萃取覆盖旧 pending（最新观察为准）。
+            val missingIdentities = StyleVocab.decodeIdentities(incoming.identity) -
+                StyleVocab.decodeIdentities(p.identity).toSet()
             val pending = SelfFacets.StylePending(
                 facet = (old.facet + incoming.facet).distinct(),
-                identity = p.identity?.takeIf { it.isNotBlank() } ?: incoming.identity,
+                identity = StyleVocab.encodeIdentities(missingIdentities),
                 chatStyle = p.chatStyle?.takeIf { it.isNotBlank() } ?: incoming.chatStyle,
                 closeness = p.closeness ?: incoming.closeness,
             )
@@ -723,6 +736,114 @@ class ContactRepository @Inject constructor(
         )
     }
 
+    // ---- 联系方式（2026-10-23，1:N）：手动录入即确认；AI 萃取落草稿待核 ----
+
+    fun observeInfos(contactId: Long) = db.contactInfoDao().observe(contactId)
+
+    suspend fun infos(contactId: Long): List<ContactInfoEntity> = db.contactInfoDao().listFor(contactId)
+
+    /**
+     * 手动新增/保存联系方式（source=user，立即 confirmed）；同 (kind, value)
+     * 已存在则就地更新该行，不造重复。值不合法返回 null。
+     */
+    suspend fun addInfo(
+        contactId: Long,
+        kind: String,
+        label: String,
+        value: String,
+        note: String,
+    ): ContactInfoEntity? {
+        val v = value.trim()
+        if (!ContactInfoRules.validManual(v)) return null
+        val now = System.currentTimeMillis()
+        val existing = db.contactInfoDao().find(contactId, kind, v)
+        if (existing != null) {
+            db.contactInfoDao().update(existing.id, kind, label.trim(), v, note.trim(), now)
+            return db.contactInfoDao().findById(existing.id)
+        }
+        val id = db.contactInfoDao().upsert(
+            ContactInfoEntity(
+                contactId = contactId,
+                kind = kind,
+                label = label.trim(),
+                value = v,
+                note = note.trim(),
+                source = "user",
+                confirmed = true,
+                createdAt = now,
+                updatedAt = now,
+            ),
+        )
+        return db.contactInfoDao().findById(id)
+    }
+
+    /**
+     * 编辑既有行（同 [addInfo] 的确认语义）。kind+value 撞唯一键时抛约束异常，
+     * 由 UI 映射文案——不静默吞掉重复值。
+     */
+    suspend fun updateInfo(
+        id: Long,
+        kind: String,
+        label: String,
+        value: String,
+        note: String,
+    ): ContactInfoEntity? {
+        val v = value.trim()
+        if (!ContactInfoRules.validManual(v)) return null
+        db.contactInfoDao().update(id, kind, label.trim(), v, note.trim(), System.currentTimeMillis())
+        return db.contactInfoDao().findById(id)
+    }
+
+    /** 删除一行联系方式（含草稿）。 */
+    suspend fun deleteInfo(id: Long) = db.contactInfoDao().delete(id)
+
+    /**
+     * LLM 萃取草稿落库（source=llm, confirmed=0）：同 (kind, value) 已存在则
+     * 只刷新 evidence，不重复入档、不覆盖用户已确认值。返回落库行（无新行为 null）。
+     */
+    suspend fun applyInfoDraft(
+        contactId: Long,
+        kind: String,
+        label: String,
+        value: String,
+        evidence: String?,
+    ): ContactInfoEntity? {
+        val v = value.trim()
+        if (!ContactInfoRules.validExtracted(kind, v)) return null
+        val now = System.currentTimeMillis()
+        val existing = db.contactInfoDao().find(contactId, kind, v)
+        if (existing != null) {
+            if (existing.confirmed || existing.source == "user") return null
+            db.contactInfoDao().upsert(existing.copy(evidence = evidence?.take(120), updatedAt = now))
+            return existing
+        }
+        val id = db.contactInfoDao().upsert(
+            ContactInfoEntity(
+                contactId = contactId,
+                kind = kind,
+                label = label.trim().take(40),
+                value = v,
+                note = "",
+                source = "llm",
+                confirmed = false,
+                evidence = evidence?.take(120),
+                createdAt = now,
+                updatedAt = now,
+            ),
+        )
+        return db.contactInfoDao().findById(id)
+    }
+
+    /** 用户确认草稿：固化并返回行（供调用方双写上游记忆）。 */
+    suspend fun confirmInfo(id: Long): ContactInfoEntity? {
+        val row = db.contactInfoDao().findById(id) ?: return null
+        db.contactInfoDao().confirm(id, System.currentTimeMillis())
+        return db.contactInfoDao().findById(id) ?: row
+    }
+
+    /** 用户丢弃草稿：仅未确认行可丢。 */
+    suspend fun rejectInfoDraft(id: Long) = db.contactInfoDao().deleteDraft(id)
+
     // ---- 合并 / 撤销（§4.3） ----
 
     /**
@@ -806,16 +927,26 @@ class ContactRepository @Inject constructor(
             db.chatChannelDao().deleteDuplicatesWith(fromId, targetId)
             db.chatChannelDao().reassign(fromId, targetId)
 
+            // 2.6) 联系方式同样去重后改指（2026-10-23）；快照留 infoSnapshotJson，
+            //      撤销合并时按 id 整体还原。
+            val fromInfos = db.contactInfoDao().listFor(fromId)
+            db.contactInfoDao().deleteDuplicatesWith(fromId, targetId)
+            db.contactInfoDao().reassign(fromId, targetId)
+
             // 3) 会话绑定迁移（上游会话零搬运；各自游标保留）。
             db.sessionBindingDao().reassign(fromId, targetId)
 
             // 4) goal/style 目标优先，target 空缺取 from；facet 差异按 1.5 落定。
+            //    身份多选（2026-10-23 §2.2）：双方身份**并集**合入（一个身份都不丢）。
             val mergedGoal = target.goal ?: from.goal
             val mergedStyle = target.style ?: from.style
             db.contactProfileDao().update(
                 target.copy(
                     goal = mergedGoal,
                     style = mergedStyle,
+                    identity = StyleVocab.encodeIdentities(
+                        StyleVocab.decodeIdentities(target.identity) + StyleVocab.decodeIdentities(from.identity),
+                    ),
                     selfFacetJson = facet,
                     selfFacetPendingJson = pending,
                     updatedAt = now,
@@ -842,6 +973,12 @@ class ContactRepository @Inject constructor(
                     targetFieldKeysJson = json.encodeToString(
                         ListSerializer(kotlinx.serialization.serializer<String>()),
                         targetFields.map { it.field },
+                    ),
+                    infoSnapshotJson = json.encodeToString(
+                        infoListSerializer,
+                        fromInfos.map {
+                            InfoSnapshot(it.id, it.kind, it.label, it.value, it.note, it.source, it.confirmed, it.evidence, it.createdAt)
+                        },
                     ),
                     mergedAt = now,
                 ),
@@ -903,6 +1040,28 @@ class ContactRepository @Inject constructor(
                 },
             )
 
+            // 联系方式按快照 id 还原（2026-10-23）：主档上被并入的快照行移除后
+            // 整体放回 from；合并期间主档新增的行（不在快照）不受影响。
+            val restoredInfos = json.decodeFromString(infoListSerializer, record.infoSnapshotJson)
+            db.contactInfoDao().deleteByIds(restoredInfos.map { it.id })
+            restoredInfos.forEach {
+                db.contactInfoDao().upsert(
+                    ContactInfoEntity(
+                        id = it.id,
+                        contactId = fromId,
+                        kind = it.kind,
+                        label = it.label,
+                        value = it.value,
+                        note = it.note,
+                        source = it.source,
+                        confirmed = it.confirmed,
+                        evidence = it.evidence,
+                        createdAt = it.createdAt,
+                        updatedAt = now,
+                    ),
+                )
+            }
+
             db.contactProfileDao().unmarkMerged(fromId, now)
             db.mergeRecordDao().delete(fromId)
         }
@@ -919,6 +1078,24 @@ class ContactRepository @Inject constructor(
                 identity = identity?.trim()?.takeIf { it.isNotEmpty() },
                 chatStyle = chatStyle?.trim()?.takeIf { it.isNotEmpty() },
                 closeness = closeness,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    /**
+     * 手动设置/一键采纳 identity 后清掉对应的 AI 待确认建议（2026-10-23 身份
+     * 快捷下拉）：只清 pending 的 identity 一列，facet/其余两标签建议保留。
+     * pending 清空后整列置 null。
+     */
+    suspend fun clearStylePendingIdentity(contactId: Long) {
+        val p = db.contactProfileDao().findById(contactId) ?: return
+        val pending = SelfFacets.decodePending(p.selfFacetPendingJson) ?: return
+        if (pending.identity == null) return
+        val updated = pending.copy(identity = null)
+        db.contactProfileDao().update(
+            p.copy(
+                selfFacetPendingJson = SelfFacets.encodePending(updated),
                 updatedAt = System.currentTimeMillis(),
             ),
         )
@@ -982,6 +1159,20 @@ class ContactRepository @Inject constructor(
 
     @Serializable
     private data class AliasSnapshot(val alias: String, val rawAlias: String, val source: String)
+
+    /** 联系方式合并快照行（2026-10-23）：撤销合并按 id 原样还原。 */
+    @Serializable
+    private data class InfoSnapshot(
+        val id: Long,
+        val kind: String,
+        val label: String,
+        val value: String,
+        val note: String,
+        val source: String,
+        val confirmed: Boolean,
+        val evidence: String? = null,
+        val createdAt: Long,
+    )
 
     @Serializable
     private data class FieldSnapshot(

@@ -55,12 +55,15 @@ class ChatBriefBuilder @Inject constructor(
      * @param styleSection 【说话方式】段（风格卡三级回退）；无卡且无旧 style 时为 null。
      * @param curatedTexts 已确认目标/画像显示值（去重指纹原料，无标签前缀）。
      * @param basis P3 §九：本回合实际引用依据的 ≤3 个短关键词（气泡「依据」小字用）。
+     * @param playbookLines 本回合进提示词的参考话术 Top-3 渲染行（2026-10-23
+     *   阶段 B：分屏「参考话术」折叠条展示，与话术段同源同序）。
      */
     data class Brief(
         val section: String?,
         val styleSection: String?,
         val curatedTexts: List<String>,
         val basis: List<String> = emptyList(),
+        val playbookLines: List<String> = emptyList(),
     )
 
     /**
@@ -93,9 +96,13 @@ class ChatBriefBuilder @Inject constructor(
         val goal = (goalOverride ?: profile.goal)?.trim().orEmpty()
         val myValues = contacts.myPersona().filter { it.confirmed }
         val theirValues = contacts.fields(contactId).filter { it.confirmed }
-        // F3：我方段按当前关系叠加 selfFacet（「领导面前的我」），全局 my_* 字段
-        // 为底、关系侧面标签并列成行；facet 为空时保持纯全局段（与既有行为一致）。
-        val facet = SelfFacets.decode(profile.selfFacetJson)
+        // F3：我方段 = 全局 my_* 字段为底 + 「我的人设」生效集（2026-10-23 §3.1
+        // 继承+补丁：全局人设库 − 此关系屏蔽 + 专属补充，「领导面前的我」），
+        // 并列成行；生效集为空时保持纯全局段（与既有行为一致）。
+        val facet = SelfFacets.resolve(
+            profile.selfFacetJson,
+            runCatching { contacts.selfPersonas() }.getOrDefault(emptyList()).map { it.tag },
+        )
         val myRender = renderPersona(
             schema.fieldsFor("my", profile.contactType),
             myValues,
@@ -125,9 +132,22 @@ class ChatBriefBuilder @Inject constructor(
             goal = goal,
             maxChars = RETRIEVE_QUERY_CHARS,
         )
-        val playbookLines = runCatching {
-            playbooks.retrieve(query = query, categories = null, limit = PLAYBOOK_TOP_K)
-        }.getOrDefault(emptyList()).mapIndexed { index, item ->
+        // 2026-10-23 需求 5 §5.3 身份定向召回：先在身份类目内取 Top-3，不足再
+        // 全类补足（不重复）；identity 未定/未知走全类，行为与定向之前一致。
+        // 身份多选（同日方案 §2.2）：多身份类目取并集（领导+家人 → 职场+官场+
+        // 亲人+通用哲理）。
+        val playbookHits = runCatching {
+            val preferred = playbooks.categoriesForIdentities(StyleVocab.decodeIdentities(profile.identity))
+            val scoped = playbooks.retrieve(query = query, categories = preferred, limit = PLAYBOOK_TOP_K)
+            if (preferred == null || scoped.size >= PLAYBOOK_TOP_K) {
+                scoped
+            } else {
+                (scoped + playbooks.retrieve(query = query, categories = null, limit = PLAYBOOK_TOP_K))
+                    .distinctBy { it.id }
+                    .take(PLAYBOOK_TOP_K)
+            }
+        }.getOrDefault(emptyList())
+        val playbookLines = playbookHits.mapIndexed { index, item ->
             "${index + 1}. 【${item.category}·${item.scenario}】${item.content}"
         }
 
@@ -164,6 +184,7 @@ class ChatBriefBuilder @Inject constructor(
             styleSection = styleSection,
             curatedTexts = curated,
             basis = BasisKeywords.from(curated),
+            playbookLines = playbookLines,
         )
     }
 

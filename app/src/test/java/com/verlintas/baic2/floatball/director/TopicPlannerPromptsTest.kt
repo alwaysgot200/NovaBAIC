@@ -97,7 +97,7 @@ class TopicPlannerPromptsTest {
         assertTrue(prompt.contains("对方聊天风格：严肃"))
         assertTrue(prompt.contains("亲疏等级：亲近"))
         assertTrue(prompt.contains("反馈热度：80/100"))
-        assertTrue(prompt.contains("我的侧面标签：专业、可靠"))
+        assertTrue(prompt.contains("我的人设标签：专业、可靠"))
         assertTrue(prompt.contains("近期已聊话题：行业见闻、项目进度"))
     }
 
@@ -116,7 +116,7 @@ class TopicPlannerPromptsTest {
         assertTrue(prompt.contains("对方身份：（未知）"))
         assertTrue(prompt.contains("亲疏等级：（待定）"))
         assertTrue(prompt.contains("反馈热度：（无信号）"))
-        assertTrue(prompt.contains("我的侧面标签：（未设置）"))
+        assertTrue(prompt.contains("我的人设标签：（未设置）"))
         assertTrue(prompt.contains("近期已聊话题：（无）"))
     }
 

@@ -21,6 +21,7 @@ package com.verlintas.baic2.floatball.advisor
 
 import com.verlintas.baic2.core.data.repository.AgentRepository
 import com.verlintas.baic2.core.engine.AuxiliaryTasks
+import com.verlintas.baic2.floatball.advisor.data.CONTACT_INFO_OTHER
 import com.verlintas.baic2.floatball.advisor.data.CONTACT_TYPE_PERSON
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -94,6 +95,18 @@ class PersonaExtractor @Inject constructor(
             )
             if (stored != null) landed++
         }
+        // 联系方式一问双产出（2026-10-23）：电话/邮件/地点/证件落 AI 草稿
+        // （confirmed=0），联系方式 Tab 人工确认后才生效并双写记忆。
+        for (info in parsed.infos.take(MAX_INFO_DRAFTS)) {
+            val stored = contacts.applyInfoDraft(
+                contactId = contactId,
+                kind = info.kind,
+                label = info.label,
+                value = info.value,
+                evidence = info.evidence,
+            )
+            if (stored != null) landed++
+        }
         // 一问双产出（V-C，方案 §4.1）：style 三标签与我方 facet 增量先落
         // 待确认通道（proposeStylePending 内部保证绝不覆盖手动值），核阅后转正。
         if (parsed.style.facet.isNotEmpty() || parsed.style.identity != null ||
@@ -132,14 +145,21 @@ class PersonaExtractor @Inject constructor(
                evidence 填对话中支持该事实的原文短句（不超过 60 字）。
             6. fields 最多输出 $MAX_DRAFTS 条。
             7. style 是对方风格三标签（可整体缺省，拿不准就不要填）：
-               identity 只能取 领导/客户/同事/朋友/家人/暧昧对象/其他 之一；
+               identity 只能取 领导/客户/同事/朋友/家人/暧昧对象/其他；一人多身份
+               时可给多个（顿号分隔，如「领导、家人」，最多 3 个）；
                chatStyle 只能取 严肃/随和/幽默/热情/冷淡 之一；
                closeness 取 0~3 的整数（0 陌生/1 熟识/2 亲近/3 亲密）。
-            8. 没有值得提取的内容就输出空的 {"fields":[],"style":{},"selfFacet":[]}。
-            9. 只输出一个 JSON 对象，不要任何解释或 Markdown 代码块。格式：
+            8. contactInfos 提取对方留下的联系方式（可整体缺省，最多 3 条）：
+               kind 只取 phone/email/address/id_doc/im_account/other 之一
+               （电话/邮箱/地址/证件/IM 账号/其他）；value 填原值，电话、邮箱、
+               证件号必须完整准确、拿不准就不要输出；label 填不超过 10 字的说明
+               （如「单位座机」「老家住址」）；evidence 填原文短句。
+            9. 没有值得提取的内容就输出空的 {"fields":[],"style":{},"selfFacet":[],"contactInfos":[]}。
+            10. 只输出一个 JSON 对象，不要任何解释或 Markdown 代码块。格式：
             {"fields":[{"field":"字段键","value":"值","action":"set","evidence":"原文短句"}],
              "style":{"identity":"领导","chatStyle":"严肃","closeness":1},
-             "selfFacet":["办事周到"]}
+             "selfFacet":["办事周到"],
+             "contactInfos":[{"kind":"phone","value":"13800138000","label":"他留的手机号","evidence":"原文短句"}]}
         """.trimIndent()
     }
 
@@ -156,6 +176,16 @@ class PersonaExtractor @Inject constructor(
     private data class Parsed(
         val fields: List<DraftJson>,
         val style: SelfFacets.StylePending,
+        val infos: List<InfoJson> = emptyList(),
+    )
+
+    /** 联系方式萃取协议行（2026-10-23）：kind/value 必填，label/evidence 可缺省。 */
+    @Serializable
+    private data class InfoJson(
+        val kind: String = "",
+        val value: String = "",
+        val label: String = "",
+        val evidence: String? = null,
     )
 
     /** 模型 style 段输出协议（字段全部缺省容忍；宽松 JSON 由外层 Json 承担）。 */
@@ -172,6 +202,7 @@ class PersonaExtractor @Inject constructor(
         val fields: List<DraftJson> = emptyList(),
         val style: StyleJson = StyleJson(),
         val selfFacet: List<String> = emptyList(),
+        val contactInfos: List<InfoJson> = emptyList(),
     )
 
     /**
@@ -204,6 +235,7 @@ class PersonaExtractor @Inject constructor(
             else -> null
         } ?: return Parsed(emptyList(), SelfFacets.StylePending())
         val normalized = normalizeFields(output.fields, fields)
+        val infos = normalizeInfos(output.contactInfos)
         val style = SelfFacets.StylePending(
             facet = output.selfFacet.asSequence()
                 .map { it.trim() }
@@ -211,12 +243,32 @@ class PersonaExtractor @Inject constructor(
                 .distinct()
                 .take(MAX_FACETS)
                 .toList(),
-            identity = StyleVocab.normalizeIdentity(output.style.identity),
+            // 身份多选（2026-10-23 §2.3）：归一收集全部词表命中（≤3），编码多值
+            // 进待确认通道，核阅确认时**并入**已有多选、不覆盖手动值。
+            identity = StyleVocab.encodeIdentities(StyleVocab.normalizeIdentities(output.style.identity)),
             chatStyle = StyleVocab.normalizeChatStyle(output.style.chatStyle),
             closeness = StyleVocab.closenessOf(output.style.closeness?.content),
         )
-        return Parsed(normalized, style)
+        return Parsed(normalized, style, infos)
     }
+
+    /**
+     * 联系方式归一（2026-10-23）：kind 词表归一（词表外回退 other）、严格值校验，
+     * 不合法直接丢弃；同 (kind, value) 去重保序。
+     */
+    private fun normalizeInfos(list: List<InfoJson>): List<InfoJson> =
+        list.mapNotNull { info ->
+            val value = info.value.trim()
+            if (value.isEmpty()) return@mapNotNull null
+            val kind = ContactInfoRules.normalizeKind(info.kind) ?: CONTACT_INFO_OTHER
+            if (!ContactInfoRules.validExtracted(kind, value)) return@mapNotNull null
+            InfoJson(
+                kind = kind,
+                value = value,
+                label = info.label.trim().take(INFO_LABEL_MAX_CHARS),
+                evidence = info.evidence?.trim()?.take(EVIDENCE_MAX_CHARS),
+            )
+        }.distinctBy { it.kind to it.value }
 
     private fun normalizeFields(list: List<DraftJson>, fields: List<PersonaFieldDef>): List<DraftJson> {
         val allowed = fields.associateBy { it.key }
@@ -273,6 +325,10 @@ class PersonaExtractor @Inject constructor(
         // 4 个新屏足以捕捉画像变化，输入 token 再减三分之一。
         const val MAX_FED_TURNS = 4
         const val MAX_DRAFTS = 5
+
+        /** 联系方式单次萃取上限与 label 长度（2026-10-23）。 */
+        const val MAX_INFO_DRAFTS = 3
+        const val INFO_LABEL_MAX_CHARS = 10
         const val SCREEN_CHARS = 600
         const val REPLY_CHARS = 300
         const val VALUE_MAX_CHARS = 80

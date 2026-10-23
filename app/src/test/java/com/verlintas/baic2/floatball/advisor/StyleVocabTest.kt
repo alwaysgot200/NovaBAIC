@@ -20,7 +20,9 @@
 package com.verlintas.baic2.floatball.advisor
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -109,5 +111,57 @@ class StyleVocabTest {
         assertEquals(StyleVocab.IDENTITIES.size, StyleVocab.IDENTITIES.distinct().size)
         assertEquals(StyleVocab.CHAT_STYLES.size, StyleVocab.CHAT_STYLES.distinct().size)
         assertEquals(StyleVocab.CLOSENESS_LEVELS.size, StyleVocab.CLOSENESS_LEVELS.distinct().size)
+    }
+
+    // ── 身份多选（2026-10-23 方案 §2.1）：编码多值 + 旧单值兼容 + 命中任一 ──
+
+    @Test
+    fun encodeIdentities_dedupesKeepsOrderAndNullForEmpty() {
+        assertEquals("""["领导","家人"]""", StyleVocab.encodeIdentities(listOf("领导", "家人", "领导", " ")))
+        assertNull(StyleVocab.encodeIdentities(emptyList()))
+        assertNull(StyleVocab.encodeIdentities(listOf(" ", "")))
+    }
+
+    @Test
+    fun decodeIdentities_acceptsEncodedMultiValue() {
+        assertEquals(listOf("领导", "家人"), StyleVocab.decodeIdentities("""["领导","家人"]"""))
+    }
+
+    @Test
+    fun decodeIdentities_backCompatLegacySingleValue() {
+        // 迁移前的旧单值裸字符串仍认回（词表外丢弃不抛）。
+        assertEquals(listOf("领导"), StyleVocab.decodeIdentities("领导"))
+        assertEquals(emptyList<String>(), StyleVocab.decodeIdentities("投资人"))
+        assertEquals(emptyList<String>(), StyleVocab.decodeIdentities(null))
+        assertEquals(emptyList<String>(), StyleVocab.decodeIdentities("  "))
+    }
+
+    @Test
+    fun decodeIdentities_splitsJoinedSegments() {
+        assertEquals(listOf("领导", "家人"), StyleVocab.decodeIdentities("领导+家人"))
+        assertEquals(listOf("同事", "暧昧对象"), StyleVocab.decodeIdentities("同事、暧昧对象"))
+        assertEquals(listOf("客户", "朋友"), StyleVocab.decodeIdentities("客户，朋友"))
+    }
+
+    @Test
+    fun normalizeIdentities_collectsAllVocabHitsInDeclareOrder() {
+        // 「他是我的领导，也是我家人」→ 领导、家人（词表声明序，封顶 3）。
+        assertEquals(
+            listOf("领导", "家人"),
+            StyleVocab.normalizeIdentities("他是我的领导，也是我家人"),
+        )
+        assertEquals(emptyList<String>(), StyleVocab.normalizeIdentities("投资人"))
+        assertEquals(emptyList<String>(), StyleVocab.normalizeIdentities(null))
+        assertEquals(3, StyleVocab.normalizeIdentities("领导、客户、同事、朋友").size)
+    }
+
+    @Test
+    fun hasIdentity_hitsAnyInMultiValue() {
+        assertTrue(StyleVocab.hasIdentity("""["领导","家人"]""", StyleVocab.IDENTITY_LEADER))
+        assertTrue(StyleVocab.hasIdentity("""["领导","家人"]""", StyleVocab.IDENTITY_FAMILY))
+        assertFalse(StyleVocab.hasIdentity("""["同事","暧昧对象"]""", StyleVocab.IDENTITY_LEADER))
+        // 旧单值兼容。
+        assertTrue(StyleVocab.hasIdentity("领导", StyleVocab.IDENTITY_LEADER))
+        assertFalse(StyleVocab.hasIdentity(null, StyleVocab.IDENTITY_LEADER))
     }
 }

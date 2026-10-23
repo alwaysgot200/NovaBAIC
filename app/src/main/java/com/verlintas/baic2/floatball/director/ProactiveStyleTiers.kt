@@ -47,10 +47,11 @@ object ProactiveStyleTiers {
 
     data class Tier(val dailyCap: Int, val minGapHours: Int)
 
-    /** 频率档裁决：身份/风格/亲疏分流 + 冷却降档（只降不升）。 */
+    /** 频率档裁决：身份/风格/亲疏分流 + 冷却降档（只降不升）。
+     *  身份多选（2026-10-23 §2.2）：命中领导任一身份即走低频档。 */
     fun tierOf(identity: String?, chatStyle: String?, closeness: Int?, heatScore: Int?): Tier {
         var tier = when {
-            identity == StyleVocab.IDENTITY_LEADER ||
+            StyleVocab.hasIdentity(identity, StyleVocab.IDENTITY_LEADER) ||
                 chatStyle == StyleVocab.STYLE_SERIOUS ||
                 (closeness != null && closeness <= 1) -> CONSERVATIVE
             chatStyle == StyleVocab.STYLE_WARM ||

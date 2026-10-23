@@ -120,12 +120,14 @@ class TopicEngineStore @Inject constructor(
         // 风格三重过滤（V-C §4.2）：对方 identity/chatStyle/closeness + 我方 facet +
         // heatScore 推导禁区/降权/深度门；画像缺失时 filterFor 各维 null 不设限。
         val profile = runCatching { contacts.profile(contact.contactId) }.getOrNull()
+        // 我的人设生效集（2026-10-23 §3.1 继承+补丁）：全局库 − 屏蔽 + 专属补充。
+        val globalTags = runCatching { contacts.selfPersonas() }.getOrDefault(emptyList()).map { it.tag }
         val filter = profile?.let {
             TopicStyleRules.filterFor(
                 identity = it.identity,
                 chatStyle = it.chatStyle,
                 closeness = it.closeness,
-                facetTags = SelfFacets.decode(it.selfFacetJson),
+                facetTags = SelfFacets.resolve(it.selfFacetJson, globalTags),
                 heatScore = it.heatScore,
             )
         }

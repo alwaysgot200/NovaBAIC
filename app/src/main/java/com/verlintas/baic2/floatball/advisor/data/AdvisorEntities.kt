@@ -237,6 +237,56 @@ data class ExtractionHoldEntity(
     val untilAt: Long,
 )
 
+/** 联系方式类型（2026-10-23 联系方式 Tab）：电话/邮件/地点/证件/IM 账号/其他。 */
+const val CONTACT_INFO_PHONE = "phone"
+const val CONTACT_INFO_EMAIL = "email"
+const val CONTACT_INFO_ADDRESS = "address"
+const val CONTACT_INFO_ID_DOC = "id_doc"
+const val CONTACT_INFO_IM = "im_account"
+const val CONTACT_INFO_OTHER = "other"
+
+/** 展示与新增下拉的固定顺序。 */
+val CONTACT_INFO_KINDS = listOf(
+    CONTACT_INFO_PHONE,
+    CONTACT_INFO_EMAIL,
+    CONTACT_INFO_ADDRESS,
+    CONTACT_INFO_ID_DOC,
+    CONTACT_INFO_IM,
+    CONTACT_INFO_OTHER,
+)
+
+/**
+ * 联系方式行（2026-10-23，1:N）：一个联系人可有多条电话/邮件/地点/证件。
+ * 手动录入即 source=user、confirmed=1；AI 萃取落 source=llm、confirmed=0
+ * 草稿，人工确认才生效并双写上游记忆（ProfileMemorySync）。
+ * 唯一键 (contactId, kind, value) 防同一值重复入档。
+ */
+@Entity(
+    tableName = "contact_infos",
+    indices = [
+        Index(value = ["contactId"]),
+        Index(value = ["contactId", "kind", "value"], unique = true),
+    ],
+)
+data class ContactInfoEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val contactId: Long,
+    val kind: String,
+    @ColumnInfo(defaultValue = "")
+    val label: String = "",
+    val value: String,
+    @ColumnInfo(defaultValue = "")
+    val note: String = "",
+    @ColumnInfo(defaultValue = "user")
+    val source: String = "user",
+    @ColumnInfo(defaultValue = "0")
+    val confirmed: Boolean = false,
+    /** 萃取依据原文短句（仅 llm 来源）。 */
+    val evidence: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
 /** 上游会话 ↔ 联系人档案绑定，兼作增量 OCR/萃取的游标存储。 */
 @Entity(tableName = "session_bindings")
 data class SessionBindingEntity(
@@ -329,6 +379,9 @@ data class MergeRecordEntity(
     val fieldSnapshotJson: String,
     /** 合并前 B 已有的 field key 集合 JSON（撤销时清理 B 新增项用）。 */
     val targetFieldKeysJson: String,
+    /** 合并前 A 的 contact_infos JSON（2026-10-23，撤销合并时按 id 整体还原）。 */
+    @ColumnInfo(defaultValue = "[]")
+    val infoSnapshotJson: String = "[]",
     val mergedAt: Long,
 )
 

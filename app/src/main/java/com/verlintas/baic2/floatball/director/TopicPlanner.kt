@@ -84,7 +84,10 @@ class TopicPlanner @Inject constructor(
         val usedTopics = runCatching { goals.recentMissions(contactId, USED_MISSIONS) }
             .getOrDefault(emptyList())
             .mapNotNull { TopicEngine.decodeWarmChatTopic(it.mission) }
-        val facets = SelfFacets.decode(profile.selfFacetJson)
+        // 我的人设生效集（2026-10-23 §3.1 继承+补丁）：全局库 − 屏蔽 + 专属补充。
+        val globalTags = runCatching { db.selfPersonaDao().listAll().map { it.tag } }
+            .getOrDefault(emptyList())
+        val facets = SelfFacets.resolve(profile.selfFacetJson, globalTags)
 
         val raw = runCatching {
             auxiliaryTasks.complete(
@@ -195,11 +198,12 @@ internal object TopicPlannerPrompts {
         usedTopics: List<String>,
     ): String = buildString {
         appendLine("目标阶段：${stageLabel?.takeIf { it.isNotBlank() } ?: "（未设定）"}")
-        appendLine("对方身份：${identity?.takeIf { it.isNotBlank() } ?: "（未知）"}")
+        // 身份多选（2026-10-23 §2.2）：编码多值/旧单值统一解码后「、」连接展示。
+        appendLine("对方身份：${StyleVocab.decodeIdentities(identity).joinToString("、").takeIf { it.isNotEmpty() } ?: "（未知）"}")
         appendLine("对方聊天风格：${chatStyle?.takeIf { it.isNotBlank() } ?: "（未知）"}")
         appendLine("亲疏等级：${closeness?.let { StyleVocab.closenessLabel(it) } ?: "（待定）"}")
         appendLine("反馈热度：${heatScore?.let { "$it/100" } ?: "（无信号）"}")
-        appendLine("我的侧面标签：${myFacets.takeIf { it.isNotEmpty() }?.joinToString("、") ?: "（未设置）"}")
+        appendLine("我的人设标签：${myFacets.takeIf { it.isNotEmpty() }?.joinToString("、") ?: "（未设置）"}")
         appendLine("近期已聊话题：${usedTopics.takeIf { it.isNotEmpty() }?.joinToString("、") ?: "（无）"}")
     }
 

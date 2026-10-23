@@ -268,6 +268,67 @@ interface ExtractionHoldDao {
     suspend fun until(contactId: Long, field: String): Long?
 }
 
+/**
+ * 联系方式 DAO（2026-10-23）：1:N 行式存储（电话/邮件/地点/证件…），
+ * (contactId, kind, value) 唯一防重；llm 草稿经 confirm 人工转正。
+ */
+@Dao
+interface ContactInfoDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(info: ContactInfoEntity): Long
+
+    @Query("SELECT * FROM contact_infos WHERE contactId = :contactId ORDER BY kind, confirmed DESC, updatedAt DESC")
+    suspend fun listFor(contactId: Long): List<ContactInfoEntity>
+
+    @Query("SELECT * FROM contact_infos WHERE contactId = :contactId ORDER BY kind, confirmed DESC, updatedAt DESC")
+    fun observe(contactId: Long): Flow<List<ContactInfoEntity>>
+
+    @Query("SELECT * FROM contact_infos WHERE id = :id")
+    suspend fun findById(id: Long): ContactInfoEntity?
+
+    @Query("SELECT * FROM contact_infos WHERE contactId = :contactId AND kind = :kind AND value = :value")
+    suspend fun find(contactId: Long, kind: String, value: String): ContactInfoEntity?
+
+    @Query("SELECT * FROM contact_infos WHERE contactId = :contactId AND confirmed = 0")
+    fun observeDrafts(contactId: Long): Flow<List<ContactInfoEntity>>
+
+    @Query("UPDATE contact_infos SET confirmed = 1, updatedAt = :now WHERE id = :id")
+    suspend fun confirm(id: Long, now: Long)
+
+    @Query(
+        """
+        UPDATE contact_infos SET kind = :kind, label = :label, value = :value, note = :note,
+            source = 'user', confirmed = 1, evidence = NULL, updatedAt = :now
+        WHERE id = :id
+        """,
+    )
+    suspend fun update(id: Long, kind: String, label: String, value: String, note: String, now: Long)
+
+    @Query("DELETE FROM contact_infos WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM contact_infos WHERE id = :id AND confirmed = 0")
+    suspend fun deleteDraft(id: Long)
+
+    /** 合并：联系方式整体改指主档；(kind, value) 撞车由事务先清重名。 */
+    @Query("UPDATE contact_infos SET contactId = :to WHERE contactId = :from")
+    suspend fun reassign(from: Long, to: Long)
+
+    /** 合并前清 from 与 to 重复的 (kind, value) 行（reassign 唯一索引防撞）。 */
+    @Query(
+        """
+        DELETE FROM contact_infos WHERE contactId = :from AND (kind, value) IN
+            (SELECT kind, value FROM contact_infos WHERE contactId = :to)
+        """,
+    )
+    suspend fun deleteDuplicatesWith(from: Long, to: Long)
+
+    /** 撤销合并：按快照 id 移除主档上被并入的行（新增行不受影响）。 */
+    @Query("DELETE FROM contact_infos WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+}
+
 @Dao
 interface SessionBindingDao {
 
