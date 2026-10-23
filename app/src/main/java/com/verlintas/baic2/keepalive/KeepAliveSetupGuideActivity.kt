@@ -138,9 +138,10 @@ class KeepAliveSetupGuideActivity : ComponentActivity() {
         fun maybeLaunch(activity: Activity, prefs: KeepAlivePrefs) {
             if (prefs.firstRunGuideShown) return
             prefs.firstRunGuideShown = true
+            // 与主窗同一任务启动（不加 NEW_TASK、Manifest 不设 taskAffinity）：
+            // 引导卡叠在主窗之上，系统里同时只留一扇本应用窗口。
             activity.startActivity(
-                Intent(activity, KeepAliveSetupGuideActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                Intent(activity, KeepAliveSetupGuideActivity::class.java),
             )
         }
     }
