@@ -159,9 +159,4 @@
     <string name="settings_developer_copy">复制</string>
     <string name="settings_developer_copied">已复制</string>
     <string name="settings_developer_changelog">更新日志</string>
-
-    <!-- 双语同步补齐（2026-10-23）：values-en 已有、此处补中文的 key -->
-    <string name="settings_perm_capture_title">屏幕捕获</string>
-    <string name="settings_perm_capture_desc">按屏幕分析会话按需授权，用完即撤</string>
-    <string name="settings_perm_capture_action">在聊天中授权</string>
 </resources>

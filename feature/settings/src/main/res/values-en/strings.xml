@@ -39,9 +39,6 @@
     <string name="settings_permissions_hint">Core permissions decide whether the AI can see and operate the device; runtime permissions are only used when the matching tool runs.</string>
     <string name="settings_permissions_core">Core capabilities</string>
     <string name="settings_permissions_runtime">Runtime permissions</string>
-    <string name="settings_perm_capture_title">Screen capture</string>
-    <string name="settings_perm_capture_desc">Granted per screen-analysis session and revoked afterwards</string>
-    <string name="settings_perm_capture_action">Grant in chat</string>
     <string name="settings_perm_notif_listener_title">Notification access</string>
     <string name="settings_perm_notif_listener_desc">Let the AI read notifications and verification codes (optional)</string>
     <string name="settings_perm_usage_title">Usage access</string>
