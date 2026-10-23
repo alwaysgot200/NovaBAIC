@@ -24,7 +24,7 @@ import com.verlintas.baic2.core.model.ChatMessage
 import com.verlintas.baic2.core.model.ChatRole
 
 /**
- * 老参谋发给 LLM 的「瘦身历史」组装器（纯函数、无 Android 依赖）。
+ * 好参谋发给 LLM 的「瘦身历史」组装器（纯函数、无 Android 依赖）。
  *
  * 持久化会话里每条 OCR 都是完整的，但模型每回合只需要：当前屏幕全文 +
  * 最近少量屏幕的缩写 + 更早屏幕的一句场景占位 + 滚动摘要。本对象只对

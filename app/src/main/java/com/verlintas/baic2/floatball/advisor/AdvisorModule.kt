@@ -43,7 +43,7 @@ import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 /**
- * 老参谋私有库装配。独立 advisor.db，与上游 Baic2Database 无任何迁移耦合。
+ * 好参谋私有库装配。独立 advisor.db，与上游 Baic2Database 无任何迁移耦合。
  */
 @Module
 @InstallIn(SingletonComponent::class)

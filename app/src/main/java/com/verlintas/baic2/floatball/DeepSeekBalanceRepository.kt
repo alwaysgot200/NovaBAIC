@@ -33,7 +33,7 @@ import okhttp3.Request
  * DeepSeek 账户余额查询（设置页「用量统计」卡片手动刷新）。
  *
  * DeepSeek 官方提供 `GET https://api.deepseek.com/user/balance`，用与对话
- * 相同的 API Key 鉴权。老参谋只做只读展示：
+ * 相同的 API Key 鉴权。好参谋只做只读展示：
  * - 仅当当前默认供应商的 baseUrl 主机名包含 deepseek 时支持，其余返回 null
  *   （设置页不显示该行，不猜其他厂商的余额接口）；
  * - 复用 Hilt 注入的共享 OkHttpClient，不自行 new；

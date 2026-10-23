@@ -1,6 +1,6 @@
-# AGENTS.md — 老参谋分支开发铁律
+# AGENTS.md — 好参谋分支开发铁律
 
-> 本手册约束 `laocanmou`（老参谋）分支上的全部开发工作。
+> 本手册约束 `laocanmou`（好参谋）分支上的全部开发工作。
 > 上游是 [Verlintas/NovaBAIC](https://github.com/Verlintas/NovaBAIC) 的 `main` 分支；
 > 本分支在其之上做**二次扩展开发**，并将**持续合并上游新版本**。
 > 一切决策以此为准；与上游文档冲突时，以 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、
@@ -31,7 +31,7 @@
 - **BetterAIChat2（代号 Nova）**：本地优先的 Android AI 智能体。无云端、无埋点、
   无遥测；API Key 走 Android Keystore 加密；模型输出只是提案，权限与危险等级
   在应用侧强制检查。
-- **`laocanmou` 分支的使命**：「老参谋」——常驻悬浮球的一键屏幕参谋。
+- **`laocanmou` 分支的使命**：「好参谋」——常驻悬浮球的一键屏幕参谋。
   用户在任何 App（如微信聊天）里单击悬浮球，应用悄悄完成
   截屏 → OCR → 记忆召回 → LLM 流式分析，然后弹出可拖动分界线的上下分屏浮窗
   给出参考答案。用户零等待感、主应用零打扰。
@@ -97,7 +97,7 @@
 
 ## 2.5 架构手册索引（动代码前必读）
 
-系统总体架构的唯一事实源是 [`docs/老参谋系统架构手册.md`](docs/老参谋系统架构手册.md)
+系统总体架构的唯一事实源是 [`docs/好参谋系统架构手册.md`](docs/好参谋系统架构手册.md)
 （27 张 mermaid 图：业务全景 / 分层 / 五岗两器官 / 双模 RPA / 策略目标 / 画像记忆 /
 保温 / 保活 / 数据 / 安全 / 端到端时序）。**按任务场景先读对应章再动手；
 手册与代码冲突时以代码为准，改完代码同回合内同步改手册。**
@@ -148,11 +148,11 @@
 | 依赖版本 | 版本目录（加依赖先看这里，不写死版本号） | `gradle/libs.versions.toml` |
 
 **调 LLM 的三档选择**：要工具/多轮 → `AgentLoop`；一次性小任务 → `AuxiliaryTasks`；
-自定义流式 UI（如老参谋分屏）→ `ProviderFactory` 直接拿 Flow。其余情况禁止手搓 HTTP。
+自定义流式 UI（如好参谋分屏）→ `ProviderFactory` 直接拿 Flow。其余情况禁止手搓 HTTP。
 
 ---
 
-## 4. 本分支扩展规则（老参谋）
+## 4. 本分支扩展规则（好参谋）
 
 ### 4.1 现有结构（`app/src/main/java/com/verlintas/baic2/floatball/`）
 
@@ -166,12 +166,12 @@
 | `FloatUi.kt` | 全部浮层视图工厂（三态球/扇形菜单/分屏面板） | **纯视觉，无业务状态**；手势由服务接线 |
 | `TranscriptView.kt` | 分屏转录渲染（观察 `ScreenAdvisor.transcript`，无自有状态） | 与主界面同一会话数据源 |
 | `FloatBallService.kt` | 瘦服务：状态机（Idle/OneShot/Recording）、手势路由、窗口增删、事件渲染 | 不写业务管道；投影经 Advisor 门面 |
-| `AdvisorPrefs.kt` | 老参谋专属设置 + 会话 ID（SharedPreferences，floatball 私有） | 不碰上游 SettingsRepository |
+| `AdvisorPrefs.kt` | 好参谋专属设置 + 会话 ID（SharedPreferences，floatball 私有） | 不碰上游 SettingsRepository |
 | `FloatCaptureActivity.kt` + `FloatCaptureBridge.kt` | MediaProjection 授权中转（系统要求 Activity 发起） | 结果回传后立即 `clear()`，防泄漏 |
-| `FloatSettingsActivity.kt` | 设置页（抓帧节奏/时长上限/权限直达/会话管理） | 只管老参谋专属项 |
+| `FloatSettingsActivity.kt` | 设置页（抓帧节奏/时长上限/权限直达/会话管理） | 只管好参谋专属项 |
 | `OverlayPermissionScreen.kt` | 悬浮窗权限引导页（Compose） | 独立文件，不内嵌进 MainActivity |
 
-新增老参谋能力时延续该分层：**编排进 Advisor/Perceiver、视觉进 FloatUi、接线进 Service**。
+新增好参谋能力时延续该分层：**编排进 Advisor/Perceiver、视觉进 FloatUi、接线进 Service**。
 错误传递用 reason 字符串（`REASON_*` 常量），展示层负责映射成用户文案。
 
 ### 4.2 允许触碰的上游文件（白名单，改动保持纯增量）
@@ -204,7 +204,7 @@
 
 ### 4.4 全屏界面一致性（铁律）
 
-「老参谋」的**所有全屏界面**（设置/画像/风格卡/策略卡/自我人设库/手册等，
+「好参谋」的**所有全屏界面**（设置/画像/风格卡/策略卡/自我人设库/手册等，
 叠加小窗口如分屏浮层、扇形菜单除外）必须与主框架的界面、布局、风格保持
 一致，达到商业软件级的观感底线：
 
@@ -311,7 +311,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 # 悬浮窗权限（首次）
 adb shell appops set com.verlintas.baic2 SYSTEM_ALERT_WINDOW allow
 
-# 冒烟链路（老参谋）
+# 冒烟链路（好参谋）
 adb shell am force-stop com.verlintas.baic2
 adb shell monkey -p com.verlintas.baic2 -c android.intent.category.LAUNCHER 1
 #   → 冷启动只出悬浮球；单击=屏幕问答（每次弹系统投影授权，拍完即关投影）
@@ -394,9 +394,9 @@ git mergetool / 手工解决
 ## 8. 历史教训（已踩过的坑，别再踩）
 
 1. **截屏前必须清空自身浮层**——否则 OCR 把自己的面板文字识别进去
-   （老参谋面板只在 `Captured` 事件后才显示）。
+   （好参谋面板只在 `Captured` 事件后才显示）。
 2. **MediaProjection 授权必须由 Activity 发起**——Service 里发起直接失败，
-   所以有 FloatCaptureActivity 中转；Android 14+ 一授权一投影。老参谋采用
+   所以有 FloatCaptureActivity 中转；Android 14+ 一授权一投影。好参谋采用
    **拍完即关**策略（`ScreenAdvisor` 截屏成功后立即 `release()`）：状态栏
    指示灯即刻熄灭、零驻留功耗，代价是每次单击都要重新授权。
 3. **主线程不做位图解码**——`BitmapFactory.decodeByteArray` 看似无害，
@@ -405,7 +405,7 @@ git mergetool / 手工解决
    `dumpsys window` 确认悬浮球窗口存在。
 5. **KSP 增量缓存会在大幅重写后损坏**（Windows 尤甚）——报
    `*_GeneratedInjector.java 找不到`时，删 `app/build/generated/ksp` 重建即可。
-6. **模拟器 a11y 授权的三个坑**（老参谋测试必读）：`install -r` 与 `force-stop`
+6. **模拟器 a11y 授权的三个坑**（好参谋测试必读）：`install -r` 与 `force-stop`
    都会把 `enabled_accessibility_services` 清空；且 App 进程不存在时
    `settings put` 也会被清。正确顺序 = **先启动 App，进程活着时 put**。
    `build-client.ps1 grant/smoke` 已内置此逻辑，勿手搓。

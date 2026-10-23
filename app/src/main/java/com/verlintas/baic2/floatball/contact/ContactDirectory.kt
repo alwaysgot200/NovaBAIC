@@ -65,11 +65,11 @@ data class BoundConversation(
 )
 
 /**
- * 联系人档案目录——老参谋管道的**消费端契约**（设计文档 §6.3–6.6）。
+ * 联系人档案目录——好参谋管道的**消费端契约**（设计文档 §6.3–6.6）。
  *
  * 唯一实现为 advisor 包的 `AdvisorContactDirectory`（经 AdvisorDirectoryModule
  * 在 Hilt 绑定）；[resolve] 未绑定、无法识别或不是 IM 聊天页时返回 null，
- * 老参谋回退共享会话，行为与未绑定时完全一致。
+ * 好参谋回退共享会话，行为与未绑定时完全一致。
  *
  * 实现方注意：
  * - [resolve] 的标题规范化（未读角标/群人数/壳后缀）在实现侧完成，
@@ -114,7 +114,7 @@ interface ContactDirectory {
      */
     suspend fun markScene(conversationId: Long, scene: String)
 
-    /** 该联系人的专属老参谋会话 id；不存在则创建并完成绑定。 */
+    /** 该联系人的专属好参谋会话 id；不存在则创建并完成绑定。 */
     suspend fun ensureAdvisorConversation(contact: ContactRef): Long
 
     /**
@@ -125,7 +125,7 @@ interface ContactDirectory {
      */
     suspend fun createConversationFor(contact: ContactRef): Long
 
-    /** 该联系人名下全部老参谋会话 id（含联系人合并带来的多个）。 */
+    /** 该联系人名下全部好参谋会话 id（含联系人合并带来的多个）。 */
     suspend fun conversationIds(contactId: Long): List<Long>
 
     /**

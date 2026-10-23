@@ -795,7 +795,7 @@ function Grant-DevicePermissions {
         return $false
     }
 
-    # 无障碍服务 (老参谋长按毫秒级识屏的前提; install/pm clear 后会被系统重置)。
+    # 无障碍服务 (好参谋长按毫秒级识屏的前提; install/pm clear 后会被系统重置)。
     # 部分模拟器在 App 进程不存在时 settings put 会被清空: 写入后读回校验,
     # 丢失则先启动 App 再重写一次。
     $a11yService = "$AppId/com.verlintas.baic2.device.impl.a11y.Baic2AccessibilityService"
@@ -811,7 +811,7 @@ function Grant-DevicePermissions {
         $check = ((& $Adb -s $Device shell settings get secure enabled_accessibility_services 2>$null) -join '')
     }
     if ($check -match [regex]::Escape($AppId)) {
-        Write-Host '无障碍服务已启用 (老参谋长按识屏就绪)。' -ForegroundColor Green
+        Write-Host '无障碍服务已启用 (好参谋长按识屏就绪)。' -ForegroundColor Green
     }
     else {
         Write-Host '无障碍服务授权失败, 请在 设置 -> 无障碍 手动开启 BAIC2 界面自动化。' -ForegroundColor Yellow
@@ -850,7 +850,7 @@ function Invoke-AppLogcat {
     }
 }
 
-# ======================== 老参谋冒烟 ========================
+# ======================== 好参谋冒烟 ========================
 
 # dumpsys 按 "Window #..." 分块; 返回属于本 App 的 APPLICATION_OVERLAY 块数组。
 function Get-AppOverlayBlocks {
@@ -999,7 +999,7 @@ function Complete-ProjectionConsent {
     }
 }
 
-# 老参谋冒烟: 冷启动 -> 授权 -> 等悬浮球 -> 单击验证扇形菜单 -> 收起 ->
+# 好参谋冒烟: 冷启动 -> 授权 -> 等悬浮球 -> 单击验证扇形菜单 -> 收起 ->
 # 长按触发屏幕问答 -> 等分屏浮窗 -> 截图。
 # 产物: tests\tempImg\smoke-menu-<时间>.png + smoke-<时间>.png; 全程无交互。
 # 文本路径无授权框; 像素/投影路径会自动完成系统授权框。
@@ -1104,7 +1104,7 @@ function Show-VendorPermissionHint {
     if ($miui) {
         Write-Host "检测到 MIUI ($miui): 以下权限 adb 无法授予, 请在 设置→应用设置→BetterAIChat2 手动开启:" -ForegroundColor Yellow
         Write-Host '  · 自启动  · 后台弹出界面  · 锁屏显示  · 显示悬浮窗  · 省电策略=无限制' -ForegroundColor Yellow
-        Write-Host '  (老参谋保活与投影恢复依赖这些; 不开也能用, 但后台可能被杀)' -ForegroundColor DarkGray
+        Write-Host '  (好参谋保活与投影恢复依赖这些; 不开也能用, 但后台可能被杀)' -ForegroundColor DarkGray
     }
 }
 
@@ -1377,7 +1377,7 @@ function Show-Help {
   stop                  停止 App
   clear-data            清除 App 数据 (随后自动重新授予权限; 密钥下次首启自动重置)
   grant                 重新授予运行时权限 (通知/相机/麦克风/联系人/定位/悬浮窗/存储/无障碍)
-  smoke                 老参谋冒烟: 授权+冷启动+单击验菜单+长按问屏+等分屏+截图 (tests\tempImg\smoke-*.png)
+  smoke                 好参谋冒烟: 授权+冷启动+单击验菜单+长按问屏+等分屏+截图 (tests\tempImg\smoke-*.png)
   record                触发连续参谋 (首次需在设备上确认投影授权)
   record-stop           快速双击悬浮球停止连续参谋
   start-emu             启动第一个 AVD (无设备时)

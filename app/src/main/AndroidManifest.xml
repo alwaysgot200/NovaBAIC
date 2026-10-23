@@ -159,7 +159,7 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:label="@string/float_more_about" />
 
-        <!-- 老参谋保活：开机/更新自启（受保护广播，exported 必须 true） -->
+        <!-- 好参谋保活：开机/更新自启（受保护广播，exported 必须 true） -->
         <receiver
             android:name=".keepalive.KeepAliveBootReceiver"
             android:enabled="true"

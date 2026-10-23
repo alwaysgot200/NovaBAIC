@@ -43,7 +43,7 @@ import javax.inject.Inject
 /**
  * 投影免弹窗授权引导页（docs/2026-10-21-投影免弹窗授权方案.md）：
  * Shizuku 三态检测 → 无线调试配对引导 → 一键 `appops set PROJECT_MEDIA allow`。
- * 从老参谋设置页「权限」分区进入。
+ * 从好参谋设置页「权限」分区进入。
  */
 @AndroidEntryPoint
 class ShizukuGrantActivity : ComponentActivity() {

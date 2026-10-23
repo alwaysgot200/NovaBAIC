@@ -97,14 +97,14 @@ a11y 关 && !shizuku.available  → launchBestEffort + Fail(REASON_SHIZUKU_OFF)
 
 - 模式 1 全部既有流程（反复测试的目标之一就是确认零回归）
 - FrameSource / ShizukuInjector / ShizukuGate / ImageMatcher / MPManager（只调用）
-- FloatCaptureActivity / FloatCaptureBridge（老参谋一次性投影链路，与常驻投影无关）
+- FloatCaptureActivity / FloatCaptureBridge（好参谋一次性投影链路，与常驻投影无关）
 - 上游模块任何文件
 
 ## 4. 验证计划（反复测试）
 
 ### 4.1 模式 1（a11y 开）×3 轮
 1. 前置：竖屏锁定、a11y 开（进程活着时 `settings put`）、装 c05d08d APK（已装）
-2. 导航链：抽屉(121,184)→设置(341,688)→老参谋(368,1925)→滚 4 次→联系人画像
+2. 导航链：抽屉(121,184)→设置(341,688)→好参谋(368,1925)→滚 4 次→联系人画像
    →吴瑞曦卡(508,742)→详情页微信链接(330,1600)
 3. 每轮验证：
    - logcat `ImChatNavigator` ①-⑧ 日志全绿（entered=true）

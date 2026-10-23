@@ -32,7 +32,7 @@ import javax.inject.Singleton
 /**
  * [ContactDirectory] 的真实实现：识别走 [ContactRepository.resolve]（§11.1
  * 决策表），会话建在上游 [ConversationRepository]，绑定关系落在 advisor.db
- * session_bindings。老参谋每次参谋即调用 [resolve]，因此完全陌生 + 未绑定
+ * session_bindings。好参谋每次参谋即调用 [resolve]，因此完全陌生 + 未绑定
  * 的人在此懒创建 Stub（决策表 L3）；重名/模糊近邻返回 null 回退共享会话，
  * 由 P4 绑定面板让用户手工选择，不阻断参谋。
  */

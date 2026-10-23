@@ -27,7 +27,7 @@ import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 /**
- * 老参谋联系人目录绑定：advisor 包的 AdvisorContactDirectory 是
+ * 好参谋联系人目录绑定：advisor 包的 AdvisorContactDirectory 是
  * contact 包 ContactDirectory 契约的唯一实现（联系人档案与会话路由）。
  */
 @Module

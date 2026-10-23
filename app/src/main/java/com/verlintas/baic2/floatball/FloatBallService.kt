@@ -1024,7 +1024,7 @@ class FloatBallService : Service() {
         panel.handle.setOnTouchListener(makeResizeListener())
         excludeSystemGestures(panel.handle)
 
-        // 正文区挂载轻量转录视图：与主界面同一个「老参谋」会话的数据流。
+        // 正文区挂载轻量转录视图：与主界面同一个「好参谋」会话的数据流。
         // （WebView 替换方案已验证放弃：overlay 窗口内 Chromium 长按选择
         // 完全不生效——连过渡高亮都没有；整段复制走气泡底部复制图标。）
         val transcript = TranscriptView(this)
@@ -1700,7 +1700,7 @@ class FloatBallService : Service() {
                 // 感知面是聊天 APP 的通知，与当前屏幕无关；选定后进陪伴窗口。
                 FloatUi.FanItem(R.string.float_split_auto) { openAutoScopePicker() },
                 FloatUi.FanItem(R.string.float_fan_main) { showMainUi() },
-                // 「更多」= 次级入口卡片（设置/帮助/老参谋设置/联系人画像，§3.2）；
+                // 「更多」= 次级入口卡片（设置/帮助/好参谋设置/联系人画像，§3.2）；
                 // 悬浮球常驻，不再提供手动隐藏（不想显示请走「退出」）。
                 FloatUi.FanItem(R.string.float_fan_more) { openMoreMenu() },
                 FloatUi.FanItem(R.string.float_fan_exit) { exitApp() },
@@ -1826,7 +1826,7 @@ class FloatBallService : Service() {
     // ------------------------------------------------------ card menus
 
     /**
-     * 「更多」子球：贴球弹出次级入口卡片（方案 §3.2）：设置 / 帮助 / 老参谋
+     * 「更多」子球：贴球弹出次级入口卡片（方案 §3.2）：设置 / 帮助 / 好参谋
      * 设置 / 联系人画像 / 关于。点行=关弹窗再执行；点空白或「✕」=仅关弹窗。
      */
     private fun openMoreMenu() {
@@ -1853,7 +1853,7 @@ class FloatBallService : Service() {
         attachCardMenu(menu)
     }
 
-    /** 「老参谋设置」：老参谋专属设置页（抓帧节奏/权限直达/会话管理等）。 */
+    /** 「好参谋设置」：好参谋专属设置页（抓帧节奏/权限直达/会话管理等）。 */
     private fun openAdvisorSettings() {
         startActivity(
             Intent(this, FloatSettingsActivity::class.java)
@@ -2002,8 +2002,8 @@ class FloatBallService : Service() {
     // ------------------------------------------------ main / dialogs
 
     /**
-     * 「设置」子球：全软件唯一的设置入口是主框架设置页（其中的「老参谋」
-     * 分区再进入老参谋专属设置），避免出现两个平行设置中心。
+     * 「设置」子球：全软件唯一的设置入口是主框架设置页（其中的「好参谋」
+     * 分区再进入好参谋专属设置），避免出现两个平行设置中心。
      */
     private fun openMainSettings() {
         collapseMenu()

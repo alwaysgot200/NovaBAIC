@@ -171,7 +171,7 @@ dependencies {
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
-    // 老参谋 AdvisorDatabase：app 模块独立 Room 库（方案 §4，零上游模块改动）
+    // 好参谋 AdvisorDatabase：app 模块独立 Room 库（方案 §4，零上游模块改动）
     ksp(libs.room.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
 

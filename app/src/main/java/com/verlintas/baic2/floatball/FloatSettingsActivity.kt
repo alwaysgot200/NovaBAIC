@@ -96,8 +96,8 @@ import kotlinx.coroutines.launch
 private const val EXTRA_OPEN_CONVERSATION_ID = "open_conversation_id"
 
 /**
- * 老参谋设置页。入口在主框架设置页的「老参谋」分区（设置入口全软件唯一）。
- * 只管老参谋专属项与权限直达；主题/模型等全局设置仍在应用主设置里。
+ * 好参谋设置页。入口在主框架设置页的「好参谋」分区（设置入口全软件唯一）。
+ * 只管好参谋专属项与权限直达；主题/模型等全局设置仍在应用主设置里。
  * 实时生效，无需重启。
  */
 @AndroidEntryPoint
@@ -356,7 +356,7 @@ private fun AdvisorSettingsScreen(
                 TokenUsageCard(prefs = prefs, balanceRepository = balanceRepository)
 
                 // LLM 请求重试（2026-10-22 自保活设置页迁入）：实际消费方是
-                // ScreenAdvisor 的 LLM 调用重试循环，语义归位老参谋设置。
+                // ScreenAdvisor 的 LLM 调用重试循环，语义归位好参谋设置。
                 val kaConfig by keepAlivePrefs.state.collectAsState()
                 SectionLabel(stringResource(R.string.float_settings_llm_retry_section))
                 RetrySlider(

@@ -25,7 +25,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
- * 老参谋私有 Room 库（advisor.db）：联系人画像 / 会话绑定 / 话术库。
+ * 好参谋私有 Room 库（advisor.db）：联系人画像 / 会话绑定 / 话术库。
  * 与上游 Baic2Database（v18）完全隔离，仅以 conversationId/agentId 逻辑引用，
  * 避免上游 DB 版本迁移冲突（方案 §4）。
  */

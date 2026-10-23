@@ -30,8 +30,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * 老参谋专属设置（独立于上游 SettingsRepository，避免触碰上游）。
- * 运行中修改下一轮循环即生效；持久化与「老参谋」会话 ID 同文件。
+ * 好参谋专属设置（独立于上游 SettingsRepository，避免触碰上游）。
+ * 运行中修改下一轮循环即生效；持久化与「好参谋」会话 ID 同文件。
  */
 @Singleton
 class AdvisorPrefs @Inject constructor(

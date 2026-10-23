@@ -252,6 +252,6 @@ class ReadinessGate @Inject constructor(
         private const val KEYCODE_PASTE = 279
         private const val SMOKE_BITMAP_W = 360
         private const val SMOKE_BITMAP_H = 100
-        private const val SMOKE_TEXT = "老参谋 123"
+        private const val SMOKE_TEXT = "好参谋 123"
     }
 }

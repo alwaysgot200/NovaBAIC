@@ -1,4 +1,4 @@
-# NovaBAIC「老参谋」保活方案设计（v3）
+# NovaBAIC「好参谋」保活方案设计（v3）
 
 > 学习吸收 SmsForwarder（E:\_android_work\SmsForwarder）的保活措施，
 > 在 `laocanmou` 分支上以「上游零侵入」方式复刻。
@@ -9,7 +9,7 @@
 > ① **重写拉活路径**——Android 15 起「有悬浮窗权限即可后台启 FGS」的豁免
 > 收窄为「权限 + 此刻存在可见 overlay 窗口」，服务被杀后形成先有鸡先有蛋
 > 死局；电池优化白名单与精确闹钟触发本身就是**独立豁免**，据此重排主/备路径；
-> ② **保活入口改入老参谋设置页**——扇形菜单现状已是 6 项占满 6 槽位
+> ② **保活入口改入好参谋设置页**——扇形菜单现状已是 6 项占满 6 槽位
 > （`items.zip(offsets)` 传第 7 项会被静默丢弃），不再新增子球，FloatUi 零改动；
 > ③ **重试活信号改为首个文本事件**（`TextDelta`/`ThinkingDelta`），
 > `RoundStarted` 瞬时到达不能当超时锚点；④ 文件名勘误
@@ -37,8 +37,8 @@
    版本目录。触碰范围仅白名单纯追加（Manifest、strings）+ 本分支自有文件小改
    （FloatBallService、ScreenAdvisor、TranscriptView、FloatSettingsActivity；
    **FloatUi 零改动**——扇形菜单现状已是 6 项占满 6 个 30° 分度槽位，
-   保活入口挂进老参谋设置页而不是新增第 7 子球）。
-4. 老参谋现有 `FloatBallService` 已是 `specialUse` 前台服务 + `START_STICKY`，
+   保活入口挂进好参谋设置页而不是新增第 7 子球）。
+4. 好参谋现有 `FloatBallService` 已是 `specialUse` 前台服务 + `START_STICKY`，
    「常驻通知」这一层已经存在；方案补的是**拉活**（开机/更新/心跳/闹钟/崩溃）、
    **授权引导**（通知/电池优化/精确闹钟/厂商自启）、**隐身**（最近任务隐藏）、
    **请求重试**（LLM 流式调用）四层，并全部纳入三档强度之下。
@@ -546,7 +546,7 @@ samsung / letv / zte / unknown`（文案搬 SmsForwarder，格式化用位置标
 - ✅ 上游零侵入：仅白名单纯追加（Manifest、strings `float_keepalive_*`）；
 - ✅ 无新 Gradle 模块、无新依赖；不动 build 脚本与版本目录；
 - ✅ 新代码全部在 `com.verlintas.baic2.keepalive`；
-- ✅ 复用优先：FloatUi 零改动（6 槽位已满，入口挂老参谋设置页）；LLM 不
+- ✅ 复用优先：FloatUi 零改动（6 槽位已满，入口挂好参谋设置页）；LLM 不
   手搓 HTTP（只在 AgentLoop 之外包重试）；权限判断走系统 API；
 - ✅ 每文件 GPL-3.0 头；`tools/check-license-headers.sh` 过闸；
   自生 `silence.mp3` 属二进制，在文件头注释/PR 说明注明生成方式与来源；

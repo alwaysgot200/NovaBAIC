@@ -29,12 +29,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
 /**
- * 老参谋的「精简直连」回答通道（与全功能 [com.verlintas.baic2.core.engine.AgentLoop]
+ * 好参谋的「精简直连」回答通道（与全功能 [com.verlintas.baic2.core.engine.AgentLoop]
  * 二选一，由 AdvisorPrefs.memoryMode 决定）。
  *
  * 区别与依据：AgentLoop 的 CHAT 模式每回合固定附带 7 个记忆工具的 JSON
  * schema 与大段记忆协议系统提示词，且模型一旦调用工具会发起第二轮请求
- * （整条上下文重发，input tokens 近翻倍）。老参谋在回合外已主动注入核心
+ * （整条上下文重发，input tokens 近翻倍）。好参谋在回合外已主动注入核心
  * 记忆/唤醒笔记/联系人事实/到期承诺/成交要件，记忆写回另有滚动摘要与
  * 画像萃取承担，因此自动看屏回合不需要工具。本通道：
  * - tools 恒为空：不发工具 schema，不存在工具二次往返；

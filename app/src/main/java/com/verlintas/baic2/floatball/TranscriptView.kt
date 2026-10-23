@@ -47,7 +47,7 @@ import com.verlintas.baic2.floatball.advisor.strategy.ReplySuggestions
 import com.verlintas.baic2.floatball.advisor.strategy.TacticalBrief
 
 /**
- * 分屏浮窗的转录视图：渲染「老参谋」会话的消息流（与主界面同一会话、
+ * 分屏浮窗的转录视图：渲染「好参谋」会话的消息流（与主界面同一会话、
  * 同一数据源；主界面里是完整 Compose 聊天界面，浮窗用轻量 TextView——
  * 服务窗口里 Compose 需要完整 SavedStateRegistry 宿主，得不偿失）。
  *

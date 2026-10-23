@@ -31,7 +31,7 @@ import androidx.core.content.ContextCompat
 /**
  * POST_NOTIFICATIONS（Android 13+ 运行时权限）的统一发送守卫。
  *
- * 老参谋的各路通知（起草降级/陪伴窗口汇总/主动保温/周报）都是可降级
+ * 好参谋的各路通知（起草降级/陪伴窗口汇总/主动保温/周报）都是可降级
  * 副产物：缺权限时静默跳过，绝不阻塞主链路。渠道创建与
  * areNotificationsEnabled 健全性检查仍归调用方，这里只做权限判定
  * 与最终 notify——Android 13+ 未授予时直接返回 false，lint 以

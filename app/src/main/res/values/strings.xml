@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">老参谋</string>
+    <string name="app_name">好参谋</string>
 
     <string name="nav_chats">对话</string>
     <string name="nav_tasks">任务</string>
@@ -13,7 +13,7 @@
 
     <!-- 悬浮球 -->
     <string name="float_notification_channel">悬浮球</string>
-    <string name="float_notification_title">老参谋悬浮球</string>
+    <string name="float_notification_title">好参谋悬浮球</string>
     <string name="float_notification_text">点击悬浮球快捷操作</string>
     <string name="float_notification_show">显示悬浮球</string>
     <!-- 悬浮球 · 扇形子球 -->
@@ -27,7 +27,7 @@
 
     <!-- 悬浮球 · 更多弹窗 -->
     <string name="float_more_title">更多</string>
-    <string name="float_more_advisor_settings">老参谋设置</string>
+    <string name="float_more_advisor_settings">好参谋设置</string>
     <string name="float_more_profile">联系人画像</string>
     <string name="float_more_about">关于</string>
     <string name="float_more_close">关闭</string>
@@ -41,7 +41,7 @@
     <string name="float_auto_scope_apps_all">所有 APP</string>
     <string name="float_auto_scope_app_count">%1$d 个APP</string>
     <string name="float_auto_scope_started">自动托管已开启：%1$s</string>
-    <string name="float_auto_whitelist_full">自动白名单已满（最多 %1$d 个），请在老参谋设置中清理后再开启</string>
+    <string name="float_auto_whitelist_full">自动白名单已满（最多 %1$d 个），请在好参谋设置中清理后再开启</string>
     <string name="float_auto_draft_enabled">已开启全量来信监控：所有关联联系人的来信将自动拟稿并通知</string>
 
     <!-- 悬浮球 · 录制态 -->
@@ -52,7 +52,7 @@
     <string name="float_recording_resting">本段录屏结束，休憩 %1$d 分钟后自动继续</string>
 
     <!-- 悬浮球 · 设置页 -->
-    <string name="float_settings_title">老参谋设置</string>
+    <string name="float_settings_title">好参谋设置</string>
     <string name="float_settings_continuous">连续参谋</string>
     <string name="float_settings_poll_hint">抓帧节奏：发现画面变化的快慢；停在同一屏时会自动降频省电，画面一动立即恢复</string>
     <string name="float_settings_poll_slow">省电 2秒</string>
@@ -141,10 +141,10 @@
     <string name="float_shizuku_pair_3">回到 Shizuku 输入配对码，启动成功</string>
     <string name="float_settings_go_enable">去开启</string>
     <string name="float_settings_granted">已开启</string>
-    <string name="float_settings_session">老参谋会话</string>
+    <string name="float_settings_session">好参谋会话</string>
     <string name="float_settings_open_session">在主界面打开</string>
     <string name="float_settings_clear_session">清空会话消息</string>
-    <string name="float_settings_clear_confirm">确认清空老参谋的全部问答消息？</string>
+    <string name="float_settings_clear_confirm">确认清空好参谋的全部问答消息？</string>
     <string name="float_settings_clear_yes">清空</string>
     <string name="float_settings_clear_no">取消</string>
     <string name="float_settings_keepalive_hint">保活建议：国产 ROM 请在系统设置中允许本应用后台自启/无限制。</string>
@@ -154,14 +154,14 @@
 
     <!-- 悬浮球 · 使用帮助 -->
     <string name="float_help_title">使用帮助</string>
-    <string name="float_help_intro_section">老参谋是什么</string>
-    <string name="float_help_intro_body">老参谋是一个「智能化自动化聊天代理和随身参谋」：一颗常驻屏幕的悬浮球。当你在微信、QQ 等任何聊天软件里收到一条不知道怎么回的消息，单击悬浮球，它会自动看一眼屏幕、读懂聊天内容，几秒钟内给你一条可以直接参考的回复。\n\n它只给建议，不替你做决定——所有回复都由你过目后再使用；截屏与文字识别全部在你手机本地完成，不上传任何屏幕内容。</string>
+    <string name="float_help_intro_section">好参谋是什么</string>
+    <string name="float_help_intro_body">好参谋是一个「智能化自动化聊天代理和随身参谋」：一颗常驻屏幕的悬浮球。当你在微信、QQ 等任何聊天软件里收到一条不知道怎么回的消息，单击悬浮球，它会自动看一眼屏幕、读懂聊天内容，几秒钟内给你一条可以直接参考的回复。\n\n它只给建议，不替你做决定——所有回复都由你过目后再使用；截屏与文字识别全部在你手机本地完成，不上传任何屏幕内容。</string>
     <string name="float_help_intro_point_local">本地优先：截屏、识别、记忆都在本机完成，不落盘、不外传</string>
     <string name="float_help_intro_point_advice">只当参谋：AI 给参考答案，发不发、怎么改，永远由你说了算</string>
     <string name="float_help_quick_section">三步上手</string>
     <string name="float_help_quick_body">第一次使用，跟着下面三步走（约 2 分钟）：</string>
-    <string name="float_help_quick_step1">打开老参谋应用，按提示授予「显示在其他应用上层」（悬浮窗）权限，屏幕上就会出现悬浮球</string>
-    <string name="float_help_quick_step2">打开 设置 → 老参谋，配置你的 AI 模型与 API Key（支持 DeepSeek 等主流服务）</string>
+    <string name="float_help_quick_step1">打开好参谋应用，按提示授予「显示在其他应用上层」（悬浮窗）权限，屏幕上就会出现悬浮球</string>
+    <string name="float_help_quick_step2">打开 设置 → 好参谋，配置你的 AI 模型与 API Key（支持 DeepSeek 等主流服务）</string>
     <string name="float_help_quick_step3">回到桌面随便打开一个聊天软件，长按悬浮球试试——分屏浮窗会给出参考回复</string>
     <string name="float_help_ball_section">悬浮球与菜单操作</string>
     <string name="float_help_ball_body">悬浮球可以拖到屏幕任意位置；单击弹出扇形菜单，长按与双击是两个快捷模式：</string>
@@ -175,7 +175,7 @@
     <string name="float_help_oneshot_input">输入行可以继续追问，例如「语气再委婉一点」「不要提价格」，AI 会结合当前屏幕内容修改答案</string>
     <string name="float_help_continuous_section">连续参谋（盯屏模式）</string>
     <string name="float_help_continuous_body">双击悬浮球开启。它持续盯着屏幕：对方一有新消息、画面发生变化，就自动给出新一轮建议，你不用反复点击。画面长时间不动时自动降频省电，恢复变化立刻提速。</string>
-    <string name="float_help_continuous_end">再次双击或达到时长上限即结束；整段问答会自动存进老参谋会话，可在主界面回看。</string>
+    <string name="float_help_continuous_end">再次双击或达到时长上限即结束；整段问答会自动存进好参谋会话，可在主界面回看。</string>
     <string name="float_help_auto_section">自动托管（自动参谋）</string>
     <string name="float_help_auto_body">从菜单点「自动」开启。与「单次 / 连续」看当前屏幕不同，自动托管监控的是**已关联联系人在其关联 APP（微信、企业微信、钉钉、飞书等）的聊天通知**：先选择监控范围（某联系人 + 某 APP，或全部联系人），选定联系人后自动打开其聊天页，按拟人节奏（约 8~90 秒一条）帮你拟回复并受控自动发送，最多不超过你设置的条数上限。本机尚未关联任何 APP 时无法使用。</string>
     <string name="float_help_auto_safe">安全底线：涉及金钱、承诺、敏感隐私或超出当前关系阶段的回复，一律不会自动发出，而是降级为「起草通知」，由你确认后一键使用</string>
@@ -183,7 +183,7 @@
     <string name="float_help_profile_section">联系人画像与策略</string>
     <string name="float_help_profile_body">参谋会为聊天对象自动建档：称呼、关系、性格特点、聊天阶段……聊得越多越懂对方。在画像页可以查看并修正；「策略卡」给出远/中/近期目标建议，「风格卡」控制回复的语气分寸，「话术库」存放你的常用金句。这些数据全部保存在手机本地。</string>
     <string name="float_help_params_section">参数设置速查</string>
-    <string name="float_help_params_body">入口：设置 → 老参谋。常用参数与建议：</string>
+    <string name="float_help_params_body">入口：设置 → 好参谋。常用参数与建议：</string>
     <string name="float_help_param_poll">抓帧节奏（连续参谋）：检测屏幕变化有多快。标准档适合大多数人；调灵敏更及时但更耗电</string>
     <string name="float_help_param_backoff">静止降频：画面不动时自动放慢检测。越大越省电，恢复反应略慢，保持默认即可</string>
     <string name="float_help_param_session">会话时长上限：连续参谋到点自动收尾，防止忘关</string>
@@ -206,8 +206,8 @@
     <string name="float_help_privacy_body">截屏与文字识别只在你手机的内存中瞬间完成，用完即弃，不写磁盘、不发送遥测。只有你亲自配置的 AI 服务商（你的 API Key 所对应的服务）会收到为生成回答而组织的文字内容；密钥经系统级加密保存。</string>
 
     <!-- 悬浮球 · 屏幕问答 -->
-    <string name="float_ask_conversation_title">老参谋</string>
-    <string name="float_ask_title">老参谋</string>
+    <string name="float_ask_conversation_title">好参谋</string>
+    <string name="float_ask_title">好参谋</string>
     <string name="float_back">返回</string>
     <string name="float_ask_close">✕ 关闭</string>
     <string name="float_ask_status_ocr">正在识别屏幕文字…</string>
@@ -224,7 +224,7 @@
     <string name="float_ask_error_network">网络连接失败，请检查网络后重试</string>
     <string name="float_bubble_collapsed">【屏幕内容】已发送 %1$d 字 ▸ 点击展开</string>
     <string name="float_bubble_collapse">▾ 收起</string>
-    <string name="float_input_hint">问问「老参谋」…</string>
+    <string name="float_input_hint">问问「好参谋」…</string>
     <string name="float_input_send">发送</string>
     <string name="float_paste">粘贴</string>
     <string name="float_input_stop">停止</string>
@@ -244,7 +244,7 @@
     <string name="float_smalltalk_question_free">来点闲聊</string>
     <string name="float_smalltalk_default_mission">以话题「%1$s」自然开场</string>
     <!-- M1-C Gatekeeper 事前审（连续模式分屏预览降级提示；只拦红线/重复/超长三类，批准偏置） -->
-    <string name="float_gate_notice">⚠️ 老参谋事前审：%1$s</string>
+    <string name="float_gate_notice">⚠️ 好参谋事前审：%1$s</string>
     <string name="float_gate_reason_blacklist">草稿触及红线（涉违法、钱财欺诈、隐私索取或人身威胁），已降级为截断版，请人工改写后再用</string>
     <string name="float_gate_reason_too_long">草稿超出长度上限，已自动截断</string>
     <string name="float_gate_reason_repetitive">草稿与近期回复高度雷同，建议长按气泡换个写法</string>
@@ -329,7 +329,7 @@
     <string name="float_bind_empty">请输入联系人名称并选择所属 App</string>
     <string name="float_bind_ambiguous">该名称匹配到多个已有档案，请进画像页选择，或换一个名字再试</string>
     <string name="float_bind_failed">关联失败，请进画像页重试</string>
-    <string name="float_bind_channels_empty">暂无聊天会话记录；在聊天屏使用老参谋或分屏关联后自动登记</string>
+    <string name="float_bind_channels_empty">暂无聊天会话记录；在聊天屏使用好参谋或分屏关联后自动登记</string>
     <!-- 内置 IM 清单（聊天会话登记的 APP 白名单，与 FloatUi.IM_APPS 单一来源） -->
     <string name="float_im_wechat">微信</string>
     <string name="float_im_wework">企业微信</string>
@@ -341,7 +341,7 @@
     <!-- IM 直达导航（ImChatNavigator）：结果 Toast 文案 -->
     <string name="float_im_nav_ok">已进入与 %1$s 的对话</string>
     <string name="float_im_nav_a11y_off">无障碍服务未开启，无法自动进入对话：已为你打开聊天 App，请手动点击「%1$s」。开启方法：设置 → 无障碍 → BetterAIChat2</string>
-    <string name="float_im_nav_shizuku_off">无障碍与 Shizuku 均未就绪，无法自动进入对话：已为你打开聊天 App，请手动点击「%1$s」。开启任一通道即可：设置 → 无障碍，或老参谋设置 → Shizuku</string>
+    <string name="float_im_nav_shizuku_off">无障碍与 Shizuku 均未就绪，无法自动进入对话：已为你打开聊天 App，请手动点击「%1$s」。开启任一通道即可：设置 → 无障碍，或好参谋设置 → Shizuku</string>
     <string name="float_im_nav_projection_fail">屏幕投影建立失败，无法识别屏幕内容：请检查 Shizuku 是否在运行后重试，或手动点击「%1$s」</string>
     <string name="float_im_nav_app_missing">未找到对应的聊天应用，无法打开</string>
     <string name="float_im_nav_generic_fail">未能自动进入与 %1$s 的对话（界面未能定位：%2$s），已为你打开聊天 App，请手动点击该联系人</string>
@@ -402,7 +402,7 @@
     <string name="float_profile_type_person">单人</string>
     <string name="float_profile_type_group">群聊</string>
     <string name="float_profile_name">显示名（改名后旧名仍保留为别名）</string>
-    <string name="float_profile_goal">业务目标（仅老参谋可见，不会写入通用记忆）</string>
+    <string name="float_profile_goal">业务目标（仅好参谋可见，不会写入通用记忆）</string>
     <string name="float_profile_save">保存</string>
     <string name="float_profile_saved">已保存</string>
     <string name="float_profile_rebind_current">把当前参谋会话绑定到此人（切人修正）</string>
@@ -552,7 +552,7 @@
     <string name="float_keepalive_music_toggle">后台播放无声音乐（永久档可选组件）</string>
     <string name="float_keepalive_music_media_note">会出现常驻媒体通知与锁屏/下拉媒体控件，音频通路常开，⚡⚡⚡ 明显耗电</string>
     <string name="float_keepalive_music_channel">保活无声音乐</string>
-    <string name="float_keepalive_music_notification_title">老参谋保活中</string>
+    <string name="float_keepalive_music_notification_title">好参谋保活中</string>
     <string name="float_keepalive_music_notification_text">无声音乐用于保持悬浮球存活</string>
     <string name="float_settings_llm_retry_section">LLM 请求重试（次数 = 0 禁用，等待时间逐次递增）</string>
     <string name="float_settings_retry_times_label">最多重试</string>
@@ -563,7 +563,7 @@
     <string name="float_settings_retry_hint">超时 = 等多久没有出第一个字（含推理模型的思考过程）才重试；开始回答后流式总时长不设限。连续参谋模式固定为 1 次重试 / 8 秒超时。</string>
     <!-- 首启保活引导卡片（2026-10-22）：初装首次启动弹一次，三项授权逐项去开启 -->
     <string name="float_keepalive_guide_title">保活配置引导</string>
-    <string name="float_keepalive_guide_desc">为保证老参谋在后台稳定运行，建议完成以下三项授权。点击「去开启」跳转对应系统页面，完成后返回本卡片即可。</string>
+    <string name="float_keepalive_guide_desc">为保证好参谋在后台稳定运行，建议完成以下三项授权。点击「去开启」跳转对应系统页面，完成后返回本卡片即可。</string>
     <string name="float_keepalive_guide_jump">去开启</string>
     <string name="float_keepalive_guide_ready">已开启</string>
     <string name="float_keepalive_guide_pending">未开启</string>
@@ -632,7 +632,7 @@
     <string name="float_goal_new_l3">＋ 新建远期愿景</string>
     <string name="float_goal_new_l2">＋ 新建中期目标</string>
     <string name="float_goal_new_l1">＋ 新建近期目标</string>
-    <string name="float_goal_empty_l3">还没有远期愿景。定一个大方向，老参谋会帮你拆出中期目标和自我修炼项。</string>
+    <string name="float_goal_empty_l3">还没有远期愿景。定一个大方向，好参谋会帮你拆出中期目标和自我修炼项。</string>
     <string name="float_goal_empty_l2">还没有中期目标。可以从远期愿景的 AI 建议里采纳，也可以自己建。</string>
     <string name="float_goal_empty_l1">还没有近期目标。保存中期目标后，AI 会针对当前站给出 1~3 个本周可执行的建议。</string>
     <string name="float_goal_horizon_l3">远期愿景（3 个月以上）</string>
@@ -726,7 +726,7 @@
     <string name="float_brief_title">参谋简报</string>
     <string name="float_brief_generate">生成简报</string>
     <string name="float_brief_generating">正在汇总近两周的阶段、任务与目标进展…</string>
-    <string name="float_brief_empty">还没有简报。点「生成简报」，老参谋会汇总近两周的关系进展。</string>
+    <string name="float_brief_empty">还没有简报。点「生成简报」，好参谋会汇总近两周的关系进展。</string>
     <string name="float_brief_empty_no_data">近两周还没有阶段变动或策略台账记录，暂无可汇总的内容</string>
     <string name="float_brief_failed">简报生成失败，请稍后再试</string>
     <string name="float_brief_stage_position">阶段位置：%1$s</string>
@@ -742,7 +742,7 @@
     <string name="float_action_title">行动建议</string>
     <string name="float_action_generate">给点子</string>
     <string name="float_action_generating">正在按当前阶段从谋略库挑路子…</string>
-    <string name="float_action_empty">还没有行动建议。点「给点子」，老参谋会结合当前阶段与谋略库，给出可执行的线下行动草案。</string>
+    <string name="float_action_empty">还没有行动建议。点「给点子」，好参谋会结合当前阶段与谋略库，给出可执行的线下行动草案。</string>
     <string name="float_action_no_candidates">当前阶段还没有适用的谋略候选，先推进阶段或完善场景后再试</string>
     <string name="float_action_failed">行动建议生成失败，请稍后再试</string>
     <string name="float_action_status_draft">待采纳</string>
@@ -783,8 +783,8 @@
     <string name="float_strategy_confirm">✓ 确认生效</string>
     <string name="float_strategy_discard">忽略此草稿</string>
     <string name="float_strategy_recompile">重新编译</string>
-    <string name="float_strategy_empty">还没有策略卡。老参谋可以基于你的人设、对方画像与场景红线编一张草稿，你审核后生效。</string>
-    <string name="float_strategy_empty_group">还没有策略卡。老参谋可以基于你的人设、群整体画像与群内红线编一张草稿，你审核后生效。</string>
+    <string name="float_strategy_empty">还没有策略卡。好参谋可以基于你的人设、对方画像与场景红线编一张草稿，你审核后生效。</string>
+    <string name="float_strategy_empty_group">还没有策略卡。好参谋可以基于你的人设、群整体画像与群内红线编一张草稿，你审核后生效。</string>
     <string name="float_strategy_compile_start">已开始生成草稿，完成后自动显示</string>
     <string name="float_strategy_confirmed">策略卡已生效</string>
     <string name="float_strategy_discarded">草稿已忽略</string>
@@ -803,10 +803,10 @@
     <string name="float_mission_success">达成标志</string>
 
     <!-- M2-a 起草档：通知监听后台代拟 + 起草通知 + 代拟条 + 设置组 -->
-    <string name="float_draft_listener_label">老参谋代拟回复</string>
-    <string name="float_draft_channel">老参谋代拟</string>
-    <string name="float_draft_notif_title">老参谋为【%1$s】代拟了一条回复</string>
-    <string name="float_stranger_channel">老参谋陌生来信</string>
+    <string name="float_draft_listener_label">好参谋代拟回复</string>
+    <string name="float_draft_channel">好参谋代拟</string>
+    <string name="float_draft_notif_title">好参谋为【%1$s】代拟了一条回复</string>
+    <string name="float_stranger_channel">好参谋陌生来信</string>
     <string name="float_stranger_notif_title">陌生来信：【%1$s】</string>
     <string name="float_stranger_notif_body">%1$s：来自 %2$s，尚未建档，不会自动回复。点击通知可直接打开该聊天</string>
     <string name="float_draft_preview">代拟：%1$s</string>
@@ -819,7 +819,7 @@
     <string name="float_draft_empty">草稿为空，先写点内容</string>
     <string name="float_settings_draft_section">代拟回复（起草档）</string>
     <string name="float_settings_draft">通知到达时后台代拟回复</string>
-    <string name="float_settings_draft_hint">匹配到已建档联系人后，老参谋在后台拟一条回复并发通知提醒；绝不自动发送，发送与否始终由你决定</string>
+    <string name="float_settings_draft_hint">匹配到已建档联系人后，好参谋在后台拟一条回复并发通知提醒；绝不自动发送，发送与否始终由你决定</string>
     <string name="float_settings_draft_packages_hint">仅处理微信、QQ、TIM、企业微信、钉钉、飞书、Telegram 的通知；未建档的联系人静默忽略，通知文本即取即用不落盘。</string>
 
     <!-- M2-b 主动保温：周期检点 + 频控（ProactivePolicy / DirectorRoutes PROACTIVE 路） -->
@@ -828,14 +828,14 @@
     <string name="float_settings_proactive_hint">开启后每隔一段时间自动检点：对打开了「主动保温」的联系人按频控参数（每日上限/最小间隔/静默时段）后台拟一条保温开场并发起草通知；绝不自动发送，静默时段零打扰</string>
     <string name="float_settings_proactive_interval">检点间隔</string>
     <string name="float_proactive_card_title">主动保温</string>
-    <string name="float_proactive_card_hint">按下方频控参数，由老参谋定时主动发起保温闲聊草稿</string>
+    <string name="float_proactive_card_hint">按下方频控参数，由好参谋定时主动发起保温闲聊草稿</string>
     <string name="float_proactive_daily_cap">每日上限</string>
     <string name="float_proactive_cap_value">%1$d 条</string>
     <string name="float_proactive_min_gap">最小间隔</string>
     <string name="float_proactive_gap_value">%1$d 小时</string>
     <string name="float_proactive_quiet">静默时段</string>
     <string name="float_proactive_quiet_value">%1$s ~ %2$s</string>
-    <string name="float_proactive_draft_notif_title">老参谋想主动聊聊【%1$s】</string>
+    <string name="float_proactive_draft_notif_title">好参谋想主动聊聊【%1$s】</string>
     <string name="float_proactive_weekly_notif_title">参谋周报已生成</string>
     <string name="float_proactive_weekly_notif_text">%1$s 的周报已更新；近 7 天决策分布：%2$s</string>
 
@@ -867,13 +867,13 @@
     <string name="float_settings_executor_shizuku">Shizuku 免无障碍</string>
     <string name="float_settings_readiness_checking">正在逐项检测就绪状态…</string>
     <!-- 2026-10-20 通报方案 §4：H 接管/G 达成铃声通报。 -->
-    <string name="float_escalation_channel">老参谋通报</string>
+    <string name="float_escalation_channel">好参谋通报</string>
     <string name="float_escalation_handoff_title">%1$s 需要你接管</string>
     <string name="float_escalation_handoff_text">【%1$s】%2$s</string>
     <string name="float_escalation_handoff_text_plain">%1$s</string>
     <string name="float_escalation_goal_title">%1$s 传来达成信号</string>
     <string name="float_escalation_goal_text">%1$s</string>
-    <string name="float_privacy_channel">老参谋隐私知会</string>
+    <string name="float_privacy_channel">好参谋隐私知会</string>
     <string name="float_privacy_bypass_title">%1$s 话题已绕行</string>
     <string name="float_privacy_bypass_text">对方问到【%1$s】：%2$s 已继续聊天但未正面回答，点击查看回合与台账。</string>
     <!-- T1-d 聊天策略裁量层通报（float_tactic_*） -->
@@ -945,7 +945,7 @@
     <!-- R2-F6 我的素材库（方案 §7.2 素材三源之②「用户投喂」）：GoalTab 素材投喂页 -->
     <string name="float_material_title">我的素材</string>
     <string name="float_material_add">添加</string>
-    <string name="float_material_empty">还没有素材：把趣事/见闻/资源投喂进来，老参谋保温闲聊时会优先挑它们当话题</string>
+    <string name="float_material_empty">还没有素材：把趣事/见闻/资源投喂进来，好参谋保温闲聊时会优先挑它们当话题</string>
     <string name="float_material_delete">删除</string>
     <string name="float_material_add_title">添加素材</string>
     <string name="float_material_content_hint">素材内容（趣事/见闻/资源…）</string>
@@ -954,21 +954,21 @@
     <string name="float_material_created">录入于 %1$s</string>
     <string name="float_material_used">上次用于闲聊 %1$s</string>
 
-    <!-- 品牌统一为「老参谋」：以下键覆盖上游库（device:impl / feature:settings）
+    <!-- 品牌统一为「好参谋」：以下键覆盖上游库（device:impl / feature:settings）
          的同名资源。Android 资源合并中 app 优先级高于依赖库，无需改动上游文件；
          合并上游时若库侧文案演进，只需在此追加/调整覆盖值。 -->
     <!-- device:impl：无障碍/通知读取/屏幕投影在系统界面与前台通知中的名称 -->
-    <string name="a11y_label">老参谋界面自动化</string>
-    <string name="notifications_label">老参谋通知读取</string>
-    <string name="projection_title">老参谋屏幕捕获</string>
+    <string name="a11y_label">好参谋界面自动化</string>
+    <string name="notifications_label">好参谋通知读取</string>
+    <string name="projection_title">好参谋屏幕捕获</string>
     <!-- feature:settings：关于页品牌名与商业化文案（定位口号/信息分区） -->
-    <string name="settings_brand_name">老参谋</string>
+    <string name="settings_brand_name">好参谋</string>
     <string name="settings_about_tagline">智能化自动化聊天代理和随身参谋</string>
     <string name="settings_about_summary">版本 %1$s · 应用信息与更新</string>
     <string name="settings_developer_title">应用信息</string>
-    <string name="settings_licenses_hint">老参谋基于以下开源项目构建，感谢所有作者。</string>
-    <string name="settings_developer_note">老参谋遵循 GPL-3.0-or-later 许可。</string>
-    <string name="settings_about_copyright">© 2026 老参谋 保留权利</string>
-    <string name="settings_about_share_chooser">分享老参谋</string>
+    <string name="settings_licenses_hint">好参谋基于以下开源项目构建，感谢所有作者。</string>
+    <string name="settings_developer_note">好参谋遵循 GPL-3.0-or-later 许可。</string>
+    <string name="settings_about_copyright">© 2026 好参谋 保留权利</string>
+    <string name="settings_about_share_chooser">分享好参谋</string>
 
 </resources>

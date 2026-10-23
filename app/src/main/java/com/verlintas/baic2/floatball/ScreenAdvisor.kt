@@ -142,8 +142,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
- * 「老参谋」的大脑。会话管道与主界面聊天同构：OCR/无障碍文本作为用户
- * 消息写入持久化「老参谋」会话，由同一个 [AgentLoop] 以 Chat 模式作答。
+ * 「好参谋」的大脑。会话管道与主界面聊天同构：OCR/无障碍文本作为用户
+ * 消息写入持久化「好参谋」会话，由同一个 [AgentLoop] 以 Chat 模式作答。
  *
  * 单次（长按）与连续（双击）共用 [submitTurn] 的串行队列；每完成一回合
  * 发出 [turnCompletions]（服务层据此点亮红点徽章）。感知本身委托
@@ -1293,7 +1293,7 @@ class ScreenAdvisor @Inject constructor(
         // 但 OCR 标题带/窗口标题仍可用——快速绑定卡片靠它预填，绝不因缺 pkg 静默
         // 失效（§4.5 双模铁律）。建档时 pkg 由 UI 层兜底（默认微信）。
         if (l1 != null) lastChatCandidate = pkg to l1 else if (l2 != null) lastChatCandidate = pkg to l2
-        // 桌面/系统壳不是聊天窗口：不建档、不识别，整轮回落到共享老参谋会话（方案 §6.8④）。
+        // 桌面/系统壳不是聊天窗口：不建档、不识别，整轮回落到共享好参谋会话（方案 §6.8④）。
         // pkg=null（无 a11y）同样到此为止：候选已记录，识别管线不进（防误建档案），
         // 归属交给快速绑定卡片手动确认。
         if (!isChatWindow(pkg)) return null
@@ -2954,7 +2954,7 @@ class ScreenAdvisor @Inject constructor(
         }
     }
 
-    /** 找到（或新建）未绑定场景共享的持久化「老参谋」会话。 */
+    /** 找到（或新建）未绑定场景共享的持久化「好参谋」会话。 */
     private suspend fun ensureSharedConversation(): Long {
         val existing = prefs.conversationId().takeIf { it > 0 }
             ?.let { id -> runCatching { conversationRepository.get(id) }.getOrNull() }
@@ -3331,7 +3331,7 @@ class ScreenAdvisor @Inject constructor(
         val tagged = if (basis.isEmpty()) {
             text
         } else {
-            "$text（老参谋依据更正，原依据：${basis.joinToString("、")}）"
+            "$text（好参谋依据更正，原依据：${basis.joinToString("、")}）"
         }
         return runCatching {
             memoryRepository.addNote(
@@ -3348,7 +3348,7 @@ class ScreenAdvisor @Inject constructor(
         _transcript.updateStatus(Status.Error(reason))
     }
 
-    /** 供设置页调用：清空老参谋会话消息（会话本身保留）。 */
+    /** 供设置页调用：清空好参谋会话消息（会话本身保留）。 */
     fun clearConversationAsync() {
         advisorScope.launch { clearConversation() }
     }
@@ -3561,7 +3561,7 @@ class ScreenAdvisor @Inject constructor(
 
         /** 滚动摘要任务的系统提示词：只输出摘要本身。 */
         const val DIGEST_SYSTEM =
-            "你是「老参谋」的看屏记录摘要器。把用户连续看过的屏幕与你此前的参谋意见，" +
+            "你是「好参谋」的看屏记录摘要器。把用户连续看过的屏幕与你此前的参谋意见，" +
                 "压缩成不超过 150 字的简体中文连续背景：只保留场景脉络、悬而未决的问题和用户的" +
                 "连续意图，丢弃重复屏幕与 OCR 噪声。只输出摘要正文，不要标题、不要分点、" +
                 "不要寒暄。"
@@ -3595,7 +3595,7 @@ class ScreenAdvisor @Inject constructor(
          * 提示词。长度档的尾句由调用方动态追加（见 answerTargetChars）。
          */
         const val ADVISOR_STYLE_BASE =
-            "你是「老参谋」，用户的随身参谋。用户在手机上轻点了一下悬浮球，" +
+            "你是「好参谋」，用户的随身参谋。用户在手机上轻点了一下悬浮球，" +
                 "最近一条用户消息是由 OCR 或无障碍树从当前屏幕提取的文本（可能有识别噪声、排版可能混乱），" +
                 "更早的屏幕只以一句场景占位或摘要存在，原始文本已经省略——严禁复述旧屏幕，" +
                 "始终以当前屏幕为唯一分析对象；用户手动输入的追问优先于一切屏幕内容。" +

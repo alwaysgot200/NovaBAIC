@@ -80,7 +80,7 @@ class ContactHistoryGateway @Inject constructor(
      * 跨会话回看：最近 [limit] 条自动屏幕消息（USER 且以 [labelPrefix] 起头），
      * 按 id 新→旧排列，每项为（会话 id, 正文）。共享会话路由的 A→B→A 场景：
      * 只比对最近一个会话时，切回原场景会误开新会话；借这份窗口按内容相似
-     * 度找回原场景会话。主键倒序有界扫描，老参谋回合高频占比下扫描量 ≈ limit 行。
+     * 度找回原场景会话。主键倒序有界扫描，好参谋回合高频占比下扫描量 ≈ limit 行。
      */
     suspend fun recentScreenBodies(
         labelPrefix: String,

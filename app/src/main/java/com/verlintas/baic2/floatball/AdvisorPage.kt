@@ -44,7 +44,7 @@ import com.verlintas.baic2.R
 import com.verlintas.baic2.designsystem.Baic2Spacing
 
 /**
- * 老参谋全屏页面统一骨架（铁律：所有大界面窗口与主框架的布局/风格保持
+ * 好参谋全屏页面统一骨架（铁律：所有大界面窗口与主框架的布局/风格保持
  * 一致）。第一行永远是顶栏——返回图标 + 页面标题（超长省略），避让公式
  * 与主界面左上角导航下拉框（Baic2App 的 DockAnchor）完全同构：
  * `statusBars insets + Baic2Spacing.md`，顶栏内容紧贴系统状态栏（时间/电

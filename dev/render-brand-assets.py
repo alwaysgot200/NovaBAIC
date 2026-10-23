@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # This file is part of BetterAIChat2.
-"""Render the laocanmou brand mark (white feather fan + AI sparkle).
+"""Render the haocanmou brand mark (white feather fan + AI sparkle).
 
 Single source for every rasterised brand asset. The vector geometry here MUST
 mirror app/src/main/res/drawable/ic_logo_advisor.xml (Android renders that
@@ -184,7 +184,7 @@ def write_banner() -> None:
 
     bold = ImageFont.truetype("C:/Windows/Fonts/msyhbd.ttc", 118)
     regular = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 46)
-    draw.text((640, 188), "老参谋", font=bold, fill=(255, 255, 255, 255))
+    draw.text((640, 188), "好参谋", font=bold, fill=(255, 255, 255, 255))
     draw.text(
         (645, 350),
         "一键屏幕参谋 · Nova",
