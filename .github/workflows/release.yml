@@ -2,6 +2,11 @@ name: Release
 
 # 唯一触发方式：git push origin vXX.XX.XX。标签推送时一次性完成
 # 校验、构建、发布；平时 push 不跑任何 CI，也不产出中间制品。
+#
+# 三个作业：verify（质量门）与 build（签名打包）并行跑，
+# publish 同时等两者变绿后才发 GitHub Release。
+# 每个作业内只发一次 Gradle 调用（多任务合并 + --parallel），
+# 免掉重复的配置/守护进程开销与二次编译。
 on:
   push:
     tags:
@@ -20,8 +25,11 @@ env:
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
 jobs:
-  release:
-    name: Build and publish
+  # 质量门：标签校验 + 仓库三检查 + 单测 + lint。
+  # 与 build 并行执行；本工程单元测试任务只有 debug 变体
+  # （testDebugUnitTest）与纯 JVM 模块的 test，`./gradlew test` 即全量单测。
+  verify:
+    name: Checks, tests and lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,7 +37,8 @@ jobs:
         with:
           fetch-depth: 0
           # vendor/assists 为 assists 库的 submodule 存档（fork 工作分支），
-          # 构建虽走 Maven AAR，但缺 submodule 会让 git 工作树处于脏状态。
+          # 构建虽走 Maven AAR，但缺 submodule 会让 git 工作树处于脏状态；
+          # check-strings-sync.sh 也会扫描其 res 目录。
           submodules: true
 
       # 第一道门：标签必须形如 vXX.XX.XX，且打在 laocanmou 分支的最新提交上。
@@ -89,6 +98,36 @@ jobs:
           tools/check-license-headers.sh
           tools/check-strings-sync.sh
           python3 tools/check-tool-schemas.py
+
+      # 单次 Gradle 调用：单测与 lint 共享配置/守护进程并按 --parallel 并发。
+      - name: Unit tests and lint
+        run: ./gradlew test :app:lintRelease --parallel
+
+  # 打包线：版本派生 + 签名 + assembleRelease + 成品校验。
+  # 不依赖 verify，与其并行执行；产物只上传为流水线制品。
+  build:
+    name: Build signed APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install SDK platform
+        run: |
+          SDKMGR="$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -1)"
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "platforms;android-37.0" "build-tools;37.0.0" > /dev/null
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       # tag 是版本号的唯一事实来源：versionName/versionCode 均由 tag 派生并
       # 注入后续构建（-Pbaic.versionName/-Pbaic.versionCode）。仓库内
@@ -152,12 +191,6 @@ jobs:
             exit 1
           fi
 
-      - name: Unit tests
-        run: ./gradlew test
-
-      - name: Lint
-        run: ./gradlew :app:lintRelease
-
       - name: Decode release keystore
         run: echo "$BAIC2_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/baic2-release.keystore"
 
@@ -168,6 +201,7 @@ jobs:
           ./gradlew :app:assembleRelease
           -Pbaic.versionName="$BAIC_VERSION_NAME"
           -Pbaic.versionCode="$BAIC_VERSION_CODE"
+          --parallel
 
       - name: Verify APK signature
         run: |
@@ -197,14 +231,35 @@ jobs:
           APK="$(ls *.apk | head -n1)"
           sha256sum "$APK" > app-release.apk.sha256
 
-      # 构建产物直接从工作区上传发布，不经过中间制品。
+      # 打包产物作为流水线制品交给 publish 作业，不再重复构建。
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/*.sha256
+          if-no-files-found: error
+
+  # 发布线：只有 verify（质量门）与 build（打包校验）都变绿才执行。
+  publish:
+    name: Publish GitHub release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           files: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/apk/release/*.sha256
+            dist/*.apk
+            dist/*.sha256
           generate_release_notes: true
           draft: false
           # 带连字符的预发布标签（如 v0.3.1-rc1）标记为 prerelease。

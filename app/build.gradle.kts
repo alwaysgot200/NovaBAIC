@@ -59,10 +59,13 @@ android {
         versionName = providers.gradleProperty("baic.versionName").orNull
             ?: "0.3.2"
 
-        // assists-opcv 传递的 OpenCV 4.9 AAR 含 4 ABI 原生库；debug 保留 x86_64
-        // 供模拟器冒烟，release 收敛双 ABI 控体积（方案 §21.1 / 项目铁律 ABI 基线）。
+        // ABI 按变体分流。AGP 会把 defaultConfig 与 buildType 的 abiFilters 合并
+        // 取并集，所以默认只声明发行基线 arm64-v8a；debug 显式补齐模拟器冒烟所需
+        // 的 x86_64 与 32 位兼容的 armeabi-v7a，release 不写 ndk 块、严格只打
+        // arm64-v8a（v0.3.6 发行包曾因 release 里 clear() 清不掉 defaultConfig
+        // 的 x86_64，多打进 67MB 原生库）。
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
@@ -85,17 +88,20 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "DEV_DEEPSEEK_API_KEY", "\"$devDeepseekApiKey\"")
+            // 模拟器冒烟需要 x86_64；显式列全三 ABI，无论 AGP 合并语义是并集
+            // 还是覆盖都得到同样的集合。
+            ndk {
+                abiFilters.clear()
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            }
         }
         release {
             buildConfigField("String", "DEV_DEEPSEEK_API_KEY", "\"\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // release 收敛双 ABI（模拟器不跑 release）
-            ndk {
-                abiFilters.clear()
-                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-            }
+            // ABI 由 defaultConfig 严格限定为 arm64-v8a（见上），release 不写
+            // ndk 块：发行包不再携带 armeabi-v7a / x86_64 的原生库。
             val releaseSigning = signingConfigs.getByName("release")
             if (releaseSigning.storeFile != null) {
                 signingConfig = releaseSigning
