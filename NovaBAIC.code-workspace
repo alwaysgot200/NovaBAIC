@@ -1,14 +1,8 @@
 {
   "folders": [
     {
-      "path": ".",
-    },
-    {
-      "path": "../Secrets",
-    },
-    {
-      "path": "D:/work/autojs6_Management",
-    },
+      "path": "."
+    }
   ],
   "trae": {
     "workspaceId": "398035703cce34e7fd770d7dea0f4363",
