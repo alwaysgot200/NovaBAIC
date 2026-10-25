@@ -106,6 +106,16 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:label="@string/float_settings_title" />
+        <activity
+            android:name=".floatball.account.AccountActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:label="@string/float_account_manage_title" />
+        <activity
+            android:name=".floatball.account.RechargeActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:label="@string/float_recharge_title" />
 
         <activity
             android:name=".floatball.AdvisorProfileActivity"

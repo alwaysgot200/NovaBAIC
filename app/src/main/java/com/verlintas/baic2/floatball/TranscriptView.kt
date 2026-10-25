@@ -22,6 +22,7 @@ package com.verlintas.baic2.floatball
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.text.SpannableStringBuilder
@@ -43,6 +44,7 @@ import android.widget.Toast
 import com.verlintas.baic2.R
 import com.verlintas.baic2.core.model.ChatMessage
 import com.verlintas.baic2.core.model.ChatRole
+import com.verlintas.baic2.floatball.account.RechargeActivity
 import com.verlintas.baic2.floatball.advisor.strategy.ReplySuggestions
 import com.verlintas.baic2.floatball.advisor.strategy.TacticalBrief
 
@@ -691,6 +693,7 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
                 "no_response" -> context.getString(R.string.float_ask_error_no_response)
                 "network" -> context.getString(R.string.float_ask_error_network)
                 "regenerate_failed" -> context.getString(R.string.float_ask_regen_failed)
+                "no_points" -> noPointsText()
                 else -> context.getString(R.string.float_ask_failed, status.reason)
             }
             ScreenAdvisor.Status.Idle -> ""
@@ -716,6 +719,37 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
             bubbles[key]!!
         }
         holder.text.text = text
+        // 「余额不足，请充值」的「充值」是可点链接：Spanned 文本才挂 LinkMovementMethod，
+        // 纯文本摘掉避免状态行误吃点击。
+        holder.text.movementMethod = if (text is Spanned) LinkMovementMethod.getInstance() else null
+    }
+
+    /** 「余额不足，请充值」：「充值」可点 → 购买充值 WebView 页（[RechargeActivity]）。 */
+    private fun noPointsText(): CharSequence {
+        val full = context.getString(R.string.float_ask_no_points)
+        val linkLabel = context.getString(R.string.float_recharge_link)
+        val start = full.indexOf(linkLabel)
+        if (start < 0) return full
+        return SpannableStringBuilder(full).apply {
+            setSpan(
+                object : ClickableSpan() {
+                    override fun onClick(widget: View) {
+                        context.startActivity(
+                            Intent(context, RechargeActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+
+                    override fun updateDrawState(ds: TextPaint) {
+                        ds.color = LINK_COLOR
+                        ds.isUnderlineText = true
+                    }
+                },
+                start,
+                start + linkLabel.length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
     }
 
     private fun compactTokens(n: Long): String = when {

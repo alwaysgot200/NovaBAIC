@@ -129,6 +129,10 @@ class FloatBallService : Service() {
     @Inject
     lateinit var imChatNavigator: com.verlintas.baic2.floatball.auto.ImChatNavigator
 
+    /** 好参谋账号门（商业化 P0）：未登录不进入服务形态，拉起登录页后停服。 */
+    @Inject
+    lateinit var accountManager: com.verlintas.baic2.floatball.account.AccountManager
+
     private enum class Mode { IDLE, ONESHOT, RECORDING }
 
     private var mode = Mode.IDLE
@@ -213,6 +217,26 @@ class FloatBallService : Service() {
         // 保活降级路径可能先挂了占位 overlay，正式球出现前摘除。
         keepAliveManager.removePlaceholderOverlay()
         startInForeground()
+        if (!accountManager.isLoggedIn) {
+            // 登录门（商业化 P0）：未登录不得进入服务形态。此处不能提前
+            // return——onDestroy 无条件 unregisterReceiver 会因未注册而崩；
+            // post 到 onCreate 收尾后统一停服，走完整生命周期对称清理。
+            // 保活心跳/闹钟一并撤销，防止「拉起→停服」循环复活。
+            mainHandler.post {
+                toast(R.string.float_login_required)
+                keepAliveManager.onUserExit()
+                proactiveCheckpoint.cancel()
+                runCatching {
+                    startActivity(
+                        Intent(this, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            putExtra(EXTRA_FROM_FLOAT, true)
+                        },
+                    )
+                }
+                stopSelf()
+            }
+        }
         keepAliveManager.onServiceCreated()
         showBall()
         // M2-b：开机/服务重启后检点闹钟重挂（总闸关时内部自会撤销）。

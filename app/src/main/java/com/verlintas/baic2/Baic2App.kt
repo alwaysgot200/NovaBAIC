@@ -59,9 +59,11 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.MailOutline
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.HorizontalDivider
@@ -114,6 +116,7 @@ import com.verlintas.baic2.feature.settings.BuildInfo
 import com.verlintas.baic2.feature.settings.SettingsScreen
 import com.verlintas.baic2.feature.tasks.TasksScreen
 import com.verlintas.baic2.floatball.FloatSettingsActivity
+import com.verlintas.baic2.floatball.account.AccountActivity
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -143,6 +146,7 @@ fun Baic2App(
     onConversationDeepLinkConsumed: () -> Unit = {},
     initialTab: String? = null,
     onTabConsumed: () -> Unit = {},
+    accountName: String? = null,
 ) {
     var destination by rememberSaveable { mutableStateOf(Baic2Destination.Chats) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -267,6 +271,15 @@ fun Baic2App(
                     destination = dest
                     dockOpen = false
                 },
+                onOpenAdvisorSettings = {
+                    dockOpen = false
+                    context.startActivity(Intent(context, FloatSettingsActivity::class.java))
+                },
+                onOpenAccount = {
+                    dockOpen = false
+                    context.startActivity(Intent(context, AccountActivity::class.java))
+                },
+                accountName = accountName,
             )
         }
     }
@@ -363,6 +376,9 @@ private fun DockAnchor(
     open: Boolean,
     onToggle: () -> Unit,
     onSelect: (Baic2Destination) -> Unit,
+    onOpenAdvisorSettings: () -> Unit,
+    onOpenAccount: () -> Unit,
+    accountName: String? = null,
 ) {
     val haptics = LocalHapticFeedback.current
 
@@ -397,6 +413,15 @@ private fun DockAnchor(
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onSelect(dest)
                 },
+                onOpenAdvisorSettings = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onOpenAdvisorSettings()
+                },
+                onOpenAccount = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onOpenAccount()
+                },
+                accountName = accountName,
             )
         }
     }
@@ -471,6 +496,9 @@ private fun DockTrigger(
 private fun AnimatedVisibilityScope.DockPanel(
     current: Baic2Destination,
     onSelect: (Baic2Destination) -> Unit,
+    onOpenAdvisorSettings: () -> Unit,
+    onOpenAccount: () -> Unit,
+    accountName: String? = null,
 ) {
     val shape = RoundedCornerShape(16.dp)
 
@@ -507,6 +535,18 @@ private fun AnimatedVisibilityScope.DockPanel(
                 ),
             )
         }
+
+        // 好参谋扩展入口（非导航目的地）：设置 / 登录。
+        DockActionItem(
+            icon = Icons.Outlined.Build,
+            label = stringResource(R.string.float_nav_advisor_settings),
+            onClick = onOpenAdvisorSettings,
+        )
+        DockActionItem(
+            icon = Icons.Outlined.Person,
+            label = accountName ?: stringResource(R.string.float_nav_login),
+            onClick = onOpenAccount,
+        )
     }
 }
 
@@ -576,5 +616,49 @@ private fun DockItem(
                     .background(MaterialTheme.colorScheme.primary),
             )
         }
+    }
+}
+
+/** 好参谋扩展动作项（非导航目的地）：与 [DockItem] 同排版，无选中态。 */
+@Composable
+private fun DockActionItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(12.dp)
+    val activate = onClick
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(shape)
+            .clearAndSetSemantics {
+                contentDescription = label
+                role = Role.Button
+                onClick(label = label) {
+                    activate()
+                    true
+                }
+            }
+            .clickable(onClick = activate)
+            .padding(horizontal = Baic2Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.sm),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
     }
 }

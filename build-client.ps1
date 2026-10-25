@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     NovaBAIC (BetterAIChat2) Android 客户端 构建 / 部署 / 日志工具 (Windows PowerShell 5.1+)
 

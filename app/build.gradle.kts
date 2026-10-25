@@ -43,6 +43,23 @@ val devProperties = Properties().apply {
 }
 val devDeepseekApiKey: String = devProperties.getProperty("dev.deepseekApiKey") ?: ""
 
+// 服务器地址按环境分流（server-config.properties，App 内无运行时入口）：
+// server.env（或 -Pbaic.serverEnv）可显式指定 test/prod；留空时按构建类型
+// 自动分流——debug 取测试值、release 取生产值，注入 BuildConfig.SERVER_ORIGIN。
+val serverConfig = Properties().apply {
+    val file = rootProject.file("server-config.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val serverOriginProd: String = serverConfig.getProperty("server.origin.prod")
+    ?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: "https://autojs6.80fafa.com"
+val serverOriginTest: String = serverConfig.getProperty("server.origin.test")
+    ?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: serverOriginProd
+val serverEnv: String = (providers.gradleProperty("baic.serverEnv").orNull
+    ?: serverConfig.getProperty("server.env"))
+    ?.trim()?.lowercase().orEmpty()
+val serverOriginDebug: String = if (serverEnv == "prod") serverOriginProd else serverOriginTest
+val serverOriginRelease: String = if (serverEnv == "test") serverOriginTest else serverOriginProd
+
 android {
     namespace = "com.verlintas.baic2"
     compileSdk = 37
@@ -88,6 +105,8 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "DEV_DEEPSEEK_API_KEY", "\"$devDeepseekApiKey\"")
+            // 测试环境服务器（server-config.properties）
+            buildConfigField("String", "SERVER_ORIGIN", "\"$serverOriginDebug\"")
             // 模拟器冒烟需要 x86_64；显式列全三 ABI，无论 AGP 合并语义是并集
             // 还是覆盖都得到同样的集合。
             ndk {
@@ -97,6 +116,8 @@ android {
         }
         release {
             buildConfigField("String", "DEV_DEEPSEEK_API_KEY", "\"\"")
+            // 生产环境服务器（server-config.properties）
+            buildConfigField("String", "SERVER_ORIGIN", "\"$serverOriginRelease\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

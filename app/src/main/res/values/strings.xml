@@ -1013,4 +1013,66 @@
     <string name="float_info_delete_hint">只删除本应用的档案记录，不影响真实通讯录。</string>
     <string name="float_info_confirmed_toast">已确认并写入长期记忆</string>
 
+    <!-- 2026-10-24 商业化 P0：登录门 + 账号管理（REASON_* 错误映射文案） -->
+    <string name="float_account_login_title">登录好参谋</string>
+    <string name="float_account_login_subtitle">登录后即可使用屏幕参谋与 AI 问答</string>
+    <string name="float_account_username_hint">账号</string>
+    <string name="float_account_password_hint">密码</string>
+    <string name="float_account_password_show">显示密码</string>
+    <string name="float_account_password_hide">隐藏密码</string>
+    <string name="float_account_captcha_hint">验证码</string>
+    <string name="float_account_captcha_refresh">换一张</string>
+    <string name="float_account_login_action">登录</string>
+    <string name="float_account_login_busy">正在登录…</string>
+    <string name="float_account_register_action">没有账号？注册一个</string>
+    <string name="float_account_register_title">注册账号</string>
+    <string name="float_account_register_hint">注册后回到本页登录即可</string>
+    <string name="float_account_error_network">网络异常，请稍后重试</string>
+    <string name="float_account_error_generic">登录失败：%1$s</string>
+    <string name="float_account_error_server">服务暂不可用，请稍后重试</string>
+    <string name="float_account_error_bad_response">服务响应异常，请稍后重试</string>
+    <string name="float_account_manage_title">账号管理</string>
+    <string name="float_account_entry">账号管理</string>
+    <string name="float_account_entry_hint">登录账号、积分与卡密</string>
+    <string name="float_account_section_account">账号</string>
+    <string name="float_account_username">账号：%1$s</string>
+    <string name="float_account_expire">有效期至：%1$s</string>
+    <string name="float_account_section_points">积分</string>
+    <string name="float_account_points_balance">有效总积分：%1$s</string>
+    <string name="float_account_points_hint">多张卡密的积分合并为总积分，按绑定先后依次消耗</string>
+    <string name="float_account_points_expire">积分有效期至：%1$s</string>
+    <string name="float_account_points_expire_never">积分不过期</string>
+    <string name="float_account_points_refresh">刷新</string>
+    <string name="float_account_points_loading">正在查询…</string>
+    <string name="float_account_section_card">卡密</string>
+    <string name="float_account_card_list_title">有效卡密</string>
+    <string name="float_account_card_empty">暂无有效卡密，输入卡密后点「绑定使用」</string>
+    <string name="float_account_card_status_active">使用中</string>
+    <string name="float_account_card_status_waiting">待用</string>
+    <string name="float_account_card_no_row">卡号：%1$s</string>
+    <string name="float_account_card_points">积分余额：%1$s</string>
+    <string name="float_account_card_expire">到期日期：%1$s</string>
+    <string name="float_account_card_hint">多张卡密按绑定先后排队消耗，一张用完自动用下一张；过期或停用的卡密不再显示</string>
+    <string name="float_account_card_placeholder">请输入卡密</string>
+    <string name="float_account_card_enable">绑定使用</string>
+    <string name="float_account_card_busy">正在绑定…</string>
+    <string name="float_account_card_success">卡密已绑定，积分已入账</string>
+    <string name="float_account_card_add">添加卡密</string>
+    <string name="float_account_card_remove">移除此条</string>
+    <string name="float_account_logout">退出登录</string>
+    <string name="float_account_error_op">操作失败：%1$s</string>
+    <string name="float_account_error_card_invalid">请填写卡密</string>
+    <string name="float_account_error_no_agent">未找到默认 AI 供应商，请先在主界面完成模型配置</string>
+    <string name="float_account_error_gateway">AI 网关凭证写入失败，请重试</string>
+    <string name="float_login_required">请先登录好参谋账号</string>
+    <string name="float_account_section_profile">账号信息</string>
+    <string name="float_account_name_row">账号名称：%1$s</string>
+    <string name="float_ask_no_points">余额不足，请充值</string>
+    <string name="float_recharge_link">充值</string>
+    <string name="float_recharge_title">购买充值</string>
+
+    <!-- 主页左上角菜单好参谋入口 -->
+    <string name="float_nav_advisor_settings">好参谋设置</string>
+    <string name="float_nav_login">登录</string>
+
 </resources>

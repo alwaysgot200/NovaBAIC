@@ -2710,7 +2710,7 @@ class ScreenAdvisor @Inject constructor(
                     usageOut += chunk.outputTokens.coerceAtLeast(0L)
                     onUsage(chunk.inputTokens, chunk.outputTokens)
                 }
-                is AdvisorResponder.Chunk.Failure -> failureReason = chunk.reason
+                is AdvisorResponder.Chunk.Failure -> failureReason = noPointsReason(chunk.reason) ?: chunk.reason
                 AdvisorResponder.Chunk.Done -> Unit
             }
         }
@@ -2739,7 +2739,7 @@ class ScreenAdvisor @Inject constructor(
             return@coroutineScope if (sawText) {
                 TurnOutcome.PartialOutputFailure(error.message ?: "unknown", live.toString())
             } else {
-                TurnOutcome.ZeroOutputFailure(error.message ?: REASON_NETWORK)
+                TurnOutcome.ZeroOutputFailure(noPointsReason(error.message) ?: error.message ?: REASON_NETWORK)
             }
         }
 
@@ -2895,7 +2895,7 @@ class ScreenAdvisor @Inject constructor(
                     usageOut += (event.completionTokens ?: 0L).coerceAtLeast(0L)
                     onUsage(event.promptTokens ?: 0L, event.completionTokens ?: 0L)
                 }
-                is AgentEvent.Failed -> failureReason = event.error.message
+                is AgentEvent.Failed -> failureReason = noPointsReason(event.error.message) ?: event.error.message
                 else -> Unit
             }
         }
@@ -2923,7 +2923,7 @@ class ScreenAdvisor @Inject constructor(
             return@coroutineScope if (sawText) {
                 TurnOutcome.PartialOutputFailure(error.message ?: "unknown", live.toString())
             } else {
-                TurnOutcome.ZeroOutputFailure(error.message ?: REASON_NETWORK)
+                TurnOutcome.ZeroOutputFailure(noPointsReason(error.message) ?: error.message ?: REASON_NETWORK)
             }
         }
 
@@ -3461,6 +3461,27 @@ class ScreenAdvisor @Inject constructor(
         const val REASON_FIRST_TEXT_TIMEOUT = "first_text_timeout"
         const val REASON_NETWORK = "network"
         const val REASON_NO_RESPONSE = "no_response"
+
+        /** 余额不足（网关额度/鉴权拒绝）：展示层映射「余额不足，请充值」（充值可点）。 */
+        const val REASON_NO_POINTS = "no_points"
+
+        /** 网关额度/鉴权拒绝报文的特征词（小写匹配；中文不受大小写影响）。 */
+        private val NO_POINTS_MARKERS = listOf(
+            "8007", "积分不足", "余额不足", "请充值", "请换卡",
+            "insufficient", "budget", "quota", "exceeded",
+            "401", "403", "unauthorized", "forbidden",
+            "api key", "api_key", "authentication",
+        )
+
+        /**
+         * 网关额度/鉴权拒绝报文 → [REASON_NO_POINTS]，否则 null（保留原原因）。
+         * 服务端积分不足（8007）会回滚并吊销该卡 LiteLLM key，App 侧只能看到
+         * 网关 auth/budget 类拒绝报文，故按报文特征归类（商业化方案 §344）。
+         */
+        private fun noPointsReason(message: String?): String? {
+            val text = message?.lowercase() ?: return null
+            return if (NO_POINTS_MARKERS.any { text.contains(it) }) REASON_NO_POINTS else null
+        }
 
         /** P3 §七：增强档战术预调用失败/被拒（超时/解析失败），静默退化为智能档。 */
         const val REASON_ENHANCED_FALLBACK = "enhanced_fallback"

@@ -507,6 +507,33 @@ private fun AdvisorSettingsScreen(
                 )
                 // 保活入口卡已迁主框架「设置 → 权限」页（统一一处）。
 
+                // 账号管理：登录账号、积分钱包与卡密启用（商业化方案 §5）。
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = scheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable {
+                            context.startActivity(
+                                Intent(context, com.verlintas.baic2.floatball.account.AccountActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        Text(
+                            text = stringResource(R.string.float_account_entry),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = stringResource(R.string.float_account_entry_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = scheme.surfaceContainer,
