@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Debug-only: allows plain HTTP to a local mock server during development. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:usesCleartextTraffic="true" />
+    <application android:usesCleartextTraffic="true">
+        <!-- 自动化测试：演示数据导入/重置入口（仅 debug 源集，release 不含） -->
+        <receiver
+            android:name=".floatball.demo.DemoSeedReceiver"
+            android:enabled="true"
+            android:exported="true" />
+    </application>
 </manifest>

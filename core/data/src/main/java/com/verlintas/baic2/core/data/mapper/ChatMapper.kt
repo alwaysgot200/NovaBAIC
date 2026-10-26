@@ -127,6 +127,7 @@ class ChatMapper @Inject constructor(private val json: Json) {
         starred = entity.starred,
         usageInput = entity.usageInput,
         usageOutput = entity.usageOutput,
+        usagePointsMilli = entity.usagePointsMilli,
     )
 
     fun messageToEntity(message: ChatMessage): MessageEntity = MessageEntity(
@@ -146,6 +147,7 @@ class ChatMapper @Inject constructor(private val json: Json) {
         starred = message.starred,
         usageInput = message.usageInput,
         usageOutput = message.usageOutput,
+        usagePointsMilli = message.usagePointsMilli,
     )
 
     /** Ephemeral base64 payloads are never persisted. */

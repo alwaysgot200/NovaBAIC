@@ -170,6 +170,7 @@
 | `FloatCaptureActivity.kt` + `FloatCaptureBridge.kt` | MediaProjection 授权中转（系统要求 Activity 发起） | 结果回传后立即 `clear()`，防泄漏 |
 | `FloatSettingsActivity.kt` | 设置页（抓帧节奏/时长上限/权限直达/会话管理） | 只管好参谋专属项 |
 | `OverlayPermissionScreen.kt` | 悬浮窗权限引导页（Compose） | 独立文件，不内嵌进 MainActivity |
+| `update/`（`AppUpdateManager` / `AppUpdateApi` / `AppUpdateDownloader` / `AppUpdateInstaller` / `UpdateGate`） | 服务器版本检查、APK 下载、签名校验、PackageInstaller 会话覆盖安装与更新门 | 只访问自有服务器 manifest；安装前校验包名/versionCode/签名；release 恒启用，debug 仅配置 `dev.updateManifestUrl` 时启用 |
 
 新增好参谋能力时延续该分层：**编排进 Advisor/Perceiver、视觉进 FloatUi、接线进 Service**。
 错误传递用 reason 字符串（`REASON_*` 常量），展示层负责映射成用户文案。
@@ -179,7 +180,7 @@
 | 文件 | 允许的改动 |
 | --- | --- |
 | `app/src/main/AndroidManifest.xml` | 追加 `uses-permission`、`service`/`activity` 声明 |
-| `app/src/main/java/.../MainActivity.kt` | 悬浮窗权限门 + 冷启动自动隐藏 + 2 个 extra 常量；新逻辑一律挪到 floatball 包，不在此文件堆代码 |
+| `app/src/main/java/.../MainActivity.kt` | 悬浮窗权限门 + 冷启动自动隐藏 + 2 个 extra 常量 + 更新门一行委托（`AdvisorUpdateGate`）；新逻辑一律挪到 floatball 包，不在此文件堆代码 |
 | `app/src/main/res/values/strings.xml` | 追加 `float_*` 前缀的键；品牌名（`app_name` 等）以本分支口径改值；可用同名键覆盖上游库资源（device:impl/feature:settings，app 资源合并优先级更高，勿改库文件） |
 | `gradle/wrapper/gradle-wrapper.properties` | 镜像与超时（本机网络所需） |
 

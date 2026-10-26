@@ -93,6 +93,10 @@ internal object FloatUi {
     private val BUSY_COLOR = 0xFF7C8696.toInt()
     private const val BUSY_SCRIM = 0x55FFFFFF
 
+    /** 自动托管运行标记：右上角脉冲红点颜色 / 直径。 */
+    private val AUTO_DOT_COLOR = 0xFFE53935.toInt()
+    private const val AUTO_DOT_SIZE_DP = 10
+
     /** 悬浮球三态：常态 / 忙碌（旋转环）/ 录制（红球+计数徽章）。 */
     enum class BallMode { NORMAL, BUSY, RECORDING }
 
@@ -144,6 +148,14 @@ internal object FloatUi {
             }
             visibility = View.GONE
         }
+        // 自动托管运行标记（方案 §5.3.3）：右上角脉冲红点，与未读计数徽章互斥。
+        val autoDot = View(context).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(AUTO_DOT_COLOR)
+            }
+            visibility = View.GONE
+        }
         val root = FrameLayout(context).apply {
             // 不设 elevation: overlay 的 surfaceInsets 会让触摸坐标与视觉
             // 整体偏移 (阴影像素被计入窗口), 立体感由描边承担。
@@ -154,6 +166,10 @@ internal object FloatUi {
             addView(scrim, FrameLayout.LayoutParams(size, size))
             addView(spinner, FrameLayout.LayoutParams(size, size))
             addView(badge)
+            addView(autoDot, FrameLayout.LayoutParams(dp(context, AUTO_DOT_SIZE_DP), dp(context, AUTO_DOT_SIZE_DP)).apply {
+                gravity = Gravity.TOP or Gravity.END
+                setMargins(0, dp(context, 2), dp(context, 2), 0)
+            })
         }
         badge.layoutParams = (badge.layoutParams as FrameLayout.LayoutParams).apply {
             gravity = Gravity.TOP or Gravity.END
@@ -161,7 +177,7 @@ internal object FloatUi {
             height = dp(context, 20)
             setMargins(0, dp(context, 1), dp(context, 1), 0)
         }
-        return BallView(root, disc, scrim, spinner, badge)
+        return BallView(root, disc, scrim, spinner, badge, autoDot)
     }
 
     /** 悬浮球句柄：服务层按状态机切换外观。 */
@@ -171,8 +187,10 @@ internal object FloatUi {
         private val scrim: View,
         private val spinner: View,
         private val badge: TextView,
+        private val autoDot: View,
     ) {
         private var spinning = false
+        private var autoRunning = false
 
         fun setMode(mode: BallMode, context: Context) {
             when (mode) {
@@ -182,6 +200,7 @@ internal object FloatUi {
                     scrim.visibility = View.GONE
                     (disc.background as? GradientDrawable)?.setColor(BALL_COLOR)
                     badge.visibility = View.GONE
+                    setAutoRunning(false)
                 }
                 BallMode.BUSY -> {
                     spinning = true
@@ -189,6 +208,7 @@ internal object FloatUi {
                     scrim.visibility = View.VISIBLE
                     spinner.visibility = View.VISIBLE
                     badge.visibility = View.GONE
+                    setAutoRunning(false)
                     spinLoop()
                 }
                 BallMode.RECORDING -> {
@@ -201,14 +221,49 @@ internal object FloatUi {
             }
         }
 
-        /** 连续模式红点计数：0 隐藏，>0 显示次数。 */
+        /** 连续模式红点计数：0 隐藏，>0 显示次数；自动托管中由脉冲红点接管。 */
         fun setBadge(count: Int) {
-            if (count <= 0) {
+            if (autoRunning || count <= 0) {
                 badge.visibility = View.GONE
             } else {
                 badge.visibility = View.VISIBLE
                 badge.text = if (count > 99) "99+" else count.toString()
             }
+        }
+
+        /** 自动托管运行标记：右上角红点脉冲，自动态下隐藏未读计数徽章。 */
+        fun setAutoRunning(enabled: Boolean) {
+            autoRunning = enabled
+            if (!enabled) {
+                autoDot.animate().cancel()
+                autoDot.visibility = View.GONE
+                autoDot.scaleX = 1f
+                autoDot.scaleY = 1f
+                autoDot.alpha = 1f
+                return
+            }
+            badge.visibility = View.GONE
+            autoDot.visibility = View.VISIBLE
+            pulseDot()
+        }
+
+        private fun pulseDot() {
+            if (!autoRunning) return
+            autoDot.animate()
+                .scaleX(1.35f)
+                .scaleY(1.35f)
+                .alpha(0.55f)
+                .setDuration(700L)
+                .withEndAction {
+                    autoDot.animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .alpha(1f)
+                        .setDuration(700L)
+                        .withEndAction { autoDot.post { pulseDot() } }
+                        .start()
+                }
+                .start()
         }
 
         private fun spinLoop() {

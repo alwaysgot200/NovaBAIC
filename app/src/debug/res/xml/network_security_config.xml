@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only network policy: 真机通过局域网访问开发服务器时为明文 HTTP。
+  资源同名覆盖 main 配置，release 构建不包含本文件（release 仍只放行 loopback）。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

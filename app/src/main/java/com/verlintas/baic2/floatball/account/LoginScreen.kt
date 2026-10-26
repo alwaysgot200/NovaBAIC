@@ -18,13 +18,14 @@
 
 package com.verlintas.baic2.floatball.account
 
-import android.annotation.SuppressLint
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.webkit.WebView
-import android.webkit.WebViewClient
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,13 +34,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -59,6 +66,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -66,11 +74,14 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.verlintas.baic2.R
@@ -84,8 +95,9 @@ import kotlinx.coroutines.withContext
  * 好参谋登录门（商业化方案 §6.1）：未登录、或装包/升级后首启（装包登录门）时主界面只出本页。
  *
  * 登录成功回调 [onLoggedIn]；返回键/退出回调 [onExit]（调用方一般 moveTaskToBack）。
- * 注册不在 App 内自建协议——内嵌 WebView 打开站点注册页（[AccountManager.registerUrl]
- * 带 productId=haocanmou，注册后即获好参谋产品角色），注册完成回本页登录。
+ * 注册走 App 原生表单（[RegisterScreen]，productId=haocanmou，注册即用），
+ * 不再内嵌站点 WebView 页面——WebView 场景下输入法插入点异常（字符倒序）与
+ * 软键盘遮挡输入框无法在客户端可靠修复，且截图受限。注册成功后回本页并预填邮箱。
  * 服务器地址不向用户暴露：由 server-config.properties 按环境构建注入（[AccountApi.SERVER_ORIGIN]）。
  * 错误展示遵循 REASON_* 纪律：此处统一映射 strings.xml 文案。
  */
@@ -96,14 +108,20 @@ internal fun LoginScreen(
     onExit: () -> Unit,
 ) {
     var registerShown by remember { mutableStateOf(false) }
+    var prefillUsername by remember { mutableStateOf("") }
     if (registerShown) {
-        RegisterWebViewScreen(
-            registerUrl = accountManager.registerUrl(),
+        RegisterScreen(
+            accountManager = accountManager,
             onBack = { registerShown = false },
+            onRegistered = { email ->
+                prefillUsername = email
+                registerShown = false
+            },
         )
     } else {
         LoginForm(
             accountManager = accountManager,
+            initialUsername = prefillUsername,
             onLoggedIn = onLoggedIn,
             onExit = onExit,
             onRegister = { registerShown = true },
@@ -114,12 +132,13 @@ internal fun LoginScreen(
 @Composable
 private fun LoginForm(
     accountManager: AccountManager,
+    initialUsername: String,
     onLoggedIn: () -> Unit,
     onExit: () -> Unit,
     onRegister: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var username by remember { mutableStateOf("") }
+    var username by remember(initialUsername) { mutableStateOf(initialUsername) }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var captchaCode by remember { mutableStateOf("") }
@@ -172,6 +191,7 @@ private fun LoginForm(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(innerPadding)
+                    .imePadding()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = Baic2Spacing.xl, vertical = Baic2Spacing.xxl),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -362,17 +382,108 @@ private fun CaptchaImage(img: String, modifier: Modifier = Modifier) {
     }
 }
 
+/** 注册邮箱格式（与服务端 DTO 一致：6-50 字符的标准邮箱）。 */
+private val RegisterEmailRegex = Regex("^[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}$")
+
+private fun isValidRegisterEmail(value: String): Boolean {
+    val trimmed = value.trim()
+    return trimmed.length in 6..50 && RegisterEmailRegex.matches(trimmed)
+}
+
 /**
- * 注册页（站点后台 SPA 注册路由，内嵌 WebView）。
- * 注册成功后用户返回登录页自行登录（P0 不做注册回跳协议）。
+ * 注册密码（服务端 `IsStrongPassword` 默认规则与 `Length(6,20)` 的交集）：
+ * 8-20 位，且同时包含大写字母、小写字母与数字。
  */
-@SuppressLint("SetJavaScriptEnabled")
+private fun isStrongRegisterPassword(value: String): Boolean =
+    value.length in 8..20 &&
+        value.any { it.isUpperCase() } &&
+        value.any { it.isLowerCase() } &&
+        value.any { it.isDigit() }
+
+/**
+ * 原生注册页（替代内嵌站点 WebView 方案）。
+ *
+ * 四字段：邮箱（即登录账号）、密码、确认密码、图形验证码；昵称/企业名称/联系电话
+ * 由服务端按邮箱前缀生成默认值（商业化方案 §5.2 注册即用，productId=haocanmou，
+ * 只绑好参谋产品角色、不发激活邮件）。注册成功回登录页并预填邮箱。
+ *
+ * 输入法与键盘：Compose 原生输入框没有 WebView 的插入点异常（字符从行首倒插），
+ * 外层 [imePadding] 在软键盘弹出时把表单整体上移，聚焦输入框始终可见可编辑。
+ */
 @Composable
-private fun RegisterWebViewScreen(
-    registerUrl: String,
+private fun RegisterScreen(
+    accountManager: AccountManager,
     onBack: () -> Unit,
+    onRegistered: (String) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val scheme = MaterialTheme.colorScheme
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var confirmVisible by remember { mutableStateOf(false) }
+    var captchaCode by remember { mutableStateOf("") }
+    var captcha by remember { mutableStateOf<AccountApi.Captcha?>(null) }
+    var captchaLoading by remember { mutableStateOf(false) }
+    var emailError by remember { mutableStateOf(false) }
+    var passwordError by remember { mutableStateOf(false) }
+    var confirmError by remember { mutableStateOf(false) }
+    var codeError by remember { mutableStateOf(false) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var registeredEmail by remember { mutableStateOf<String?>(null) }
+
+    suspend fun refreshCaptcha() {
+        captchaLoading = true
+        captcha = accountManager.fetchCaptcha()
+        captchaCode = ""
+        codeError = false
+        captchaLoading = false
+    }
+
+    LaunchedEffect(Unit) { refreshCaptcha() }
+
+    fun validate(): Boolean {
+        emailError = !isValidRegisterEmail(email)
+        passwordError = !isStrongRegisterPassword(password)
+        confirmError = password != confirmPassword
+        codeError = captcha?.enabled == true && captchaCode.isBlank()
+        return !emailError && !passwordError && !confirmError && !codeError
+    }
+
+    fun submit() {
+        if (busy || !validate()) return
+        busy = true
+        errorText = null
+        scope.launch {
+            runCatching {
+                accountManager.register(
+                    email = email.trim().lowercase(),
+                    password = password,
+                    confirmPassword = confirmPassword,
+                    code = captchaCode.takeIf { captcha?.enabled == true && it.isNotBlank() },
+                    uuid = captcha?.uuid?.takeIf { captcha?.enabled == true },
+                )
+            }.onSuccess {
+                busy = false
+                registeredEmail = email.trim().lowercase()
+            }.onFailure { e ->
+                busy = false
+                val exception = e as? AccountException
+                errorText = exception?.serverMsg?.takeIf { it.isNotBlank() } ?: context.getString(
+                    when (exception?.reason) {
+                        AccountApi.REASON_NETWORK -> R.string.float_account_error_network
+                        AccountApi.REASON_BAD_RESPONSE -> R.string.float_account_error_bad_response
+                        else -> R.string.float_account_error_server
+                    },
+                )
+                // 验证码用后即焚：失败后立刻换一张，避免重复提交已消费的旧码
+                refreshCaptcha()
+            }
+        }
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
         AdvisorPage(
@@ -382,29 +493,363 @@ private fun RegisterWebViewScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .imePadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = Baic2Spacing.xl, vertical = Baic2Spacing.lg),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(
-                    text = stringResource(R.string.float_account_register_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant,
-                    modifier = Modifier.padding(
-                        horizontal = Baic2Spacing.lg,
-                        vertical = Baic2Spacing.sm,
-                    ),
-                )
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            webViewClient = WebViewClient()
-                            loadUrl(registerUrl)
+                Column(modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+                    val doneEmail = registeredEmail
+                    if (doneEmail != null) {
+                        RegisterSuccessCard(
+                            email = doneEmail,
+                            onLogin = { onRegistered(doneEmail) },
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.float_account_register_heading),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = stringResource(R.string.float_account_register_subtitle),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = scheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = Baic2Spacing.xs),
+                        )
+
+                        Spacer(Modifier.height(Baic2Spacing.xl))
+
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            color = scheme.surface,
+                            border = BorderStroke(1.dp, scheme.outlineVariant),
+                            shadowElevation = 2.dp,
+                        ) {
+                            Column(modifier = Modifier.padding(Baic2Spacing.lg)) {
+                                OutlinedTextField(
+                                    value = email,
+                                    onValueChange = {
+                                        email = it
+                                        emailError = false
+                                        errorText = null
+                                    },
+                                    label = { Text(stringResource(R.string.float_account_register_email_hint)) },
+                                    placeholder = {
+                                        Text(stringResource(R.string.float_account_register_email_placeholder))
+                                    },
+                                    singleLine = true,
+                                    enabled = !busy,
+                                    isError = emailError,
+                                    supportingText = if (emailError) {
+                                        { Text(stringResource(R.string.float_account_register_error_email)) }
+                                    } else {
+                                        null
+                                    },
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Email,
+                                        imeAction = ImeAction.Next,
+                                    ),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+
+                                OutlinedTextField(
+                                    value = password,
+                                    onValueChange = {
+                                        password = it
+                                        passwordError = false
+                                        confirmError = false
+                                        errorText = null
+                                    },
+                                    label = { Text(stringResource(R.string.float_account_password_hint)) },
+                                    placeholder = {
+                                        Text(stringResource(R.string.float_account_register_password_placeholder))
+                                    },
+                                    singleLine = true,
+                                    enabled = !busy,
+                                    isError = passwordError,
+                                    visualTransformation = if (passwordVisible) {
+                                        VisualTransformation.None
+                                    } else {
+                                        PasswordVisualTransformation()
+                                    },
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Password,
+                                        imeAction = ImeAction.Next,
+                                    ),
+                                    trailingIcon = {
+                                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                            Icon(
+                                                imageVector = if (passwordVisible) {
+                                                    IconPasswordHidden
+                                                } else {
+                                                    IconPasswordVisible
+                                                },
+                                                contentDescription = stringResource(
+                                                    if (passwordVisible) {
+                                                        R.string.float_account_password_hide
+                                                    } else {
+                                                        R.string.float_account_password_show
+                                                    },
+                                                ),
+                                            )
+                                        }
+                                    },
+                                    supportingText = if (passwordError) {
+                                        { Text(stringResource(R.string.float_account_register_error_password)) }
+                                    } else {
+                                        null
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = Baic2Spacing.md),
+                                )
+
+                                OutlinedTextField(
+                                    value = confirmPassword,
+                                    onValueChange = {
+                                        confirmPassword = it
+                                        confirmError = false
+                                        errorText = null
+                                    },
+                                    label = { Text(stringResource(R.string.float_account_register_confirm_hint)) },
+                                    singleLine = true,
+                                    enabled = !busy,
+                                    isError = confirmError,
+                                    visualTransformation = if (confirmVisible) {
+                                        VisualTransformation.None
+                                    } else {
+                                        PasswordVisualTransformation()
+                                    },
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Password,
+                                        imeAction = ImeAction.Next,
+                                    ),
+                                    trailingIcon = {
+                                        IconButton(onClick = { confirmVisible = !confirmVisible }) {
+                                            Icon(
+                                                imageVector = if (confirmVisible) {
+                                                    IconPasswordHidden
+                                                } else {
+                                                    IconPasswordVisible
+                                                },
+                                                contentDescription = stringResource(
+                                                    if (confirmVisible) {
+                                                        R.string.float_account_password_hide
+                                                    } else {
+                                                        R.string.float_account_password_show
+                                                    },
+                                                ),
+                                            )
+                                        }
+                                    },
+                                    supportingText = if (confirmError) {
+                                        { Text(stringResource(R.string.float_account_register_error_confirm)) }
+                                    } else {
+                                        null
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = Baic2Spacing.md),
+                                )
+
+                                if (captcha?.enabled == true) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = Baic2Spacing.md),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.sm),
+                                    ) {
+                                        OutlinedTextField(
+                                            value = captchaCode,
+                                            onValueChange = {
+                                                captchaCode = it
+                                                codeError = false
+                                                errorText = null
+                                            },
+                                            label = { Text(stringResource(R.string.float_account_captcha_hint)) },
+                                            singleLine = true,
+                                            enabled = !busy,
+                                            isError = codeError,
+                                            keyboardOptions = KeyboardOptions(
+                                                keyboardType = KeyboardType.Number,
+                                                imeAction = ImeAction.Done,
+                                            ),
+                                            keyboardActions = KeyboardActions(onDone = { submit() }),
+                                            supportingText = if (codeError) {
+                                                { Text(stringResource(R.string.float_account_register_error_code)) }
+                                            } else {
+                                                null
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        CaptchaBox(
+                                            img = captcha?.image.orEmpty(),
+                                            loading = captchaLoading,
+                                            onRefresh = { scope.launch { refreshCaptcha() } },
+                                        )
+                                    }
+                                    Text(
+                                        text = stringResource(R.string.float_account_register_captcha_tip),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = scheme.primary,
+                                        modifier = Modifier
+                                            .align(Alignment.End)
+                                            .padding(top = Baic2Spacing.xs)
+                                            .clickable { scope.launch { refreshCaptcha() } },
+                                    )
+                                }
+
+                                errorText?.let { message ->
+                                    Text(
+                                        text = message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = scheme.error,
+                                        modifier = Modifier.padding(top = Baic2Spacing.md),
+                                    )
+                                }
+
+                                Button(
+                                    onClick = { submit() },
+                                    enabled = !busy,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = Baic2Spacing.lg)
+                                        .height(48.dp),
+                                ) {
+                                    if (busy) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(Baic2Spacing.lg),
+                                            strokeWidth = Baic2Spacing.xxs,
+                                        )
+                                        Spacer(Modifier.width(Baic2Spacing.sm))
+                                        Text(stringResource(R.string.float_account_register_submit_busy))
+                                    } else {
+                                        Text(stringResource(R.string.float_account_register_submit))
+                                    }
+                                }
+                            }
                         }
-                    },
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = Baic2Spacing.md),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.float_account_register_have_account),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = scheme.onSurfaceVariant,
+                            )
+                            TextButton(onClick = onBack, enabled = !busy) {
+                                Text(stringResource(R.string.float_account_register_login))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 注册成功卡片：账号已开通（注册即用），一键回登录页并预填邮箱。 */
+@Composable
+private fun RegisterSuccessCard(
+    email: String,
+    onLogin: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = scheme.surface,
+        border = BorderStroke(1.dp, scheme.outlineVariant),
+        shadowElevation = 2.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(Baic2Spacing.xl),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .background(scheme.primaryContainer, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = scheme.onPrimaryContainer,
+                    modifier = Modifier.size(32.dp),
                 )
             }
+            Spacer(Modifier.height(Baic2Spacing.lg))
+            Text(
+                text = stringResource(R.string.float_account_register_success_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(Baic2Spacing.sm))
+            Text(
+                text = stringResource(R.string.float_account_register_success_body, email),
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(Baic2Spacing.xl))
+            Button(
+                onClick = onLogin,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+            ) {
+                Text(stringResource(R.string.float_account_register_success_action))
+            }
+        }
+    }
+}
+
+/**
+ * 验证码图块：白底圆角框，点击即换一张（与登录页同一 [CaptchaImage] 渲染管线）。
+ * 图片未就绪/加载中时显示「换一张」，避免出现空白方块。
+ */
+@Composable
+private fun CaptchaBox(
+    img: String,
+    loading: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(width = 104.dp, height = 52.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+            .clickable(onClick = onRefresh),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (loading || img.isBlank()) {
+            Text(
+                text = stringResource(R.string.float_account_captcha_refresh),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF576B95),
+            )
+        } else {
+            CaptchaImage(
+                img = img,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(4.dp),
+            )
         }
     }
 }

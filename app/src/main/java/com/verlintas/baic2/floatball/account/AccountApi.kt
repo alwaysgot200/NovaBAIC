@@ -23,6 +23,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -47,8 +48,9 @@ class AccountException(
 /**
  * 好参谋账号服务端接口（autojs6_Management，Result 信封 {code,msg,data}）。
  *
- * P0 只覆盖登录链路：验证码获取、账号密码登录；注册走站点页面（内嵌 WebView，
- * [registerUrl] 带 productId=haocanmou），不在 App 内自建注册协议。
+ * 覆盖登录链路（验证码获取、账号密码登录）与注册链路（[register]，productId=haocanmou，
+ * 注册即用、只绑好参谋产品角色）。注册在 App 内走原生表单直连本接口，不再内嵌站点
+ * WebView 页面（WebView 的输入法插入点异常与软键盘遮挡在客户端无法可靠修复）。
  * 复用 Hilt 注入的共享 OkHttpClient / Json，不自行 new；失败统一抛 [AccountException]，
  * 由 UI 映射文案。生产环境接口加密关闭（CRYPTO_ENABLED=false），明文 JSON 即契约。
  * 服务器根地址按环境分流（[SERVER_ORIGIN]，debug=测试、release=生产），
@@ -75,12 +77,24 @@ class AccountApi @Inject constructor(
     )
 
     /**
+     * 注册结果（`POST /api/v1/auth/register-company`）。
+     * [activationRequired] 为 false 表示产品注册「注册即用」，不需要激活邮件；
+     * [message] 为服务端成功文案（注册即用口径）。
+     */
+    data class RegisterResult(
+        val tenantId: String?,
+        val activationRequired: Boolean,
+        val message: String?,
+    )
+
+    /**
      * 积分钱包（毫积分字符串，BigInt 序列化为字符串的契约）。
      * [pointsExpireAt] 为 ISO-8601 或 null（无过期）。
      */
+    @Serializable
     data class Wallet(
         val pointsBalanceMilli: String,
-        val pointsExpireAt: String?,
+        val pointsExpireAt: String? = null,
     )
 
     /** 卡密启用结果：入账凭证 + 钱包快照 + 该卡余额/到期（绑定后就地展示用）。 */
@@ -99,22 +113,45 @@ class AccountApi @Inject constructor(
      * [balanceMilli] 为该卡剩余额度（毫积分字符串，由时间轴水位法派生；
      * 卡到 [expireAt] 后冻结剩余，不再参与扣点）。
      */
+    @Serializable
     data class MyCard(
         val cardNo: String,
         val facePoints: Int,
         val balanceMilli: String,
-        val expireAt: String?,
-        val activatedAt: String?,
-        val boundAt: String?,
+        val expireAt: String? = null,
+        val activatedAt: String? = null,
+        val boundAt: String? = null,
         val status: String,
+    )
+
+    /** App 端输出精细度档位。 */
+    @Serializable
+    data class GatewayMode(
+        val key: String,
+        val label: String = "",
+        val maxTokens: Int = 4096,
+    )
+
+    /** App 端模型目录项（服务端只回展示信息，无 key/上游地址）。 */
+    @Serializable
+    data class GatewayModel(
+        val key: String,
+        val displayName: String = "",
+        val coefficientMilli: Int = 1000,
+        val coefficientLabel: String = "",
+        val supportsReasoning: Boolean = false,
+        val modes: List<GatewayMode> = emptyList(),
+    )
+
+    /** App 端 LLM 网关配置（baseUrl 为相对路径，调用方拼绝对地址）。 */
+    data class GatewayConfig(
+        val baseUrl: String,
+        val defaultModel: String,
+        val models: List<GatewayModel>,
     )
 
     /** 当前服务端根地址（[SERVER_ORIGIN]，环境配置文件注入，用户不可见）。 */
     private fun origin(): String = SERVER_ORIGIN
-
-    /** 站点注册页（productId 决定注册后的产品角色；theme=light 锁定浅色并隐藏站点页头切换）。 */
-    fun registerUrl(): String =
-        "${origin()}/admin/login/register?redirect=/home&productId=haocanmou&theme=light"
 
     /** LiteLLM 网关 OpenAI 兼容前缀（nginx /llm/ 剥前缀转发，商业化方案 §6.3）。 */
     fun gatewayBaseUrl(): String = "${origin()}/llm/v1"
@@ -164,6 +201,54 @@ class AccountApi @Inject constructor(
                     refreshToken = obj["refresh_token"]?.jsonPrimitive?.content,
                     expireInSeconds = obj["expire_in"]?.jsonPrimitive?.content?.toLongOrNull() ?: 3_600L,
                     refreshExpireInSeconds = obj["refresh_expire_in"]?.jsonPrimitive?.content?.toLongOrNull(),
+                )
+            }
+        } catch (e: AccountException) {
+            throw e
+        } catch (e: Exception) {
+            throw AccountException(REASON_NETWORK, cause = e)
+        }
+    }
+
+    /**
+     * 注册好参谋账号（`POST /api/v1/auth/register-company`）。
+     *
+     * 只提交产品注册必需字段：邮箱（即登录账号）、密码、确认密码、图形验证码；
+     * 昵称/企业名称/联系电话由服务端按邮箱前缀生成默认值。`productId=haocanmou`
+     * 使注册即用（不绑 tenant_admin、不发激活邮件），只绑好参谋产品角色。
+     * 服务端限流每分钟 5 次；失败抛 [AccountException]（[AccountException.serverMsg]
+     * 为 DTO 校验/业务原因原文，UI 直接展示）。
+     */
+    suspend fun register(
+        email: String,
+        password: String,
+        confirmPassword: String,
+        code: String?,
+        uuid: String?,
+    ): RegisterResult = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject {
+            put("email", email)
+            put("password", password)
+            put("confirmPassword", confirmPassword)
+            put("productId", PRODUCT_ID)
+            if (!code.isNullOrBlank()) put("code", code)
+            if (!uuid.isNullOrBlank()) put("uuid", uuid)
+        }
+        val request = Request.Builder()
+            .url("${origin()}/api/v1/auth/register-company")
+            .post(payload.toString().toRequestBody(JSON_MEDIA))
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                val message = runCatching {
+                    json.parseToJsonElement(body).jsonObject["msg"]?.jsonPrimitive?.content
+                }.getOrNull()
+                val obj = envelope(response.code, body).jsonObject
+                RegisterResult(
+                    tenantId = obj["tenantId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() },
+                    activationRequired = obj["activationRequired"]?.jsonPrimitive?.content != "false",
+                    message = message?.takeIf { it.isNotBlank() },
                 )
             }
         } catch (e: AccountException) {
@@ -230,6 +315,52 @@ class AccountApi @Inject constructor(
         }
     }
 
+    /**
+     * App 端 LLM 网关配置（`GET /api/v1/point-card/gateway/config`，登录态）。
+     * 服务端只回模型清单与网关相对路径，不含上游地址/密钥。
+     */
+    suspend fun fetchGatewayConfig(accessToken: String): GatewayConfig = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${origin()}/api/v1/point-card/gateway/config")
+            .header("Authorization", "Bearer $accessToken")
+            .get()
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                val data = envelope(response.code, response.body?.string().orEmpty())
+                val obj = data.jsonObject
+                GatewayConfig(
+                    baseUrl = obj.str("baseUrl") ?: "/llm/v1",
+                    defaultModel = obj.str("defaultModel") ?: "deepseek-flash",
+                    models = obj["models"]?.jsonArray?.map { element ->
+                        val item = element.jsonObject
+                        GatewayModel(
+                            key = item.str("key").orEmpty(),
+                            displayName = item.str("displayName") ?: item.str("key").orEmpty(),
+                            coefficientMilli = item["coefficientMilli"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1000,
+                            coefficientLabel = item.str("coefficientLabel")
+                                ?: formatCoefficient(item["coefficientMilli"]?.jsonPrimitive?.content?.toIntOrNull() ?: 1000),
+                            supportsReasoning = item["supportsReasoning"]?.jsonPrimitive?.content == "true",
+                            modes = item["modes"]?.jsonArray?.mapNotNull { modeElement ->
+                                val mode = modeElement.jsonObject
+                                val modeKey = mode.str("key") ?: return@mapNotNull null
+                                GatewayMode(
+                                    key = modeKey,
+                                    label = mode.str("label") ?: modeKey,
+                                    maxTokens = mode["maxTokens"]?.jsonPrimitive?.content?.toIntOrNull() ?: 4096,
+                                )
+                            }.orEmpty(),
+                        )
+                    }.orEmpty(),
+                )
+            }
+        } catch (e: AccountException) {
+            throw e
+        } catch (e: Exception) {
+            throw AccountException(REASON_NETWORK, cause = e)
+        }
+    }
+
     /** 查询积分钱包（毫积分字符串 + 过期时刻）。 */
     suspend fun fetchWallet(accessToken: String): Wallet = withContext(Dispatchers.IO) {
         val request = Request.Builder()
@@ -247,6 +378,12 @@ class AccountApi @Inject constructor(
         } catch (e: Exception) {
             throw AccountException(REASON_NETWORK, cause = e)
         }
+    }
+
+    /** 服务端未回 coefficientLabel 时的本地兜底格式（1000 → 1.0x）。 */
+    private fun formatCoefficient(coefficientMilli: Int): String {
+        val value = coefficientMilli / 1000.0
+        return if (value % 1.0 == 0.0) String.format("%.1fx", value) else String.format("%.2fx", value)
     }
 
     private fun walletOf(obj: kotlinx.serialization.json.JsonObject): Wallet {
@@ -280,6 +417,13 @@ class AccountApi @Inject constructor(
     private fun envelope(httpCode: Int, body: String) = try {
         val root = json.parseToJsonElement(body).jsonObject
         val code = root["code"]?.jsonPrimitive?.content?.toIntOrNull()
+        // 401 = 会话失效（token 过期/被拒），单独归类，由展示层静默登出而非红字报错。
+        if (httpCode == 401 || code == 401) {
+            throw AccountException(
+                REASON_UNAUTHORIZED,
+                serverMsg = root["msg"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() },
+            )
+        }
         if (httpCode !in 200..299 || code != 200) {
             throw AccountException(
                 REASON_SERVER,
@@ -311,9 +455,13 @@ class AccountApi @Inject constructor(
         /** 好参谋 App 在服务端的客户端标识（登录审计/限流按客户端区分）。 */
         const val CLIENT_ID = "haocanmou"
 
+        /** 注册产品标识：好参谋（服务端据此只绑产品角色并跳过激活邮件）。 */
+        const val PRODUCT_ID = "haocanmou"
+
         /**
-         * 充值购买页（固定商城链接，商业化入口收口）：
-         * 余额不足提示「充值」链接与购买充值 WebView 页都用它。
+         * 充值/购买商品页（单一配置点）：当前链接为示例商品，后续更换点卡商品时
+         * 只需替换本 URL（同商城同类商品页）。余额不足「充值」、购买分享与
+         * 「浏览器购买」统一使用它；页面自带的 OG 标签决定社交卡片内容。
          */
         const val RECHARGE_URL = "https://www.80fafa.com/Goods/3007AFB1DC8B710E"
 
@@ -322,6 +470,7 @@ class AccountApi @Inject constructor(
         /** 错误原因常量（展示层映射 strings.xml 文案）。 */
         const val REASON_NETWORK = "REASON_NETWORK"
         const val REASON_SERVER = "REASON_SERVER"
+        const val REASON_UNAUTHORIZED = "REASON_UNAUTHORIZED"
         const val REASON_BAD_RESPONSE = "REASON_BAD_RESPONSE"
 
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()

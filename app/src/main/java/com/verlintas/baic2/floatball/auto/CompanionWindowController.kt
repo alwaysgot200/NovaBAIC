@@ -55,6 +55,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -272,6 +274,9 @@ class CompanionWindowController @Inject constructor(
     private val windowScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _activeWindow = MutableStateFlow<WindowSnapshot?>(null)
+
+    /** 在途窗口观测流（主页状态签 / 自动档复位用；null = 无窗口）。 */
+    val activeWindow: StateFlow<WindowSnapshot?> = _activeWindow.asStateFlow()
 
     private var deadlineJob: Job? = null
     private var pendingDispatchJob: Job? = null

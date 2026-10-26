@@ -26,7 +26,6 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -45,7 +44,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -61,8 +59,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,51 +71,38 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.verlintas.baic2.core.model.ModelCatalog
-import com.verlintas.baic2.core.model.ProviderError
+import com.verlintas.baic2.core.data.gateway.GatewayMode
 import com.verlintas.baic2.designsystem.Baic2Mono
-import com.verlintas.baic2.designsystem.Baic2Motion
 import com.verlintas.baic2.designsystem.Baic2Spacing
 import kotlinx.coroutines.delay
 
 /**
- * Four-step agent setup with key-prefix automation and automatic model
- * discovery: Provider -> Connection -> Tuning -> Prompt.
+ * 模型设置页（选定模型后只编辑通用参数）：Max/精细度、温度、思考、系统提示词。
+ *
+ * 模型、网关地址与凭证全部来自服务端目录 + 卡密，界面不出现服务商/Key/上游地址。
  */
 @Composable
 fun AgentWizardScreen(
-    agentId: Long?,
+    modelKey: String,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: AgentWizardViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
-    LaunchedEffect(agentId) {
-        if (agentId == null) viewModel.startForNew() else viewModel.startForEdit(agentId)
-    }
+    LaunchedEffect(modelKey) { viewModel.startForModel(modelKey) }
     LaunchedEffect(state.saved) {
         if (state.saved) {
             delay(900)
@@ -138,25 +121,19 @@ fun AgentWizardScreen(
                 .windowInsetsTopPadding()
                 .imePadding(),
         ) {
-            WizardTopBar(
-                editing = state.editingId != 0L,
-                step = state.step,
-                onClose = onClose,
-            )
+            WizardTopBar(state = state, onClose = onClose)
             StepIndicator(step = state.step)
 
             AnimatedContent(
                 targetState = state.step,
                 transitionSpec = { stepTransition(targetState.ordinal > initialState.ordinal) },
-                label = "wizard-step",
+                label = "model-settings-step",
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
             ) { step ->
                 when (step) {
-                    WizardStep.PROVIDER -> ProviderStep(state, viewModel)
-                    WizardStep.CONNECTION -> ConnectionStep(state, viewModel)
-                    WizardStep.TUNING -> TuningStep(state, viewModel)
+                    WizardStep.PARAMS -> ParamsStep(state, viewModel)
                     WizardStep.PROMPT -> PromptStep(state, viewModel)
                 }
             }
@@ -183,11 +160,7 @@ private fun Modifier.windowInsetsTopPadding(): Modifier =
     this.padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
 
 @Composable
-private fun WizardTopBar(
-    editing: Boolean,
-    step: WizardStep,
-    onClose: () -> Unit,
-) {
+private fun WizardTopBar(state: AgentWizardUiState, onClose: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -203,15 +176,17 @@ private fun WizardTopBar(
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = stringResource(
-                    if (editing) R.string.wizard_title_edit else R.string.wizard_title_new,
-                ),
+                text = state.displayName.ifBlank { stringResource(R.string.wizard_title_edit) },
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = stringResource(step.titleRes()),
+                text = if (state.coefficientLabel.isBlank()) {
+                    stringResource(state.step.titleRes())
+                } else {
+                    "${state.modelKey} · ${state.coefficientLabel}"
+                },
                 style = Baic2Mono.label,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -220,9 +195,7 @@ private fun WizardTopBar(
 }
 
 private fun WizardStep.titleRes(): Int = when (this) {
-    WizardStep.PROVIDER -> R.string.wizard_step_provider
-    WizardStep.CONNECTION -> R.string.wizard_step_connection
-    WizardStep.TUNING -> R.string.wizard_step_tuning
+    WizardStep.PARAMS -> R.string.wizard_step_tuning
     WizardStep.PROMPT -> R.string.wizard_step_prompt
 }
 
@@ -235,14 +208,13 @@ private fun StepIndicator(step: WizardStep) {
         horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.xs),
     ) {
         WizardStep.entries.forEach { entry ->
-            val active = entry.ordinal <= step.ordinal
             Box(
                 modifier = Modifier
                     .weight(if (entry == step) 2f else 1f)
                     .height(3.dp)
                     .clip(CircleShape)
                     .background(
-                        if (active) {
+                        if (entry.ordinal <= step.ordinal) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
@@ -254,7 +226,7 @@ private fun StepIndicator(step: WizardStep) {
 }
 
 @Composable
-private fun ProviderStep(state: AgentWizardUiState, viewModel: AgentWizardViewModel) {
+private fun ParamsStep(state: AgentWizardUiState, viewModel: AgentWizardViewModel) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
@@ -265,346 +237,101 @@ private fun ProviderStep(state: AgentWizardUiState, viewModel: AgentWizardViewMo
         ),
         verticalArrangement = Arrangement.spacedBy(Baic2Spacing.sm),
     ) {
-        item {
-            OutlinedTextField(
-                value = state.apiKey,
-                onValueChange = viewModel::updateApiKey,
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                label = { Text(stringResource(R.string.agent_setup_api_key)) },
-                placeholder = { Text("sk-…", style = Baic2Mono.body) },
-                visualTransformation = PasswordVisualTransformation(),
-                textStyle = Baic2Mono.body,
-                supportingText = {
-                    if (state.detectedByKey) {
-                        Text(
-                            text = stringResource(R.string.wizard_detected, presetLabel(state.preset)),
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    } else {
-                        Text(stringResource(R.string.wizard_key_hint))
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+        if (state.loading) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(Baic2Spacing.sm))
+                    Text(stringResource(R.string.wizard_models_loading), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            return@LazyColumn
         }
-        item {
-            Text(
-                text = stringResource(R.string.wizard_or_pick),
-                style = Baic2Mono.label,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = Baic2Spacing.md),
-            )
-        }
-        items(AgentPreset.entries) { preset ->
-            PresetRow(
-                preset = preset,
-                selected = state.preset == preset,
-                onClick = { viewModel.selectPreset(preset) },
-            )
-        }
-        item {
-            Spacer(Modifier.height(Baic2Spacing.sm))
-            OutlinedTextField(
-                value = state.baseUrl,
-                onValueChange = viewModel::updateBaseUrl,
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                label = { Text(stringResource(R.string.agent_setup_base_url)) },
-                textStyle = Baic2Mono.body,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        state.error?.let { error ->
-            item { WizardErrorCard(setupErrorText(error)) }
-        }
-    }
-}
-
-@Composable
-private fun PresetRow(
-    preset: AgentPreset,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(14.dp)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(
-                if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainer
-                },
-            )
-            .border(
-                width = 1.dp,
-                color = if (selected) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                } else {
-                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-                },
-                shape = shape,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = Baic2Spacing.lg, vertical = Baic2Spacing.md),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = presetLabel(preset),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (preset.baseUrl.isNotBlank()) {
-                Text(
-                    text = preset.baseUrl,
-                    style = Baic2Mono.label,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        state.loadError?.let { error ->
+            item(key = "load-error") {
+                WizardErrorCard(stringResource(R.string.wizard_models_error, error))
             }
         }
-        if (selected) {
-            Icon(
-                imageVector = Icons.Outlined.Check,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
+        if (!state.cardBound) {
+            item(key = "no-card") { WizardNoticeCard(stringResource(R.string.wizard_no_card)) }
+        }
+        item(key = "max") {
+            SettingSwitchRow(
+                title = stringResource(R.string.wizard_max_mode),
+                subtitle = stringResource(
+                    R.string.wizard_max_mode_desc,
+                    state.modes.firstOrNull { it.key == "max" }?.maxTokens ?: AgentWizardUiState.DEFAULT_MAX_TOKENS,
+                ),
+                checked = state.maxMode,
+                onCheckedChange = viewModel::setMaxMode,
             )
         }
-    }
-}
-
-@Composable
-private fun ConnectionStep(state: AgentWizardUiState, viewModel: AgentWizardViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Baic2Spacing.xl),
-        verticalArrangement = Arrangement.spacedBy(Baic2Spacing.sm),
-    ) {
-        ConnectionStatusCard(state = state, onRetry = viewModel::fetchModels)
-
-        val recommended = remember(state.preset) {
-            state.preset.family?.let { family ->
-                ModelCatalog.modelsFor(state.preset.provider, family)
-            }.orEmpty()
-        }
-
-        val apiModels = state.models
-        var modelFilter by rememberSaveable { mutableStateOf("") }
-        val visibleModels = remember(apiModels, modelFilter) {
-            if (modelFilter.isBlank()) {
-                apiModels
-            } else {
-                apiModels.filter { it.contains(modelFilter.trim(), ignoreCase = true) }
-            }
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = Baic2Spacing.sm),
-        ) {
-            Text(
-                text = if (apiModels.isEmpty() && state.modelsLoading) {
-                    stringResource(R.string.wizard_models_loading)
-                } else {
-                    stringResource(R.string.wizard_models_from_api, apiModels.size)
-                },
-                style = Baic2Mono.label,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            if (state.modelsLoading) {
-                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(Baic2Spacing.sm))
-            }
-            IconButton(onClick = viewModel::fetchModels) {
-                Icon(
-                    imageVector = Icons.Outlined.Refresh,
-                    contentDescription = stringResource(R.string.wizard_models_retry),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-        }
-
-        if (apiModels.size > 10) {
-            OutlinedTextField(
-                value = modelFilter,
-                onValueChange = { modelFilter = it },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                placeholder = { Text(stringResource(R.string.wizard_models_search)) },
-                textStyle = Baic2Mono.body,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-
-        if (visibleModels.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(Baic2Spacing.xs)) {
-                visibleModels.take(40).forEach { model ->
-                    val selected = state.model.equals(model, ignoreCase = true)
-                    val shape = RoundedCornerShape(10.dp)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(shape)
-                            .background(
-                                if (selected) {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceContainer
-                                },
-                            )
-                            .border(
-                                1.dp,
-                                if (selected) {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                                } else {
-                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                },
-                                shape,
-                            )
-                            .clickable { viewModel.updateModel(model) }
-                            .padding(horizontal = Baic2Spacing.md, vertical = Baic2Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = model,
-                            style = Baic2Mono.body,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (selected) {
-                            Icon(
-                                imageVector = Icons.Outlined.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp),
+        if (!state.maxMode) {
+            item(key = "precision") {
+                Column {
+                    Text(
+                        text = stringResource(R.string.wizard_output_precision),
+                        style = Baic2Mono.label,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = Baic2Spacing.xs),
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.sm)) {
+                        items(state.modes.filter { it.key != "max" }, key = { it.key }) { mode: GatewayMode ->
+                            FilterChip(
+                                selected = state.selectedModeKey == mode.key,
+                                onClick = { viewModel.selectMode(mode.key) },
+                                shape = RoundedCornerShape(10.dp),
+                                label = { Text("${mode.label} · ${mode.maxTokens}") },
                             )
                         }
                     }
                 }
-                if (visibleModels.size > 40) {
-                    Text(
-                        text = stringResource(R.string.wizard_models_more, visibleModels.size - 40),
-                        style = Baic2Mono.label,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
-        } else if (apiModels.isNotEmpty() && visibleModels.isEmpty()) {
+        }
+        item(key = "temperature") {
+            Column {
+                Text(
+                    text = stringResource(R.string.wizard_temperature, (state.temperature * 100).toInt()),
+                    style = Baic2Mono.label,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Slider(
+                    value = state.temperature,
+                    onValueChange = viewModel::updateTemperature,
+                    valueRange = 0f..2f,
+                    steps = 19,
+                )
+            }
+        }
+        if (state.supportsReasoning) {
+            item(key = "reasoning") {
+                SettingSwitchRow(
+                    title = stringResource(R.string.wizard_reasoning),
+                    subtitle = stringResource(R.string.wizard_reasoning_desc),
+                    checked = state.reasoning,
+                    onCheckedChange = viewModel::updateReasoning,
+                )
+            }
+        }
+        item(key = "summary") {
             Text(
-                text = stringResource(R.string.wizard_models_no_match),
+                text = stringResource(R.string.wizard_max_tokens) + " · " + state.resolvedMaxTokens,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-
-        if (apiModels.isEmpty() && !state.modelsLoading && recommended.isNotEmpty()) {
-            Text(
-                text = stringResource(R.string.wizard_models_recommended),
-                style = Baic2Mono.label,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = Baic2Spacing.xs),
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(Baic2Spacing.xs)) {
-                recommended.forEach { entry ->
-                    val selected = state.model == entry.id
-                    val shape = RoundedCornerShape(10.dp)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(shape)
-                            .background(
-                                if (selected) {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceContainer
-                                },
-                            )
-                            .border(
-                                1.dp,
-                                if (selected) {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                                } else {
-                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                },
-                                shape,
-                            )
-                            .clickable { viewModel.pickCatalogModel(entry) }
-                            .padding(horizontal = Baic2Spacing.md, vertical = Baic2Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = entry.label,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = entry.id,
-                                style = Baic2Mono.label,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Text(
-                            text = formatContextWindow(entry.contextWindow),
-                            style = Baic2Mono.label,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (selected) {
-                            Spacer(Modifier.width(Baic2Spacing.sm))
-                            Icon(
-                                imageVector = Icons.Outlined.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        OutlinedTextField(
-            value = state.model,
-            onValueChange = viewModel::updateModel,
-            singleLine = true,
-            shape = RoundedCornerShape(12.dp),
-            label = { Text(stringResource(R.string.wizard_model_manual)) },
-            textStyle = Baic2Mono.body,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = Baic2Spacing.sm),
-        )
-
         state.error?.let { error ->
-            WizardErrorCard(setupErrorText(error))
+            item(key = "error") { WizardErrorCard(setupErrorText(error)) }
         }
-        Spacer(Modifier.height(Baic2Spacing.xl))
     }
 }
 
 @Composable
-private fun ConnectionStatusCard(
-    state: AgentWizardUiState,
-    onRetry: () -> Unit,
+private fun SettingSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
 ) {
     val shape = RoundedCornerShape(14.dp)
     Row(
@@ -613,160 +340,14 @@ private fun ConnectionStatusCard(
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), shape)
-            .padding(Baic2Spacing.md),
+            .padding(horizontal = Baic2Spacing.lg, vertical = Baic2Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        when {
-            state.modelsLoading -> {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(Baic2Spacing.md))
-                Text(
-                    text = stringResource(R.string.wizard_models_loading),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-
-            state.modelsError != null -> {
-                val missingKey = state.modelsError == "missing_credentials"
-                Icon(
-                    imageVector = Icons.Outlined.Warning,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(Baic2Spacing.md))
-                Text(
-                    text = if (missingKey) {
-                        stringResource(R.string.wizard_models_need_key)
-                    } else {
-                        stringResource(R.string.wizard_models_error, state.modelsError)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                if (!missingKey) {
-                    TextButton(onClick = onRetry) {
-                        Text(stringResource(R.string.wizard_retry))
-                    }
-                }
-            }
-
-            state.models.isNotEmpty() -> {
-                Icon(
-                    imageVector = Icons.Outlined.Check,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(Baic2Spacing.md))
-                Text(
-                    text = stringResource(R.string.wizard_models_found, state.models.size),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onRetry) {
-                    Text(stringResource(R.string.wizard_retry))
-                }
-            }
-
-            else -> {
-                Text(
-                    text = stringResource(R.string.wizard_models_idle),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onRetry) {
-                    Text(stringResource(R.string.wizard_retry))
-                }
-            }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-    }
-}
-
-@Composable
-private fun TuningStep(state: AgentWizardUiState, viewModel: AgentWizardViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Baic2Spacing.xl),
-    ) {
-        Text(
-            text = stringResource(R.string.agent_setup_name),
-            style = Baic2Mono.label,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(
-            value = state.name,
-            onValueChange = viewModel::updateName,
-            singleLine = true,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = Baic2Spacing.xs),
-        )
-
-        Spacer(Modifier.height(Baic2Spacing.lg))
-        Text(
-            text = stringResource(R.string.wizard_temperature, (state.temperature * 100).toInt()),
-            style = Baic2Mono.label,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Slider(
-            value = state.temperature,
-            onValueChange = viewModel::updateTemperature,
-            valueRange = 0f..2f,
-            steps = 19,
-        )
-
-        Spacer(Modifier.height(Baic2Spacing.sm))
-        Text(
-            text = stringResource(R.string.wizard_max_tokens),
-            style = Baic2Mono.label,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(
-            value = state.maxTokens?.toString().orEmpty(),
-            onValueChange = viewModel::updateMaxTokens,
-            singleLine = true,
-            shape = RoundedCornerShape(12.dp),
-            placeholder = { Text("4096", style = Baic2Mono.body) },
-            textStyle = Baic2Mono.body,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = Baic2Spacing.xs),
-        )
-
-        Spacer(Modifier.height(Baic2Spacing.lg))
-        val switchShape = RoundedCornerShape(14.dp)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(switchShape)
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), switchShape)
-                .padding(horizontal = Baic2Spacing.lg, vertical = Baic2Spacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.wizard_reasoning),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.wizard_reasoning_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = state.reasoning, onCheckedChange = viewModel::updateReasoning)
-        }
-        Spacer(Modifier.height(Baic2Spacing.xl))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -810,15 +391,16 @@ private fun PromptStep(state: AgentWizardUiState, viewModel: AgentWizardViewMode
                 .heightIn(min = 160.dp)
                 .padding(top = Baic2Spacing.md),
         )
+        state.error?.let { error ->
+            Spacer(Modifier.height(Baic2Spacing.md))
+            WizardErrorCard(setupErrorText(error))
+        }
         Spacer(Modifier.height(Baic2Spacing.xl))
     }
 }
 
 @Composable
-private fun WizardBottomBar(
-    state: AgentWizardUiState,
-    viewModel: AgentWizardViewModel,
-) {
+private fun WizardBottomBar(state: AgentWizardUiState, viewModel: AgentWizardViewModel) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -826,7 +408,7 @@ private fun WizardBottomBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.sm),
     ) {
-        if (state.step != WizardStep.PROVIDER) {
+        if (state.step == WizardStep.PROMPT) {
             OutlinedButton(
                 onClick = viewModel::back,
                 shape = RoundedCornerShape(14.dp),
@@ -837,7 +419,7 @@ private fun WizardBottomBar(
         }
         Button(
             onClick = viewModel::next,
-            enabled = !state.saving,
+            enabled = !state.saving && !state.loading,
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier.weight(2f),
         ) {
@@ -850,11 +432,7 @@ private fun WizardBottomBar(
             } else {
                 Text(
                     text = stringResource(
-                        if (state.step == WizardStep.PROMPT) {
-                            R.string.agent_setup_save
-                        } else {
-                            R.string.wizard_next
-                        },
+                        if (state.step == WizardStep.PROMPT) R.string.agent_setup_save else R.string.wizard_next,
                     ),
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -868,7 +446,7 @@ private fun SuccessOverlay() {
     val scale by animateFloatAsState(
         targetValue = 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = 300f),
-        label = "wizard-success",
+        label = "settings-success",
     )
     Box(
         modifier = Modifier
@@ -888,9 +466,7 @@ private fun SuccessOverlay() {
                     imageVector = Icons.Outlined.Check,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .animateScale(scale),
+                    modifier = Modifier.size((36 * scale).dp),
                 )
             }
             Spacer(Modifier.height(Baic2Spacing.lg))
@@ -906,8 +482,27 @@ private fun SuccessOverlay() {
 }
 
 @Composable
-private fun Modifier.animateScale(scale: Float): Modifier =
-    this.then(Modifier.size((36 * scale).dp))
+private fun WizardNoticeCard(text: String) {
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f), shape)
+            .padding(Baic2Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Warning,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(Baic2Spacing.sm))
+        Text(text = text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
 
 @Composable
 private fun WizardErrorCard(text: String) {
@@ -928,45 +523,13 @@ private fun WizardErrorCard(text: String) {
             modifier = Modifier.size(16.dp),
         )
         Spacer(Modifier.width(Baic2Spacing.sm))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+        Text(text = text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
     }
 }
-
-@Composable
-internal fun presetLabel(preset: AgentPreset): String = stringResource(
-    when (preset) {
-        AgentPreset.DEEPSEEK -> R.string.preset_deepseek
-        AgentPreset.OPENAI -> R.string.preset_openai
-        AgentPreset.SILICONFLOW -> R.string.preset_siliconflow
-        AgentPreset.MOONSHOT -> R.string.preset_moonshot
-        AgentPreset.QWEN -> R.string.preset_qwen
-        AgentPreset.CLAUDE -> R.string.preset_claude
-        AgentPreset.GEMINI -> R.string.preset_gemini
-        AgentPreset.CUSTOM -> R.string.preset_custom
-    },
-)
 
 @Composable
 internal fun setupErrorText(error: SetupError): String = when (error) {
-    SetupError.MissingKey -> stringResource(R.string.agent_setup_error_key)
-    SetupError.MissingUrl -> stringResource(R.string.agent_setup_error_url)
-    SetupError.MissingModel -> stringResource(R.string.agent_setup_error_model)
+    SetupError.MissingCard -> stringResource(R.string.wizard_no_card)
+    SetupError.MissingModel -> stringResource(R.string.wizard_models_empty)
     SetupError.KeyStore -> stringResource(R.string.agent_setup_error_keystore)
-    is SetupError.Request -> when (error.kind) {
-        ProviderError.Kind.AUTH -> stringResource(R.string.agent_setup_error_auth)
-        ProviderError.Kind.NETWORK, ProviderError.Kind.TIMEOUT ->
-            stringResource(R.string.agent_setup_error_network)
-        ProviderError.Kind.RATE_LIMIT -> stringResource(R.string.agent_setup_error_rate_limit)
-        else -> stringResource(R.string.agent_setup_error_generic, error.detail)
-    }
-}
-
-private fun formatContextWindow(tokens: Long): String = when {
-    tokens >= 1_000_000 -> "${tokens / 1_000_000}M"
-    tokens >= 1_000 -> "${tokens / 1_000}K"
-    else -> tokens.toString()
 }

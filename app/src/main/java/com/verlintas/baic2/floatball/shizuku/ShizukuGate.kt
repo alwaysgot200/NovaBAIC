@@ -50,6 +50,7 @@ sealed interface ShizukuGrantResult {
 @Singleton
 class ShizukuGate @Inject constructor(
     private val shell: ShellBridge,
+    private val installer: ShizukuInstaller,
     @ApplicationContext private val context: Context,
 ) {
     val shellState: StateFlow<ShellState> = shell.state
@@ -58,6 +59,18 @@ class ShizukuGate @Inject constructor(
     fun isManagerInstalled(): Boolean = runCatching {
         context.packageManager.getPackageInfo(MANAGER_PACKAGE, 0)
     }.isSuccess
+
+    /** 已安装的管理器版本；未装返回 null。 */
+    fun installedVersion(): ShizukuVersion? = installer.installedVersion()
+
+    /** 内置安装包版本（决定按钮是「安装」还是「升级」）；assets 异常返回 null。 */
+    suspend fun bundledVersion(): ShizukuVersion? = installer.bundledVersion()
+
+    /**
+     * 内置安装（docs/2026-10-26-内置安装Shizuku方案.md）：
+     * 复制 assets/shizuku.apk → 校验 → 拉起系统安装器，用户手动确认后才落装。
+     */
+    suspend fun installBundled(): ShizukuInstallOutcome = installer.install()
 
     /** 打开 Shizuku 管理器（无线调试启动/配对入口）。 */
     fun launchManager(): Boolean {

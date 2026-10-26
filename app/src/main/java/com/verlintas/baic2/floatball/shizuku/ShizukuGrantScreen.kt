@@ -20,7 +20,6 @@
 package com.verlintas.baic2.floatball.shizuku
 
 import android.content.Intent
-import android.net.Uri
 import android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -39,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +51,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.verlintas.baic2.R
 import com.verlintas.baic2.device.api.ShellState
@@ -59,9 +62,10 @@ import com.verlintas.baic2.floatball.AdvisorPage
 import kotlinx.coroutines.launch
 
 /**
- * 投影免弹窗授权引导页（docs/2026-10-21 方案 §5.2）：三态驱动——未装引导
- * 下载 → 未运行引导无线调试配对（含两条一次性前置）→ 运行中一键执行
- * `appops set PROJECT_MEDIA allow` → 绿色已生效。失败展示 shell 原文。
+ * 投影免弹窗授权引导页（docs/2026-10-21 方案 §5.2）：三态驱动——未装内置安装
+ * （docs/2026-10-26-内置安装Shizuku方案.md）→ 未运行引导无线调试配对（含两条
+ * 一次性前置）→ 运行中一键执行 `appops set PROJECT_MEDIA allow` → 绿色已生效。
+ * 失败展示 shell 原文；从系统安装器返回时按 ON_RESUME 自动刷新安装态。
  */
 @Composable
 internal fun ShizukuGrantScreen(
@@ -74,16 +78,71 @@ internal fun ShizukuGrantScreen(
 
     val shellState by gate.shellState.collectAsStateWithLifecycle()
     var installed by remember { mutableStateOf(true) }
+    var installedVersion by remember { mutableStateOf<ShizukuVersion?>(null) }
+    var bundledVersion by remember { mutableStateOf<ShizukuVersion?>(null) }
+    var installing by remember { mutableStateOf(false) }
+    var installNote by remember { mutableStateOf<InstallNote?>(null) }
     var appopGranted by remember { mutableStateOf(false) }
     var executing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var justGranted by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { installed = gate.isManagerInstalled() }
+    fun refreshInstalled() {
+        installed = gate.isManagerInstalled()
+        installedVersion = gate.installedVersion()
+    }
+
+    fun runInstall() {
+        if (installing) return
+        installing = true
+        installNote = null
+        scope.launch {
+            installNote = when (val outcome = gate.installBundled()) {
+                is ShizukuInstallOutcome.Started -> InstallNote(
+                    R.string.float_shizuku_install_started,
+                    arg = outcome.versionName,
+                )
+                is ShizukuInstallOutcome.PermissionRequired ->
+                    InstallNote(R.string.float_shizuku_install_permission_hint)
+                is ShizukuInstallOutcome.AlreadyInstalled -> InstallNote(
+                    R.string.float_shizuku_install_already,
+                    arg = bundledVersion?.name,
+                )
+                is ShizukuInstallOutcome.Failed -> InstallNote(
+                    when (outcome.reason) {
+                        ShizukuInstallOutcome.Failure.ASSET_CORRUPT ->
+                            R.string.float_shizuku_install_corrupt
+                        else -> R.string.float_shizuku_install_failed
+                    },
+                    isError = true,
+                )
+            }
+            installing = false
+            refreshInstalled()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshInstalled()
+        bundledVersion = gate.bundledVersion()
+    }
+    // 从系统安装器/设置页返回即重查：装成功后按钮自动切到「打开 Shizuku」。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshInstalled()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     // shell 状态变化（如用户批准权限弹窗）或执行结束后复查 appop 落地状态。
     LaunchedEffect(shellState, executing) {
         if (!executing) appopGranted = gate.projectionSilentGranted()
     }
+
+    val upgradeRequired = installedVersion?.let { current ->
+        bundledVersion?.let { bundled -> current.code < bundled.code }
+    } == true
 
     AdvisorPage(
         title = stringResource(R.string.float_shizuku_title),
@@ -130,24 +189,25 @@ internal fun ShizukuGrantScreen(
                         )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (executing) {
+                        if (executing || installing) {
                             Text(
-                                text = stringResource(R.string.float_shizuku_executing),
+                                text = stringResource(
+                                    if (installing) {
+                                        R.string.float_shizuku_install_preparing
+                                    } else {
+                                        R.string.float_shizuku_executing
+                                    },
+                                ),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = scheme.onSurfaceVariant,
                             )
                         } else {
                             MainAction(
                                 installed = installed,
+                                upgradeRequired = upgradeRequired,
                                 shellState = shellState,
                                 appopGranted = appopGranted,
-                                onInstall = {
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(SHIZUKU_SITE)),
-                                        )
-                                    }
-                                },
+                                onInstall = { runInstall() },
                                 onLaunch = { gate.launchManager() },
                                 onPermission = { gate.requestShellPermission() },
                                 onGrant = {
@@ -203,17 +263,48 @@ internal fun ShizukuGrantScreen(
                 }
             }
 
-            // ---- 第一步：安装 Shizuku（未装时引导，已装也常驻展示下载地址）----
+            // ---- 第一步：安装 Shizuku（内置安装包；未装/可升级时就地给出按钮）----
             SectionCard(stringResource(R.string.float_shizuku_install_title)) {
-                StepItem(
-                    text = stringResource(R.string.float_shizuku_install_hint),
-                    actionLabel = stringResource(R.string.float_shizuku_download),
-                ) {
-                    runCatching {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(SHIZUKU_SITE)),
+                StepItem(stringResource(R.string.float_shizuku_install_hint))
+                if (!installed || upgradeRequired) {
+                    TextButton(onClick = { runInstall() }, enabled = !installing) {
+                        Text(
+                            stringResource(
+                                if (installed) {
+                                    R.string.float_shizuku_action_upgrade
+                                } else {
+                                    R.string.float_shizuku_action_install
+                                },
+                            ),
                         )
                     }
+                }
+                installedVersion?.let { version ->
+                    Text(
+                        text = stringResource(
+                            R.string.float_shizuku_install_installed,
+                            version.name ?: version.code.toString(),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+                bundledVersion?.let { version ->
+                    Text(
+                        text = stringResource(
+                            R.string.float_shizuku_install_bundled,
+                            version.name ?: version.code.toString(),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+                installNote?.let { note ->
+                    Text(
+                        text = note.arg?.let { stringResource(note.res, it) } ?: stringResource(note.res),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (note.isError) scheme.error else scheme.primary,
+                    )
                 }
             }
 
@@ -246,6 +337,7 @@ internal fun ShizukuGrantScreen(
 @Composable
 private fun MainAction(
     installed: Boolean,
+    upgradeRequired: Boolean,
     shellState: ShellState,
     appopGranted: Boolean,
     onInstall: () -> Unit,
@@ -256,6 +348,9 @@ private fun MainAction(
     when {
         !installed -> Button(onClick = onInstall) {
             Text(stringResource(R.string.float_shizuku_action_install))
+        }
+        upgradeRequired -> OutlinedButton(onClick = onInstall) {
+            Text(stringResource(R.string.float_shizuku_action_upgrade))
         }
         shellState is ShellState.Unavailable -> Button(onClick = onLaunch) {
             Text(stringResource(R.string.float_shizuku_action_launch))
@@ -318,7 +413,12 @@ private fun StepItem(
     }
 }
 
-private const val SHIZUKU_SITE = "https://shizuku.rikka.app/"
+/** 安装结果提示：[res] 为文案资源，[arg] 为可选的版本名，[isError] 决定展示色。 */
+private data class InstallNote(
+    val res: Int,
+    val arg: String? = null,
+    val isError: Boolean = false,
+)
 
 /**
  * 逐级降级打开通知样式设置（配对弹窗需要系统原生通知通道才显示 6 位配对码）。

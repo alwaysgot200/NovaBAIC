@@ -71,6 +71,8 @@ data class MessageEntity(
     val starred: Boolean = false,
     val usageInput: Long? = null,
     val usageOutput: Long? = null,
+    /** 本条回复消耗积分（毫积分，按模型倍率在完成时快照）。 */
+    val usagePointsMilli: Long? = null,
 )
 
 @Entity(

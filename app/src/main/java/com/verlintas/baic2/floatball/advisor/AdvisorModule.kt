@@ -36,6 +36,8 @@ import com.verlintas.baic2.floatball.advisor.data.MIGRATION_12_13
 import com.verlintas.baic2.floatball.advisor.data.MIGRATION_13_14
 import com.verlintas.baic2.floatball.advisor.data.MIGRATION_14_15
 import com.verlintas.baic2.floatball.advisor.data.MIGRATION_15_16
+import com.verlintas.baic2.core.data.gateway.AdvisorGateway
+import com.verlintas.baic2.floatball.account.AccountGateway
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -58,4 +60,9 @@ object AdvisorModule {
             // 漏写迁移应在开发期直接崩溃暴露，而不是上线后删用户数据。
             .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
             .build()
+
+    /** feature:agents 只认 core:data 的接口，实现留在 app（掌卡密与登录态）。 */
+    @Provides
+    @Singleton
+    fun provideAdvisorGateway(impl: AccountGateway): AdvisorGateway = impl
 }

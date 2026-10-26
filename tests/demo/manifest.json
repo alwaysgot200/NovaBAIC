@@ -1,0 +1,88 @@
+{
+  "version": "demo:v1",
+  "server": {
+    "tenantId": "100099",
+    "account": {
+      "username": "35969378@qq.com",
+      "password": "1qaz2WSX",
+      "nickname": "吴瑞曦的测试号"
+    },
+    "cards": [
+      { "cardNo": "DEMOPC0001", "cardKey": "sk-DEMOCARD-0001", "facePoints": 5000, "validityDays": 30 },
+      { "cardNo": "DEMOPC0002", "cardKey": "sk-DEMOCARD-0002", "facePoints": 5000, "validityDays": 30 }
+    ],
+    "models": [
+      { "key": "deepseek-flash", "displayName": "DeepSeek Flash", "coefficientMilli": 1000, "reasoning": true },
+      { "key": "deepseek-pro", "displayName": "DeepSeek Pro", "coefficientMilli": 3000, "reasoning": true }
+    ],
+    "defaultModel": "deepseek-flash"
+  },
+  "client": {
+    "selfPersona": {
+      "tag": "demo-me",
+      "note": "业务骨干/产品经理，长期目标=升职加薪，表达稳重"
+    },
+    "proactive": {
+      "enabled": true,
+      "dailyCap": 3,
+      "minGapHours": 0,
+      "quietStart": "23:00",
+      "quietEnd": "07:00",
+      "preferSmalltalk": true
+    },
+    "contacts": [
+      {
+        "title": "吴瑞曦topwayricky",
+        "imPackage": "com.tencent.mm",
+        "goal": "我的领导。工作要求严格，喜欢半夜发工作指令；长期目标：升职加薪",
+        "stageIntent": "争取本季度晋升",
+        "engagement": "proactive",
+        "privacy": "handoff",
+        "identity": "领导",
+        "chatStyle": "严肃",
+        "autoTarget": true,
+        "group": false
+      },
+      {
+        "title": "吴瑞曦",
+        "imPackage": "com.tencent.wework",
+        "goal": "同一位领导的「企业微信」号（与微信联系人「吴瑞曦topwayricky」同一人）",
+        "engagement": "reactive",
+        "privacy": "handoff",
+        "identity": "领导",
+        "chatStyle": "严肃",
+        "autoTarget": false,
+        "group": false
+      },
+      {
+        "title": "张敏",
+        "imPackage": "com.tencent.wework",
+        "goal": "HR，负责晋升评审材料",
+        "engagement": "reactive",
+        "privacy": "handoff",
+        "identity": "同事",
+        "chatStyle": "随和",
+        "autoTarget": false,
+        "group": false
+      },
+      {
+        "title": "demo 项目群",
+        "imPackage": "com.tencent.mm",
+        "goal": "Q4 关键项目协作群（验证群排除）",
+        "engagement": "mute",
+        "privacy": "handoff",
+        "autoTarget": false,
+        "group": true
+      },
+      {
+        "title": "陌生客户",
+        "imPackage": "com.alibaba.android.rimet",
+        "goal": "非白名单联系人（验证起草不自动发送）",
+        "engagement": "reactive",
+        "privacy": "handoff",
+        "autoTarget": false,
+        "group": false
+      }
+    ]
+  }
+}

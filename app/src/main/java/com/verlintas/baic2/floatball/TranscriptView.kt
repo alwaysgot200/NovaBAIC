@@ -412,11 +412,18 @@ internal class TranscriptView(context: Context) : FrameLayout(context) {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { weight = 1f }
         }
-        // 逐条用量直接取消息持久化字段（模型上报过才显示）。
-        val usageIn = message.usageInput
-        val usageOut = message.usageOutput
-        if (usageIn != null || usageOut != null) {
-            usage.text = "↑" + compactTokens(usageIn ?: 0L) + "  ↓" + compactTokens(usageOut ?: 0L)
+        // 逐条积分消耗（完成时快照；旧消息按 token + 当前倍率兜底换算）。
+        val pointsMilli = message.usagePointsMilli ?: if (message.usageInput != null || message.usageOutput != null) {
+            com.verlintas.baic2.core.model.PointsPricing.deductPointsMilli(
+                promptTokens = message.usageInput ?: 0L,
+                completionTokens = message.usageOutput ?: 0L,
+                coefficientMilli = com.verlintas.baic2.core.model.ModelPricing.coefficientMilli(message.model),
+            )
+        } else {
+            null
+        }
+        if (pointsMilli != null) {
+            usage.text = "积分 " + String.format("%.1f", pointsMilli / 1000.0)
             usage.visibility = View.VISIBLE
         }
         row.addView(usage)

@@ -30,9 +30,16 @@
     <string name="settings_brand_name">BetterAIChat2</string>
 
     <string name="settings_section_services">服务与能力</string>
-    <string name="settings_agents_summary">已配置 %1$d 个服务 · 默认 %2$s</string>
+    <string name="settings_agents_summary">服务端模型 %1$d 个 · 当前 %2$s</string>
     <string name="settings_agents_none">还没有配置服务，点这里添加</string>
     <string name="settings_agents_hint">点击服务可编辑；右侧圆点用于设为默认服务</string>
+    <string name="settings_models_hint">模型由服务端统一配置，直接选择即可；点击可编辑该模型的参数</string>
+    <string name="settings_models_loading">正在拉取模型目录…</string>
+    <string name="settings_models_error">模型目录加载失败：%1$s</string>
+    <string name="settings_models_empty">当前无可用模型，请稍后再试</string>
+    <string name="settings_models_summary">%1$s · 倍率 %2$s · 最大输出 %3$s</string>
+    <string name="settings_models_selected">当前使用</string>
+    <string name="settings_models_footer">模型上下线由服务端控制，App 无需升级</string>
     <string name="settings_agents_delete_confirm">删除后该服务的密钥与配置将不可恢复。</string>
     <string name="settings_permissions_summary">自动化、屏幕、通知与运行时权限</string>
 
@@ -151,6 +158,7 @@
     <string name="settings_about_stats_messages">消息</string>
     <string name="settings_about_stats_runs">运行次数</string>
     <string name="settings_about_stats_tool_calls">工具调用</string>
+    <string name="settings_about_stats_points">积分消耗</string>
     <string name="settings_about_stats_tokens_in">Token 输入</string>
     <string name="settings_about_stats_tokens_out">Token 输出</string>
     <string name="settings_about_share">分享应用</string>

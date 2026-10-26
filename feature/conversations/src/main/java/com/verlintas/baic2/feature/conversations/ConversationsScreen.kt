@@ -189,7 +189,7 @@ fun ConversationsScreen(
             onDismissRequest = { setupOpen = false },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            AgentWizardScreen(agentId = null, onClose = { setupOpen = false })
+            AgentWizardScreen(modelKey = "", onClose = { setupOpen = false })
         }
     }
 }

@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.verlintas.baic2.EXTRA_FROM_FLOAT
+import com.verlintas.baic2.BuildConfig
 import com.verlintas.baic2.R
 import com.verlintas.baic2.core.data.prefs.AppLocaleStore
 import com.verlintas.baic2.core.data.prefs.SettingsRepository
@@ -85,6 +86,9 @@ import com.verlintas.baic2.floatball.auto.InjectorSelector
 import com.verlintas.baic2.floatball.auto.ReadinessGate
 import com.verlintas.baic2.floatball.auto.ReadinessReport
 import com.verlintas.baic2.floatball.auto.ScreenCapture
+import com.verlintas.baic2.floatball.update.AppUpdateManager
+import com.verlintas.baic2.floatball.update.CheckOutcome
+import com.verlintas.baic2.floatball.update.UpdateOptionalOverlay
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
@@ -144,6 +148,10 @@ class FloatSettingsActivity : ComponentActivity() {
     @Inject
     lateinit var keepAlivePrefs: KeepAlivePrefs
 
+    /** 客户端升级：手动检查版本 + 可选更新弹窗。 */
+    @Inject
+    lateinit var updateManager: AppUpdateManager
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -185,6 +193,7 @@ class FloatSettingsActivity : ComponentActivity() {
                     shizukuGate = shizukuGate,
                     screenCapture = screenCapture,
                     keepAlivePrefs = keepAlivePrefs,
+                    updateManager = updateManager,
                     onClose = { finish() },
                 )
             }
@@ -205,11 +214,13 @@ private fun AdvisorSettingsScreen(
     shizukuGate: com.verlintas.baic2.floatball.shizuku.ShizukuGate,
     screenCapture: ScreenCapture,
     keepAlivePrefs: KeepAlivePrefs,
+    updateManager: AppUpdateManager,
     onClose: () -> Unit,
 ) {
     val settings by prefs.state.collectAsState()
     var clearArmed by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val updateScope = rememberCoroutineScope()
     val scheme = MaterialTheme.colorScheme
 
     Surface(modifier = Modifier.fillMaxSize(), color = scheme.background) {
@@ -507,6 +518,49 @@ private fun AdvisorSettingsScreen(
                 )
                 // 保活入口卡已迁主框架「设置 → 权限」页（统一一处）。
 
+                // 关于与更新：显示当前版本；手动检查（启动时也会自动检查一次）。
+                SectionLabel(stringResource(R.string.float_update_section))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = scheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clickable {
+                            updateScope.launch {
+                                val outcome = updateManager.checkNow()
+                                val message = when (outcome) {
+                                    CheckOutcome.UP_TO_DATE -> R.string.float_update_up_to_date
+                                    CheckOutcome.FAILED -> R.string.float_update_check_failed
+                                    CheckOutcome.FORCED -> R.string.float_update_forced_hint
+                                    CheckOutcome.OPTIONAL -> null
+                                }
+                                if (message != null) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        message,
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        Text(
+                            text = stringResource(
+                                R.string.float_update_current_version,
+                                BuildConfig.VERSION_NAME,
+                            ),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = stringResource(R.string.float_update_check),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.primary,
+                        )
+                    }
+                }
+
                 // 账号管理：登录账号、积分钱包与卡密启用（商业化方案 §5）。
                 Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -673,6 +727,8 @@ private fun AdvisorSettingsScreen(
                         )
                     }
                 }
+                // 可选更新/下载/安装/失败弹窗（强制更新仍由主界面整屏门负责）。
+                UpdateOptionalOverlay(updateManager)
             }
         }
         }
@@ -1407,15 +1463,14 @@ private fun TokenUsageCard(
     Text(
         text = stringResource(
             R.string.float_settings_usage_total,
-            stats.totalInput,
-            stats.totalOutput,
+            stats.totalPoints,
             stats.totalTurns,
         ),
         style = MaterialTheme.typography.bodySmall,
         color = scheme.onSurfaceVariant,
     )
     Text(
-        text = stringResource(R.string.float_settings_usage_session, stats.sessionTotal),
+        text = stringResource(R.string.float_settings_usage_session, stats.sessionPoints),
         style = MaterialTheme.typography.bodySmall,
         color = scheme.onSurfaceVariant,
     )

@@ -119,6 +119,16 @@ object ModelCatalog {
             supportsReasoning = true,
         ),
         ModelEntry(
+            "deepseek-pro",
+            "DeepSeek Pro",
+            ProviderId.OPENAI_COMPATIBLE,
+            "deepseek",
+            1_000_000,
+            maxTokens = 64_000,
+            supportsReasoning = true,
+        ),
+        // 兼容旧别名：历史 Agent 仍可能保存 deepseek-v4-pro
+        ModelEntry(
             "deepseek-v4-pro",
             "DeepSeek V4 Pro",
             ProviderId.OPENAI_COMPATIBLE,

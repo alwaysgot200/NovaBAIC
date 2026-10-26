@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 内置 Shizuku 安装包的 FileProvider 路径：仅暴露 cacheDir/shizuku_installer/ 下的 APK。 -->
+<paths>
+    <cache-path
+        name="shizuku_apk"
+        path="shizuku_installer/" />
+</paths>

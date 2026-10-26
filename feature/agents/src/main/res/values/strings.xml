@@ -32,6 +32,14 @@
     <string name="wizard_close">关闭</string>
     <string name="wizard_title_new">连接 AI 服务</string>
     <string name="wizard_title_edit">编辑服务</string>
+    <string name="wizard_step_model">选择模型</string>
+    <string name="wizard_gateway_hint">云端 AI 已内置，直接选择模型即可，无需填写任何密钥</string>
+    <string name="wizard_no_card">请先在「我的」绑定卡密，再选择模型</string>
+    <string name="wizard_models_empty">服务端暂无可用模型，请稍后重试</string>
+    <string name="wizard_model_reasoning_tag">思考模式</string>
+    <string name="wizard_max_mode">Max 模式</string>
+    <string name="wizard_max_mode_desc">开启后输出使用模型上限 %1$d tokens；关闭后可按精细度选择</string>
+    <string name="wizard_output_precision">输出精细度</string>
     <string name="wizard_step_provider">选择服务商</string>
     <string name="wizard_step_connection">连接并选择模型</string>
     <string name="wizard_step_tuning">参数</string>

@@ -106,6 +106,7 @@ class AgentRepository @Inject constructor(
         val entity = agentId?.let { db.agentDao().getById(it) } ?: db.agentDao().getDefault()
             ?: return null
         val agent = mapper.agentToModel(entity)
+        com.verlintas.baic2.core.model.ModelPricing.activeModelKey = agent.model
         val apiKey = cipher.decrypt(entity.encryptedApiKey).getOrElse {
             throw ApiKeyUnavailableException()
         }

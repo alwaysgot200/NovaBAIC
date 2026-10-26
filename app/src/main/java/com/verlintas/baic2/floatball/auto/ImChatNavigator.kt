@@ -168,6 +168,38 @@ class ImChatNavigator @Inject constructor(
     }
 
     /**
+     * 单个 IM 的页面 activity 关键字（模式 2 无 a11y 节点树，只能靠 dumpsys
+     * 类名判别「主列表 / 搜索页 / 聊天页」）。昵称来自 2026-10-26 真机实测：
+     * 微信 LauncherUI/FTSMainUI/ChattingUI；企微 WwMainActivity/
+     * GlobalSearchActivityV2/MessageListActivity。
+     */
+    private data class ImPages(
+        val mainMarkers: List<String>,
+        val searchMarkers: List<String>,
+        val chatMarkers: List<String>,
+    )
+
+    private fun pagesOf(imPackage: String): ImPages = when (imPackage) {
+        "com.tencent.mm" -> ImPages(
+            mainMarkers = listOf("LauncherUI"),
+            searchMarkers = listOf("FTSMainUI"),
+            // 微信聊天页有两种宿主：独立 ChattingUI 或 LauncherUI 内嵌 fragment，
+            // 后者由顶部条 OCR 名字把关（与 2026-10-22 实测口径一致）。
+            chatMarkers = listOf("ChattingUI", "LauncherUI"),
+        )
+        "com.tencent.wework" -> ImPages(
+            mainMarkers = listOf("WwMainActivity"),
+            searchMarkers = listOf("GlobalSearchActivity"),
+            chatMarkers = listOf("MessageListActivity"),
+        )
+        else -> ImPages(
+            mainMarkers = listOf("Launcher", "Main"),
+            searchMarkers = listOf("Search"),
+            chatMarkers = listOf("Chat", "Message"),
+        )
+    }
+
+    /**
      * 打开 [imPackage] 中与 [contactName] 的聊天页。主线程之外执行（IO），
      * a11y 手势/tap 由 [AssistsA11yBridge] 内部调度到主线程。
      */
@@ -464,6 +496,7 @@ class ImChatNavigator @Inject constructor(
      */
     private suspend fun openChatByVision(imPackage: String, name: String): NavResult {
         Log.i(TAG, "[v2] openChat pkg=$imPackage name=$name (vision mode)")
+        val pages = pagesOf(imPackage)
         // ①-2 感知面：Shizuku screencap 主源（原生分辨率清晰帧——HyperOS
         // 投影帧 ~2× 下采样模糊、OCR 无法识别，2026-10-21 真机实测）；投影
         // 降级为兜底帧源（FrameSource 阶梯内自动降级）。screencap 通道探测
@@ -506,25 +539,41 @@ class ImChatNavigator @Inject constructor(
         // ④' 当前页预检（模式 2 无窗口标题可读，用「dumpsys 类名门 + 投影帧
         // OCR」替代模式 1 的 ④ titleMatches）：微信拉起后恢复上次停留页，
         // 若恰为目标聊天页（重复点击/最近聊过场景）直接成功，跳过搜索全链。
-        if (chatPageVisibleByVision(name)) {
+        if (chatPageVisibleByVision(name, pages)) {
             Log.i(TAG, "[v2] ④' already on target chat page")
             return NavResult.Ok
         }
         Log.i(TAG, "[v2] ④' not on target page, continue to search")
 
-        // ⑤-1 非主列表态归位：微信 task 栈可能残留多层（搜索页/聊天页，
-        // ④'-R2 真机实测栈=[主列表, FTSMainUI, ChattingUI]），搜索图标坐标
-        //（⑤）只在主列表有效——back 逐层退出直到 LauncherUI（主列表 back=
-        //「再按退出」不真退，模式 1 实测）。
-        backToMainList()
+        // ⑤-0 已在搜索页（拉起后恢复了上次停留的搜索页）→ 直接输入，不必
+        // 归位再点搜索图标（企微 back 会退到上一 App，绕路反而易错）。
+        var searchReady = isSearchActivity(pages)
+
+        // ⑤-1 非主列表/搜索页时归位：微信/企微 task 栈可能残留多层（搜索页/
+        // 聊天页，真机实测栈=[主列表, 搜索页, 聊天页]）。防呆（2026-10-26
+        // 企微实测）：back 可能退出 IM 回到上一个 App（企微主列表 back 直接
+        // 退到微信），盲退 3 轮会把「搜索图标」点进别的 App——每轮先确认
+        // 前台仍是目标 IM，退到主列表即停；已离开则重新拉起。
+        if (!searchReady) {
+            backToMainList(imPackage, pages)
+            if (shizuku.foregroundPackage() != imPackage) {
+                Log.i(TAG, "[v2] ⑤-1 im left foreground, relaunch…")
+                if (!relaunchByShell(imPackage)) {
+                    Log.w(TAG, "[v2] ⑤-1 relaunch timeout")
+                    return NavResult.Fail(REASON_LAUNCH_TIMEOUT)
+                }
+                delay(POST_TAP_DELAY_MS)
+            }
+            searchReady = isSearchActivity(pages)
+        }
 
         // ⑤ 搜索入口：以图找图优先（search 模板 + 投影帧，多尺度），坐标
         // 比例兜底——双模铁律的「以图找图」主路径；冷启动图标渲染慢，
-        // miss 时轮询重试（[IMAGE_FIND_POLLS]）。tap 后必须验证 FTS 真的
+        // miss 时轮询重试（[IMAGE_FIND_POLLS]）。tap 后必须验证搜索页真的
         // 开了（R3 真机实测：冷启动 activity 已就绪但像素还是启动态，帧里
-        // 无真图标 → 误匹配点在随机位置、FTS 从未打开而链路继续走空）；
+        // 无真图标 → 误匹配点在随机位置、搜索页从未打开而链路继续走空）；
         // 未开则归位后重试，ratio 兜底同样验证，全失败即报因。
-        var searchTapped = false
+        var searchTapped = searchReady
         var poll = 0
         while (!searchTapped && poll < IMAGE_FIND_POLLS) {
             poll++
@@ -538,16 +587,20 @@ class ImChatNavigator @Inject constructor(
                 )
                 if (tapped) {
                     delay(POST_TAP_DELAY_MS)
-                    searchTapped = ftsOpened()
+                    searchTapped = isSearchActivity(pages)
                     if (!searchTapped) {
-                        Log.i(TAG, "[v2] ⑤ fts not open after image tap, retry poll=$poll")
+                        Log.i(TAG, "[v2] ⑤ search page not open after image tap, retry poll=$poll")
                     }
                 }
             } else {
                 Log.i(TAG, "[v2] ⑤ image match miss poll=$poll")
             }
             if (!searchTapped) {
-                backToMainList()
+                backToMainList(imPackage, pages)
+                if (shizuku.foregroundPackage() != imPackage && !relaunchByShell(imPackage)) {
+                    Log.w(TAG, "[v2] ⑤ retry relaunch timeout")
+                    return NavResult.Fail(REASON_LAUNCH_TIMEOUT)
+                }
                 delay(POST_TAP_DELAY_MS)
             }
         }
@@ -558,11 +611,11 @@ class ImChatNavigator @Inject constructor(
             Log.i(TAG, "[v2] ⑤ image miss, tap search icon by ratio ($sx,$sy)")
             if (shizuku.tap(sx, sy).isSuccess) {
                 delay(POST_TAP_DELAY_MS)
-                searchTapped = ftsOpened()
+                searchTapped = isSearchActivity(pages)
             }
         }
         if (!searchTapped) {
-            Log.w(TAG, "[v2] ⑤ tap search FAILED (fts never opened)")
+            Log.w(TAG, "[v2] ⑤ tap search FAILED (search page never opened)")
             return NavResult.Fail(REASON_TAP_FAILED)
         }
         delay(POST_TAP_DELAY_MS)
@@ -592,35 +645,36 @@ class ImChatNavigator @Inject constructor(
         }
         delay(POST_INPUT_DELAY_MS)
 
-        // ⑦-0 等搜索结果渲染：paste 上屏后 FTS 联想搜索异步刷新（R2 真机实测
+        // ⑦-0 等搜索结果渲染：paste 上屏后搜索联想异步刷新（R2 真机实测
         // 固定 1.2s 不够——tap 落在起始页「按住说出你的问题」语音按钮上，
         // y=0.197h 恰与其重合）。screencap + OCR 全帧轮询直到联系人名出现
-        // （FTS 起始页无名字文本）再 tap 结果条目；超时兜底维持原坐标直点。
-        var resultReady = false
+        // （搜索起始页无名字文本）；命中行的中心即结果条目 tap 点（各 IM
+        // 结果行高/布局不同，OCR 定位比固定比例稳，企微实测行中心 y≈525）。
+        var resultLine: OcrLine? = null
         repeat(RESULT_RENDER_POLLS) {
-            if (!resultReady) {
-                resultReady = ocrSeesName(name)
-                if (!resultReady) delay(POLL_INTERVAL_MS)
+            if (resultLine == null) {
+                resultLine = ocrNameLine(name)
+                if (resultLine == null) delay(POLL_INTERVAL_MS)
             }
         }
-        Log.i(TAG, "[v2] ⑦-0 result rendered=$resultReady")
+        Log.i(TAG, "[v2] ⑦-0 result line=${resultLine?.text} cy=${resultLine?.centerY}")
 
-        // ⑦ 结果条目：坐标比例兜底唯一通道（FTS 全页 a11y 黑洞，节点通道
-        // 不存在；paste 直接上屏，无 IME 候选多跳问题，单跳）。
-        val entryX = size.first / 2
-        val entryY = (size.second * RESULT_ENTRY_Y_RATIO).toInt()
+        // ⑦ 结果条目：OCR 命中行中心优先，未渲染出来才回退坐标比例（搜索页
+        // 全页 a11y 黑洞，节点通道不存在；paste 直接上屏，单跳）。
+        val entryX = resultLine?.centerX ?: (size.first / 2)
+        val entryY = resultLine?.centerY ?: (size.second * RESULT_ENTRY_Y_RATIO).toInt()
         Log.i(TAG, "[v2] ⑦ tap result entry ($entryX,$entryY)")
         if (shizuku.tap(entryX, entryY).isFailure) {
             return NavResult.Fail(REASON_TAP_FAILED)
         }
 
-        // ⑧ 投影抽帧 OCR 验证（chatPageVisibleByOcr 三层名字匹配 + 类名门）；
+        // ⑧ 抽帧 OCR 验证（chatPageVisibleByOcr 三层名字匹配 + 类名门）；
         // 转场 ~1s 后再开 OCR（poll≥2），每 2 轮一次。
         var entered = false
         repeat(RESULT_POLLS) { poll ->
             if (!entered) {
                 entered = poll >= 2 && poll % 2 == 0 &&
-                    chatPageVisibleByVision(name)
+                    chatPageVisibleByVision(name, pages)
             }
             if (!entered) delay(POLL_INTERVAL_MS)
         }
@@ -637,13 +691,40 @@ class ImChatNavigator @Inject constructor(
         return false
     }
 
-    /** 归位到微信主列表：back 逐层退出非 LauncherUI 态（搜索页/聊天页/弹层）。 */
-    private suspend fun backToMainList() {
+    /** 重新拉起 IM 并等前台（模式 2 用 shell 轮询，不依赖 a11y）。 */
+    private suspend fun relaunchByShell(imPackage: String): Boolean {
+        val launch = runCatching {
+            context.packageManager.getLaunchIntentForPackage(imPackage)
+        }.getOrNull() ?: return false
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(launch) }
+        return awaitForegroundByShell(imPackage)
+    }
+
+    /** 当前是否在搜索页（页面 activity 命中搜索关键字）。 */
+    private suspend fun isSearchActivity(pages: ImPages): Boolean {
+        val activity = runCatching { shizuku.foregroundActivity() }.getOrNull() ?: return false
+        return pages.searchMarkers.any { activity.contains(it) }
+    }
+
+    /**
+     * 归位到 IM 主列表：back 逐层退出非主列表态（搜索页/聊天页/弹层）。
+     * 每轮先确认前台仍是目标 IM——back 可能直接退出 App（企微主列表 back
+     * 退到上一个 App），此时立即停手交调用方重新拉起，绝不盲退。
+     * 主列表判定按 [pages] 的 IM 专属 activity（微信 LauncherUI、企微
+     * WwMainActivity），通用「LauncherUI」硬编码会让企微永远归不了位。
+     */
+    private suspend fun backToMainList(imPackage: String, pages: ImPages) {
         for (round in 1..BACK_ROUNDS) {
+            val fg = runCatching { shizuku.foregroundPackage() }.getOrNull()
+            if (fg != imPackage) {
+                Log.i(TAG, "[v2] ⑤-1 left $imPackage fg=$fg (round=$round)")
+                return
+            }
             val activity = runCatching { shizuku.foregroundActivity() }.getOrNull()
-            if (activity?.contains("LauncherUI") == true) {
-                Log.i(TAG, "[v2] ⑤-1 on main list (round=$round)")
-                break
+            if (pages.mainMarkers.any { activity?.contains(it) == true }) {
+                Log.i(TAG, "[v2] ⑤-1 on main list (round=$round) activity=$activity")
+                return
             }
             val backed = runCatching { shizuku.back() }.getOrNull()
             Log.i(TAG, "[v2] ⑤-1 back round=$round ok=${backed?.isSuccess} activity=$activity")
@@ -651,54 +732,52 @@ class ImChatNavigator @Inject constructor(
         }
     }
 
-    /** ⑤ tap 后验证 FTS 搜索页真的打开（防误匹配点空/点到弹层后链路走空）。 */
-    private suspend fun ftsOpened(): Boolean =
-        runCatching { shizuku.foregroundActivity() }.getOrNull()
-            ?.contains("FTSMainUI") == true
-
     /**
-     * ⑦-0 结果区 OCR 找联系人名：只看搜索框以下（centerY ≥ 0.12h）的行——
-     * 粘贴上屏后搜索框恒含名字（全帧检查立即假阳性），结果条目（≈0.197h）
-     * 渲染出来才算就绪。
+     * ⑦-0 结果区 OCR 找联系人名并回传命中行：只看搜索框以下（centerY ≥ 0.12h）
+     * 的行——粘贴上屏后搜索框恒含名字（全帧检查立即假阳性）。多命中取最靠上
+     * （IM 搜索按相关度/最近排序，与「打开排序最前的对话」一致）。
      */
-    private suspend fun ocrSeesName(name: String): Boolean {
-        val frame = runCatching { shizuku.screencap() }.getOrNull() ?: return false
-        val lines = ocr.recognize(bitmapToPng(frame)).getOrNull() ?: return false
+    private suspend fun ocrNameLine(name: String): OcrLine? {
+        val frame = runCatching { shizuku.screencap() }.getOrNull() ?: return null
+        val lines = ocr.recognize(bitmapToPng(frame)).getOrNull() ?: return null
         val minCy = (frame.height * HEADER_STRIP_RATIO).toInt()
-        return nameInOcrLines(lines.filter { it.centerY >= minCy }, name)
+        return lines.asSequence()
+            .filter { it.centerY >= minCy && lineMatches(it.text, name) }
+            .minByOrNull { it.centerY }
     }
 
-    /** 名字三层匹配（精确/CJK 段/前缀 2/3，⑧ 顶部条与 ⑦-0 全帧共用）。 */
-    private fun nameInOcrLines(lines: List<OcrLine>, name: String): Boolean {
+    /** 名字三层匹配（精确/CJK 段/前缀 2/3，⑧ 顶部条与 ⑦-0 结果区共用）。 */
+    private fun nameInOcrLines(lines: List<OcrLine>, name: String): Boolean =
+        lines.any { lineMatches(it.text, name) }
+
+    private fun lineMatches(text: String, name: String): Boolean {
         val compactName = name.lowercase().filter { !it.isWhitespace() }
         if (compactName.isEmpty()) return false
         val cjkName = compactName.filter { it.code in CJK_RANGE }
         val prefixLen = (compactName.length * PREFIX_MATCH_RATIO).toInt()
-        return lines.any { line ->
-            val ocr = line.text.lowercase().filter { !it.isWhitespace() }
-            ocr.contains(compactName) ||
-                (cjkName.length >= CJK_MIN && ocr.filter { it.code in CJK_RANGE }.contains(cjkName)) ||
-                commonPrefixLen(ocr, compactName) >= prefixLen
-        }
+        val ocr = text.lowercase().filter { !it.isWhitespace() }
+        return ocr.contains(compactName) ||
+            (cjkName.length >= CJK_MIN && ocr.filter { it.code in CJK_RANGE }.contains(cjkName)) ||
+            commonPrefixLen(ocr, compactName) >= prefixLen
     }
 
     /**
      * 模式 2 聊天页判别（④'/⑧ 共用）：dumpsys Activity 类名门 + 帧 OCR。
-     * 聊天页有两种宿主：ChattingUI activity（从 FTS 搜索结果进入）或
-     * LauncherUI 内嵌 fragment（从主列表直点进入——此时 task 栈仅
-     * LauncherUI、无 ChattingUI 记录，2026-10-22 真机实测），两者都放行；
-     * FTSMainUI（搜索页）仍排除——其搜索框文本=名字会诱导 OCR 误报，而
-     * 「取消」小字 ML Kit 偶发漏识不可单独依赖。主列表态的 LauncherUI 由
-     * [chatPageVisibleByOcr] 顶部条把关：主列表标题「微信(N)」不含联系人名，
-     * 聊天页顶部条才是名字——类名只证明「在微信」，名字证明「跟谁的页」。
+     * 类名门按 IM 专属 [ImPages.chatMarkers]：微信 ChattingUI / LauncherUI
+     * 内嵌 fragment（从主列表直点进入时 task 栈仅 LauncherUI、无 ChattingUI
+     * 记录，2026-10-22 实测）、企微 MessageListActivity（2026-10-26 实测）。
+     * 搜索页仍排除——其搜索框文本=名字会诱导 OCR 误报，而「取消」小字
+     * ML Kit 偶发漏识不可单独依赖；搜索页 activity 不在 chatMarkers 内，
+     * 天然排除。主列表态的微信 LauncherUI 由 [chatPageVisibleByOcr] 顶部条
+     * 把关：主列表标题「微信(N)」不含联系人名，聊天页顶部条才是名字。
      */
-    private suspend fun chatPageVisibleByVision(name: String): Boolean {
+    private suspend fun chatPageVisibleByVision(name: String, pages: ImPages): Boolean {
         val activity = runCatching { shizuku.foregroundActivity() }.getOrNull()
-        val chatHost = activity?.contains("ChattingUI") == true ||
-            activity?.contains("LauncherUI") == true
-        if (!chatHost) return false
+            ?: return false
+        if (pages.chatMarkers.none { activity.contains(it) }) return false
         return chatPageVisibleByOcr(name, frameSource.grabFrame().getOrNull())
     }
+
 
     /**
      * 屏幕尺寸（模式 2 坐标系）：application context 的 displayMetrics 即
@@ -761,11 +840,51 @@ class ImChatNavigator @Inject constructor(
         return false
     }
 
+    /**
+     * 联系人名匹配片段（模糊匹配）：除完整名外，仅当「中文段 ≥2 字 + 拉丁段
+     * ≥5 字符」时再拆出中英文片段（如「吴瑞曦topwayricky」→ 吴瑞曦 /
+     * topwayricky）。微信联系人显示名常是中文+英文备注连写，搜索结果/聊天页
+     * 标题可能只露出其中一段（或带分词空格），精确匹配必 miss。
+     * 拉丁段门槛 5 字符：避免把「demo 项目群」这类普通标题拆成 "demo" 后
+     * 误中其他会话。
+     */
+    private fun matchTokens(name: String): List<String> {
+        val compact = name.lowercase().filter { !it.isWhitespace() }
+        if (compact.isEmpty()) return emptyList()
+        val cjk = compact.filter { it.code in CJK_RANGE }
+        val latin = compact.filter { it in 'a'..'z' || it in '0'..'9' }
+        return buildList {
+            add(compact)
+            if (cjk.length >= CJK_MIN && latin.length >= 5) {
+                add(cjk)
+                add(latin)
+            }
+        }.distinct()
+    }
+
+    /** 按完整名 + 中英文片段查找文本节点（去重），供结果/会话条目模糊匹配。 */
+    private fun findTextFuzzy(query: String): List<TextNode> {
+        val tokens = matchTokens(query)
+        if (tokens.isEmpty()) return emptyList()
+        if (tokens.size == 1) return bridge.findText(tokens.first())
+        val results = LinkedHashMap<String, TextNode>()
+        tokens.forEach { token ->
+            bridge.findText(token).forEach { node ->
+                results.putIfAbsent("${node.text}\u0000${node.top}\u0000${node.left}", node)
+            }
+        }
+        return results.values.toList()
+    }
+
     /** 轮询找文本节点（等待界面转场补齐节点）；只认中心在屏幕内的节点——
-     *  真机实测 dump 会给出滚出屏/隐藏节点（如 (-734,2045)），点了必失败。 */
+     *  真机实测 dump 会给出滚出屏/隐藏节点（如 (-734,2045)），点了必失败。
+     *  多命中时取最靠上者：IM 主列表按最近会话排序，首条即「排序最前的对话」。 */
     private suspend fun awaitNode(query: String): TextNode? {
         repeat(NODE_POLLS) {
-            bridge.findText(query).firstOrNull(::inScreen)?.let { return it }
+            findTextFuzzy(query)
+                .filter(::inScreen)
+                .minByOrNull { it.top }
+                ?.let { return it }
             delay(POLL_INTERVAL_MS)
         }
         return null
@@ -779,7 +898,7 @@ class ImChatNavigator @Inject constructor(
     private suspend fun awaitContactResult(name: String): TextNode? {
         repeat(RESULT_POLLS) {
             val minTop = (bridge.screenSize()?.second ?: 0) / RESULT_MIN_TOP_RATIO
-            val hit = bridge.findText(name)
+            val hit = findTextFuzzy(name)
                 .filter { it.top > minTop && inScreen(it) }
                 .minByOrNull { it.top }
             if (hit != null) return hit
@@ -795,16 +914,14 @@ class ImChatNavigator @Inject constructor(
     }
 
     /**
-     * 标题含名字判定（②④④½⑦⑧ 共用）：大小写不敏感 + 空白无关——微信
-     * 聊天页标题/节点文本可能带分词空格（「吴瑞曦 topwayricky」），
-     * 精确子串会 miss。
+     * 标题含名字判定（②④④½⑦⑧ 共用）：大小写不敏感 + 空白无关 + 中英文片段
+     * 模糊匹配——微信聊天页标题可能是「吴瑞曦topwayricky」，也可能只露出
+     * 中文段或英文备注（或带分词空格），精确子串会 miss。
      */
     private fun titleMatches(title: String?, name: String): Boolean {
         if (title == null) return false
-        if (title.contains(name)) return true
         val compactTitle = title.lowercase().filter { !it.isWhitespace() }
-        val compactName = name.lowercase().filter { !it.isWhitespace() }
-        return compactName.isNotEmpty() && compactTitle.contains(compactName)
+        return matchTokens(name).any { token -> compactTitle.contains(token) }
     }
 
     /** 等搜索页输入框自动聚焦（FTS 转场+键盘弹起需 1-2s，轮询而非单次读）。 */

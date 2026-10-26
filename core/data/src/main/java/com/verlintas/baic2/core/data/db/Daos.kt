@@ -196,6 +196,9 @@ interface MessageDao {
     @Query("SELECT COALESCE(SUM(usageOutput), 0) FROM messages")
     suspend fun totalOutputTokens(): Long
 
+    @Query("SELECT COALESCE(SUM(usagePointsMilli), 0) FROM messages")
+    suspend fun totalPointsMilli(): Long
+
     /**
      * Cross-conversation recall. Tool traffic is skipped: episodes are what
      * a person remembers, not their shell commands. The pattern only prefilters

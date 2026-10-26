@@ -232,6 +232,15 @@ class AgentLoop(
                 model = config.model,
                 usageInput = roundUsageInput,
                 usageOutput = roundUsageOutput,
+                usagePointsMilli = if (roundUsageInput != null || roundUsageOutput != null) {
+                    com.verlintas.baic2.core.model.PointsPricing.deductPointsMilli(
+                        promptTokens = roundUsageInput ?: 0L,
+                        completionTokens = roundUsageOutput ?: 0L,
+                        coefficientMilli = com.verlintas.baic2.core.model.ModelPricing.coefficientMilli(config.model),
+                    )
+                } else {
+                    null
+                },
             )
             emit(AgentEvent.AssistantMessage(assistant))
 

@@ -75,7 +75,7 @@ data class BuildInfo(
 private object SettingsRoute {
     const val ROOT = "settings_root"
     const val AGENTS = "settings_agents"
-    const val AGENT_WIZARD = "settings_agent_wizard?agentId={agentId}"
+    const val AGENT_WIZARD = "settings_agent_wizard?modelKey={modelKey}"
     const val PERMISSIONS = "settings_permissions"
     const val APPEARANCE = "settings_appearance"
     const val LANGUAGE = "settings_language"
@@ -83,7 +83,7 @@ private object SettingsRoute {
     const val ABOUT = "settings_about"
     const val LICENSES = "settings_licenses"
 
-    fun agentWizard(agentId: Long? = null) = "settings_agent_wizard?agentId=${agentId ?: -1L}"
+    fun agentWizard(modelKey: String) = "settings_agent_wizard?modelKey=$modelKey"
 }
 
 @Composable
@@ -131,17 +131,16 @@ fun SettingsScreen(
         composable(SettingsRoute.AGENTS) {
             AgentsPage(
                 onBack = { navController.popBackStack() },
-                onAdd = { navController.navigate(SettingsRoute.agentWizard()) },
-                onEdit = { id -> navController.navigate(SettingsRoute.agentWizard(id)) },
+                onSelectModel = { modelKey -> navController.navigate(SettingsRoute.agentWizard(modelKey)) },
             )
         }
         composable(
             route = SettingsRoute.AGENT_WIZARD,
-            arguments = listOf(navArgument("agentId") { type = NavType.LongType }),
+            arguments = listOf(navArgument("modelKey") { type = NavType.StringType; defaultValue = "" }),
         ) { entry ->
-            val agentId = entry.arguments?.getLong("agentId")?.takeIf { it >= 0 }
+            val modelKey = entry.arguments?.getString("modelKey").orEmpty()
             com.verlintas.baic2.feature.agents.AgentWizardScreen(
-                agentId = agentId,
+                modelKey = modelKey,
                 onClose = { navController.popBackStack() },
             )
         }
@@ -215,13 +214,14 @@ private fun SettingsRoot(
         item(key = "agents") {
             SettingsRow(
                 title = stringResource(R.string.settings_agents_title),
-                summary = if (state.agents.isEmpty()) {
-                    stringResource(R.string.settings_agents_none)
+                summary = if (state.models.isEmpty()) {
+                    stringResource(R.string.settings_models_empty)
                 } else {
+                    val selected = state.models.firstOrNull { it.key == state.selectedModelKey }
                     stringResource(
                         R.string.settings_agents_summary,
-                        state.agents.size,
-                        state.agents.firstOrNull { it.isDefault }?.name ?: "-",
+                        state.models.size,
+                        selected?.displayName ?: "-",
                     )
                 },
                 icon = Icons.Outlined.Person,

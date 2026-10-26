@@ -25,6 +25,9 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 内置安装 Shizuku（docs/2026-10-26-内置安装Shizuku方案.md）：普通权限，
+         无运行时弹窗；用户需在系统「安装未知应用」里为本应用放行。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
@@ -43,6 +46,8 @@
         android:required="false" />
 
     <queries>
+        <!-- 内置安装/检测 Shizuku：显式声明包可见性，不依赖 QUERY_ALL_PACKAGES 兜底 -->
+        <package android:name="moe.shizuku.privileged.api" />
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
@@ -71,6 +76,22 @@
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"
             tools:ignore="MissingClass" />
+
+        <!-- 内置 Shizuku 安装包（assets/shizuku.apk）经缓存目录以 content:// 交给系统安装器 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.shizukuinstaller"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shizuku_installer_paths" />
+        </provider>
+
+        <!-- 好参谋自更新：系统 PackageInstaller 会话安装结果回调 -->
+        <receiver
+            android:name=".floatball.update.UpdateInstallReceiver"
+            android:exported="false" />
 
         <activity
             android:name=".MainActivity"

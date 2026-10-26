@@ -68,7 +68,11 @@ import com.verlintas.baic2.MainActivity
 import com.verlintas.baic2.R
 import com.verlintas.baic2.TAB_SETTINGS
 import com.verlintas.baic2.floatball.director.AdvisorNotificationListener
+import com.verlintas.baic2.floatball.auto.AutoSelectionStore
+import com.verlintas.baic2.floatball.auto.AutoSessionScheduler
 import com.verlintas.baic2.floatball.auto.CompanionWindowController
+import com.verlintas.baic2.floatball.home.AdvisorRunState
+import com.verlintas.baic2.floatball.home.AdvisorSelfWindowGate
 import com.verlintas.baic2.floatball.notify.EscalationNotifier
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.keepalive.KeepAliveManager
@@ -81,6 +85,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -125,6 +130,18 @@ class FloatBallService : Service() {
     @Inject
     lateinit var contactRepository: com.verlintas.baic2.floatball.advisor.ContactRepository
 
+    /** 自动托管范围持久化（主页两级多选结果，方案 §5.3.1）。 */
+    @Inject
+    lateinit var autoSelectionStore: AutoSelectionStore
+
+    /** 多会话串行调度器（自动档多目标轮转，方案 §5.4）。 */
+    @Inject
+    lateinit var autoSessionScheduler: AutoSessionScheduler
+
+    /** 运行态唯一事实源：服务写、主页操作条/状态签读（方案 §9.1）。 */
+    @Inject
+    lateinit var advisorRunState: AdvisorRunState
+
     /** 范围选定后拉起目标聊天页（RPA 搜索导航，方案 §3.3 接线）。 */
     @Inject
     lateinit var imChatNavigator: com.verlintas.baic2.floatball.auto.ImChatNavigator
@@ -133,12 +150,30 @@ class FloatBallService : Service() {
     @Inject
     lateinit var accountManager: com.verlintas.baic2.floatball.account.AccountManager
 
-    private enum class Mode { IDLE, ONESHOT, RECORDING }
+    /** 客户端升级门：强制更新时停止悬浮球并拉起主界面强制页。 */
+    @Inject
+    lateinit var updateManager: com.verlintas.baic2.floatball.update.AppUpdateManager
+
+    private var forcedUpdateStopHandled = false
+
+    private enum class Mode { IDLE, ONESHOT, RECORDING, AUTO }
 
     private var mode = Mode.IDLE
 
     /** M3-b：RECORDING 态的子语义——true=自动陪伴窗口（收尾走窗口汇总通知）。 */
     private var companionWindow = false
+
+    /** 自动档运行标记（主页入口）：true 时球显示脉冲红点、停止统一走 [stopAuto]。 */
+    private var autoRun = false
+
+    /** 自动档单会话：陪伴窗口已真正开启（用于窗口到期自动复位）。 */
+    private var autoCompanionStarted = false
+
+    /** 主页入口连续：关闭分屏即停止（方案 §8.12），仅本次会话有效。 */
+    private var stopOnSplitClose = false
+
+    /** 主页入口的首次录制不弹开始 Toast（避免污染首帧 OCR）。 */
+    private var quietRecordingStart = false
 
     private lateinit var windowManager: WindowManager
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -237,6 +272,19 @@ class FloatBallService : Service() {
                 stopSelf()
             }
         }
+        // 强制更新门：缓存命中立即停；否则启动检查，一旦判定强制就停。
+        // 与登录门同一套收尾逻辑，避免保活链把服务反复拉起。
+        updateManager.checkOnLaunch()
+        scope.launch {
+            updateManager.state.collect { state ->
+                if (isForcedUpdateState(state) || updateManager.forcedBlocked()) {
+                    mainHandler.post { stopForForcedUpdate() }
+                }
+            }
+        }
+        if (updateManager.forcedBlocked()) {
+            mainHandler.post { stopForForcedUpdate() }
+        }
         keepAliveManager.onServiceCreated()
         showBall()
         // M2-b：开机/服务重启后检点闹钟重挂（总闸关时内部自会撤销）。
@@ -302,6 +350,17 @@ class FloatBallService : Service() {
             screenAdvisor.missionUi.collect { state ->
                 mainHandler.post {
                     split?.let { FloatUi.renderStrategyStrip(it.strategyStrip, state, strategyCallbacks) }
+                }
+            }
+        }
+        scope.launch {
+            // 自动档单会话：陪伴窗口到期/被收尾后复位到空闲（方案 §5.3.3 停止口径）。
+            companionController.activeWindow.collect { window ->
+                if (window != null) {
+                    if (autoRun) autoCompanionStarted = true
+                } else if (autoRun && autoCompanionStarted) {
+                    autoCompanionStarted = false
+                    mainHandler.post { finishAutoRun() }
                 }
             }
         }
@@ -487,6 +546,12 @@ class FloatBallService : Service() {
             // 免双击入口（通知栏自动化/测试）：与双击同一状态机路径。
             ACTION_START_RECORDING -> if (mode == Mode.IDLE && ball != null) startRecording()
             ACTION_STOP_RECORDING -> if (mode == Mode.RECORDING) stopRecording()
+            // 主页三键（方案 §5.1–§5.3）：先收 action 再 moveTaskToBack，服务等
+            // 自身不可见后才采集/托管——绝不在自家主页上截屏。
+            ACTION_ONESHOT_FROM_MAIN -> startOneshotFromMain()
+            ACTION_CONTINUOUS_FROM_MAIN -> startContinuousFromMain()
+            ACTION_AUTO_FROM_MAIN -> startAutoFromMain()
+            ACTION_STOP_AUTO -> stopAuto(announce = true)
             // M3-b 陪伴窗口收尾通知「续 30 分钟」：同一状态机入口重启窗口。
             CompanionWindowController.ACTION_RENEW_WINDOW -> onCompanionRenew(intent)
             // M2-a 起草通知点开：分屏预览代拟稿，一键发送/改后发送（§8.1 N4）。
@@ -515,6 +580,9 @@ class FloatBallService : Service() {
         askJob?.cancel()
         // 陪伴窗口静默清理：服务都要销毁了，不发作何收尾通知。
         companionController.cancelAllSilently()
+        autoSessionScheduler.cancelAllSilently()
+        advisorRunState.setIdle()
+        AdvisorSelfWindowGate.reset()
         diffEngine.destroy()
         screenAdvisor.advisorScopeCancel()
         scope.cancel()
@@ -581,6 +649,8 @@ class FloatBallService : Service() {
                             view.postDelayed(r, TAP_ARB_MS)
                         }
                         Mode.RECORDING -> toggleSplit()
+                        // 自动托管：单击开/合分屏查看当前回合（方案 §5.3.3）。
+                        Mode.AUTO -> toggleSplit()
                         Mode.ONESHOT -> Unit // 忙碌：单击无效
                     }
                     return true
@@ -597,6 +667,8 @@ class FloatBallService : Service() {
                             startRecording()
                         }
                         Mode.RECORDING -> stopRecording()
+                        // 自动托管：双击 = 全部停止（方案 §5.3.3）。
+                        Mode.AUTO -> stopAuto(announce = true)
                         Mode.ONESHOT -> Unit // 忙碌：双击无效
                     }
                     return true
@@ -692,12 +764,15 @@ class FloatBallService : Service() {
 
     // ------------------------------------------------------- one shot
 
-    private fun startOneShot() {
+    private fun startOneShot(fromMain: Boolean = false) {
         if (mode != Mode.IDLE) return
         // 入口可能是长按主球，或扇形菜单「问答」子球：菜单（若开着）立即
         // 撤除，不等收起动画——既防自身 UI 污染 OCR，也避免忙碌态可点菜单。
         dismissMenuNow()
         mode = Mode.ONESHOT
+        advisorRunState.setOneshot(
+            if (fromMain) AdvisorRunState.Source.HOME else AdvisorRunState.Source.FLOAT_BALL,
+        )
         ball?.setMode(FloatUi.BallMode.BUSY, this)
         val preheated = screenAdvisor.consumePreheat()
         val needsHide = preheated == null || preheated.length < ScreenPerceiver.MIN_TEXT_CHARS
@@ -768,6 +843,7 @@ class FloatBallService : Service() {
             // 先置空再复位图标：此刻协程仍在 finally 内（isActive=true），
             // isBusy() 会被 Job 拖住；post 到队列尾＝协程完成后才真正执行。
             askJob = null
+            advisorRunState.setIdle()
             ball?.setMode(FloatUi.BallMode.NORMAL, this)
             restoreBall()
             // askJob 收尾晚于 transcript 末次 Idle 发射：不补这一下，输入行
@@ -778,7 +854,11 @@ class FloatBallService : Service() {
 
     // ----------------------------------------------------- recording
 
-    private fun startRecording(forCompanion: Boolean = false) {
+    private fun startRecording(
+        forCompanion: Boolean = false,
+        fromMain: Boolean = false,
+        quiet: Boolean = false,
+    ) {
         if (mode != Mode.IDLE) return
         // 三档互斥（方案 v2 §13.2，M3 验收项）：自动陪伴窗口在途时禁止再开
         // 手动连续；窗口自身的启动路径（forCompanion=true）不受此限。
@@ -787,12 +867,21 @@ class FloatBallService : Service() {
             return
         }
         mode = Mode.RECORDING
+        quietRecordingStart = quiet
         completionCount = 0
         // 新的录制会话：清零会话级 token 计数（累计总量不受影响）。
         screenAdvisor.resetSessionUsage()
         ball?.setMode(FloatUi.BallMode.RECORDING, this)
         closeSplit(keepBall = true) // 录制开始前撤掉自身分屏
         hideAllOverlays()
+        // 主页入口连续：关闭分屏即停止（方案 §8.12）。在 startRecording 内部
+        // 的 closeSplit 之后置位，避免刚启动就被自身撤屏动作停掉。
+        if (fromMain && !forCompanion) {
+            stopOnSplitClose = true
+            advisorRunState.setContinuous(AdvisorRunState.Source.HOME, stopOnSplitClose = true)
+        } else if (!forCompanion) {
+            advisorRunState.setContinuous(AdvisorRunState.Source.FLOAT_BALL, stopOnSplitClose = false)
+        }
         if (screenCapture.projectionAlive) {
             startRecordingLoop()
         } else {
@@ -820,7 +909,9 @@ class FloatBallService : Service() {
             onSignal = { signal -> mainHandler.post { handleEngineSignal(signal) } },
         )
         restoreBall()
-        toast(R.string.float_recording_started)
+        // 主页入口：首帧不弹 Toast（避免自家文案进 OCR 画面，方案 §5.2）。
+        if (!quietRecordingStart) toast(R.string.float_recording_started)
+        quietRecordingStart = false
     }
 
     private fun handleEngineSignal(signal: FrameDiffEngine.Signal) {
@@ -856,6 +947,11 @@ class FloatBallService : Service() {
         mode = Mode.IDLE
         completionCount = 0
         companionWindow = false
+        quietRecordingStart = false
+        stopOnSplitClose = false
+        // 自动档（单会话陪伴窗口）的停止由 stopAuto/finishAutoRun 统一收尾；
+        // 手动档回空闲态。
+        if (!autoRun) advisorRunState.setIdle()
         ball?.setMode(FloatUi.BallMode.NORMAL, this)
         ball?.setBadge(0)
         restoreBall()
@@ -911,6 +1007,16 @@ class FloatBallService : Service() {
         when (result) {
             CompanionWindowController.StartResult.STARTED -> {
                 companionWindow = true
+                if (autoRun) {
+                    // 自动档单会话（主页入口，方案 §5.3.3）：不弹「陪伴窗口已开启」
+                    // 以免污染首帧；起录制循环后切 AUTO 态（红球 + 脉冲红点）。
+                    if (mode == Mode.IDLE) startRecording(forCompanion = true, quiet = true)
+                    mode = Mode.AUTO
+                    ball?.setMode(FloatUi.BallMode.RECORDING, this)
+                    ball?.setAutoRunning(true)
+                    autoCompanionStarted = true
+                    return
+                }
                 toast(R.string.float_companion_started)
                 if (mode == Mode.IDLE) startRecording(forCompanion = true)
             }
@@ -923,7 +1029,171 @@ class FloatBallService : Service() {
             CompanionWindowController.StartResult.REASON_NO_CONTACT ->
                 toast(R.string.float_companion_need_contact)
         }
+        if (autoRun && result != CompanionWindowController.StartResult.STARTED) {
+            // 自动档启动失败：整体回退空闲，避免球停在 AUTO 态无窗口可托。
+            finishAutoRun()
+        }
     }
+
+    // ------------------------------------------------- home commands
+
+    /**
+     * 主页三键的「自身不可见」握手（方案 §5.5）：先 `moveTaskToBack`（由
+     * [AdvisorHomeLauncher] 在前台完成），服务等到 MainActivity 的 `onStop`
+     * 才允许采集；拿不到信号必须放弃本次，绝不在自家主页上截屏。
+     */
+    private suspend fun awaitSelfHidden(): Boolean {
+        val hidden = AdvisorSelfWindowGate.awaitHidden(SELF_HIDE_TIMEOUT_MS)
+        if (hidden) delay(SELF_HIDE_SETTLE_MS)
+        return hidden
+    }
+
+    private fun startOneshotFromMain() {
+        if (mode != Mode.IDLE) {
+            toast(R.string.float_home_disabled_busy)
+            return
+        }
+        scope.launch {
+            if (!awaitSelfHidden()) {
+                toast(R.string.float_home_self_hide_timeout)
+                return@launch
+            }
+            if (mode == Mode.IDLE) startOneShot(fromMain = true)
+        }
+    }
+
+    private fun startContinuousFromMain() {
+        if (mode != Mode.IDLE) {
+            toast(R.string.float_home_disabled_busy)
+            return
+        }
+        scope.launch {
+            if (!awaitSelfHidden()) {
+                toast(R.string.float_home_self_hide_timeout)
+                return@launch
+            }
+            if (mode == Mode.IDLE) {
+                startRecording(fromMain = true, quiet = true)
+            }
+        }
+    }
+
+    /**
+     * 主页「自动」：按 [AutoSelectionStore] 持久化的托管组启动（方案 §5.3.3）。
+     * 全部联系人 = 纯通知拟稿（与悬浮菜单同口径，不自动发送）；单会话且带
+     * APP 走陪伴窗口；其余走串行调度器。
+     */
+    private fun startAutoFromMain() {
+        if (mode != Mode.IDLE) {
+            toast(R.string.float_home_disabled_busy)
+            return
+        }
+        val selection = autoSelectionStore.current.value
+        if (selection.allContacts) {
+            if (!notificationListenerEnabled()) {
+                toast(R.string.float_home_auto_need_notify)
+                openNotificationListenerSettings()
+                return
+            }
+            if (!advisorPrefs.state.value.draftEnabled) advisorPrefs.setDraftEnabled(true)
+            toast(R.string.float_auto_draft_enabled)
+            return
+        }
+        if (selection.targets.isEmpty()) {
+            toast(R.string.float_home_scope_empty)
+            return
+        }
+        scope.launch {
+            if (!awaitSelfHidden()) {
+                toast(R.string.float_home_self_hide_timeout)
+                return@launch
+            }
+            applyAutoSelection(selection.targets)
+        }
+    }
+
+    private fun applyAutoSelection(targets: List<AutoSelectionStore.Target>) {
+        if (mode != Mode.IDLE) return
+        if (!advisorPrefs.state.value.autoModeEnabled) advisorPrefs.setAutoModeEnabled(true)
+        // ActionDispatcher 硬审要求联系人在白名单内；会话级目标共用联系人白名单。
+        for (contactId in targets.map { it.contactId }.distinct()) {
+            if (!advisorPrefs.addAutoWhitelistContact(contactId)) {
+                toast(getString(R.string.float_auto_whitelist_full, AdvisorPrefs.MAX_AUTO_WHITELIST))
+                return
+            }
+        }
+        val single = targets.size == 1 && targets.first().imPackage != null
+        if (single) {
+            val target = targets.first()
+            val imPackage = target.imPackage ?: return
+            val channel = target.channelName.orEmpty()
+            autoRun = true
+            advisorRunState.setAuto(
+                targetCount = 1,
+                activeContact = target.displayName,
+                activeApp = appLabel(imPackage),
+            )
+            scope.launch {
+                val nav = imChatNavigator.openChat(imPackage, channel)
+                if (nav is com.verlintas.baic2.floatball.auto.ImChatNavigator.NavResult.Fail) {
+                    imChatNavigator.toastResult(nav, channel)
+                    finishAutoRun()
+                    return@launch
+                }
+                beginCompanion(companionController.contactRefFor(target.contactId))
+            }
+        } else {
+            // 多目标 / 联系人级：通知事件驱动的串行调度器，球红 + 脉冲红点。
+            autoRun = true
+            autoCompanionStarted = false
+            mode = Mode.AUTO
+            autoSessionScheduler.start(targets)
+            ball?.setMode(FloatUi.BallMode.RECORDING, this)
+            ball?.setAutoRunning(true)
+        }
+    }
+
+    /** 自动档统一停止（主页自动键 / 双击球 / 通知）：清队列、收窗口、灭红点。 */
+    private fun stopAuto(announce: Boolean) {
+        if (!autoRun && mode != Mode.AUTO) return
+        autoRun = false
+        autoCompanionStarted = false
+        if (autoSessionScheduler.isRunning()) autoSessionScheduler.stop()
+        if (companionWindow) {
+            // 单会话：走陪伴窗口既有收尾（汇总通知），不弹「录制已停止」。
+            stopRecording()
+        } else if (mode == Mode.AUTO) {
+            mode = Mode.IDLE
+            ball?.setMode(FloatUi.BallMode.NORMAL, this)
+            restoreBall()
+        }
+        stopOnSplitClose = false
+        advisorRunState.setIdle()
+        ball?.setAutoRunning(false)
+        if (announce) toast(R.string.float_home_auto_stopped)
+    }
+
+    /** 陪伴窗口到期/启动失败：静默复位（不重复 toast，窗口自身已发收尾通知）。 */
+    private fun finishAutoRun() {
+        if (!autoRun) return
+        stopAuto(announce = false)
+    }
+
+    private fun notificationListenerEnabled(): Boolean =
+        NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
+
+    private fun openNotificationListenerSettings() {
+        runCatching {
+            startActivity(
+                Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
+    private fun appLabel(imPackage: String): String = runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(imPackage, 0)).toString()
+    }.getOrDefault(imPackage)
 
     /** 连续模式的 OCR 前掩膜：自身分屏 + 悬浮球的屏幕矩形。 */
     private fun currentOverlayRects(): List<Rect> {
@@ -1012,16 +1282,17 @@ class FloatBallService : Service() {
         ball = view
         ballParams = params
         excludeSystemGestures(view.root)
-        // 重建后按当前状态机恢复外观（录制态=红球）。
+        // 重建后按当前状态机恢复外观（录制/自动=红球）。
         view.setMode(
             when (mode) {
-                Mode.RECORDING -> FloatUi.BallMode.RECORDING
+                Mode.RECORDING, Mode.AUTO -> FloatUi.BallMode.RECORDING
                 Mode.ONESHOT -> FloatUi.BallMode.BUSY
                 Mode.IDLE -> FloatUi.BallMode.NORMAL
             },
             this,
         )
         if (mode == Mode.RECORDING) view.setBadge(completionCount)
+        if (mode == Mode.AUTO && autoRun) view.setAutoRunning(true)
     }
 
     private fun ensureSplit(): FloatUi.SplitPanel {
@@ -1440,6 +1711,17 @@ class FloatBallService : Service() {
         draftState = null
         screenAdvisor.resetTransient()
         if (!keepBall) restoreBall()
+        // 主页入口连续：关闭分屏即停止（方案 §8.12）。内部启动路径的
+        // closeSplit 早于置位，不会误停；只有用户主动关屏才会命中。
+        if (stopOnSplitClose && mode == Mode.RECORDING && !companionWindow) {
+            stopOnSplitClose = false
+            mainHandler.post {
+                if (mode == Mode.RECORDING) {
+                    stopRecording()
+                    toast(R.string.float_home_continuous_stopped)
+                }
+            }
+        }
     }
 
     // ------------------------------------------------- draft (M2-a 起草档)
@@ -2248,6 +2530,35 @@ class FloatBallService : Service() {
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
     }
 
+    /** 强制更新态：停止悬浮球并拉起主界面强制页（与登录门同一套收尾）。 */
+    private fun stopForForcedUpdate() {
+        if (forcedUpdateStopHandled) return
+        forcedUpdateStopHandled = true
+        toast(R.string.float_update_required_notice)
+        keepAliveManager.onUserExit()
+        proactiveCheckpoint.cancel()
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    putExtra(EXTRA_FROM_FLOAT, true)
+                },
+            )
+        }
+        stopSelf()
+    }
+
+    private fun isForcedUpdateState(
+        state: com.verlintas.baic2.floatball.update.UpdateState,
+    ): Boolean = when (state) {
+        is com.verlintas.baic2.floatball.update.UpdateState.Forced -> true
+        is com.verlintas.baic2.floatball.update.UpdateState.Downloading -> state.forced
+        is com.verlintas.baic2.floatball.update.UpdateState.ReadyToInstall -> state.forced
+        is com.verlintas.baic2.floatball.update.UpdateState.PermissionRequired -> state.forced
+        is com.verlintas.baic2.floatball.update.UpdateState.Failed -> state.forced
+        else -> false
+    }
+
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     /**
@@ -2279,6 +2590,19 @@ class FloatBallService : Service() {
         const val ACTION_REPOST_NOTIFICATION = "com.verlintas.baic2.floatball.REPOST_NOTIFICATION"
         const val ACTION_START_RECORDING = "com.verlintas.baic2.floatball.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.verlintas.baic2.floatball.STOP_RECORDING"
+
+        /** 主页三键入口（方案 §5.5）：action 由 [com.verlintas.baic2.floatball.home.AdvisorHomeLauncher] 发出。 */
+        const val ACTION_ONESHOT_FROM_MAIN = "com.verlintas.baic2.floatball.ONESHOT_FROM_MAIN"
+        const val ACTION_CONTINUOUS_FROM_MAIN = "com.verlintas.baic2.floatball.CONTINUOUS_FROM_MAIN"
+        const val ACTION_AUTO_FROM_MAIN = "com.verlintas.baic2.floatball.AUTO_FROM_MAIN"
+        const val ACTION_STOP_AUTO = "com.verlintas.baic2.floatball.STOP_AUTO"
+
+        /** 自身窗口隐藏握手超时（方案 §5.1 第 5 条：1.5s 拿不到即取消）。 */
+        const val SELF_HIDE_TIMEOUT_MS = 1_500L
+
+        /** 确认不可见后的退场稳定时间（方案 §5.1 第 2 条）。 */
+        const val SELF_HIDE_SETTLE_MS = 250L
+
         const val CONSENT_SETTLE_MS = 350L
 
         /** 单击展开扇形菜单的双击仲裁窗：tap-UP 后该时间内无第二击即展开。 */

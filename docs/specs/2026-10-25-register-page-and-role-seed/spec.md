@@ -103,3 +103,37 @@
    - 登录后菜单 = 订单管理（haocanmou 角色菜单），无系统管理/群控管理泄漏。
 4. PC 端回归：不带 productId 网页注册行为不变（激活邮件流程）。
 5. 冒烟链路 + logcat 无崩溃（App 侧如有改动）。
+
+---
+
+## 6. 2026-10-25 二次修订：App 注册页改原生实现（替代 WebView）
+
+### 6.1 触发反馈（真机截图）
+
+1. 顶栏下两行文案（「注册后回到本登录页即可」「帮您发群控」）属于冗余，要求去掉并整体美化；
+2. WebView 输入框字符**从行首倒插**（邮箱 `qq.com@87396953`、密码同理），昵称输入框偶发正常——`register.vue` 的 `dir=ltr` CSS 兜底无效；
+3. 软键盘覆盖下方输入框导致无法输入/删除，且该 WebView 页面**不允许系统截图**；用户明确要求「不要用 WebView，实现同样的功能效果（要有验证码）」。
+
+### 6.2 决策与口径（用户确认）
+
+| # | 决策 | 说明 |
+| --- | --- | --- |
+| D4 | **App 注册页改原生 Compose**，删除 WebView 注册容器 | 倒插根因在 WebView × 输入法层，客户端无法可靠修复；原生输入框天然无此问题 |
+| D5 | 注册**保留图形验证码** | 直接用 `/api/v1/auth/code`，与登录页同一渲染/刷新管线；服务端 `sys.account.captchaEnabled=true` |
+| D6 | 登录**保留图形验证码** | 服务端 `@Captcha()` 全局强制（`sys.account.captchaEnabled=true`），客户端去掉会直接登录失败；用户确认保留 |
+| D7 | 注册表单**精简四字段** | 邮箱账号、密码、确认密码、图形验证码；昵称/企业名称/联系电话由服务端按邮箱前缀生成默认值（不改服务端 DTO 默认规则） |
+
+### 6.3 实现落位（NovaBAIC）
+
+| 文件 | 改动 |
+| --- | --- |
+| `floatball/account/AccountApi.kt` | 新增 `register()`（`POST /api/v1/auth/register-company`，`productId=haocanmou`，只传 email/password/confirmPassword/code/uuid）；删除 `registerUrl()` |
+| `floatball/account/AccountManager.kt` | 新增 `register()` 门面；删除 `registerUrl()` |
+| `floatball/account/LoginScreen.kt` | 删除 `RegisterWebViewScreen`；新增 `RegisterScreen`（卡片表单 + 逐字段校验 + 服务端错误原文展示 + 验证码失败自动换图）、`RegisterSuccessCard`（注册即用成功页）、`CaptchaBox`（点击换图）；注册成功回登录页并**预填邮箱**；登录/注册内容区统一 `imePadding()`（配合 Manifest 已存在的 `adjustResize`），软键盘弹出时表单上移、输入框不被遮挡 |
+| `res/values/strings.xml` | 新增注册页文案键；删除 `float_account_register_hint` |
+
+### 6.4 不动与验收
+
+- **不动**：`apps/web` PC 网页注册页（`register.vue`）与 productId 接线（PC 端行为不变）；服务端注册/登录安全策略；WebView 仅保留给登录/注册页的**验证码 SVG 图片渲染**（纯展示、禁焦点，无输入场景）。
+- **验收**：`assembleDebug` 通过 + license 头检查通过；真机/模拟器：注册页无冗余文案、输入顺序正确（敲 `abcd` 显示 `abcd`）、键盘弹出输入框可见可编辑、点验证码图换图、注册成功→成功页→「立即登录」回登录页且邮箱已预填→登录成功；logcat 无崩溃。
+

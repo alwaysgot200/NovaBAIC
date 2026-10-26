@@ -19,11 +19,20 @@
 package com.verlintas.baic2.floatball.account
 
 import com.verlintas.baic2.core.data.repository.AgentRepository
+import com.verlintas.baic2.core.model.Agent
+import com.verlintas.baic2.core.model.ProviderId
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /**
  * 好参谋账号门面：登录会话状态 + AI 网关凭证落地。
@@ -39,10 +48,14 @@ class AccountManager @Inject constructor(
     private val prefs: AccountPrefs,
     private val api: AccountApi,
     private val agentRepository: AgentRepository,
+    private val json: Json,
 ) {
 
     private val _session = MutableStateFlow(prefs.loadSession())
     val session: StateFlow<AccountPrefs.Session?> = _session.asStateFlow()
+
+    /** 测试注入/网关落盘用（单例级，不随 Activity 生命周期）。 */
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val isLoggedIn: Boolean get() = _session.value != null
 
@@ -62,6 +75,8 @@ class AccountManager @Inject constructor(
             expireAtMs = System.currentTimeMillis() + result.expireInSeconds * 1_000L,
         )
         prefs.saveSession(session)
+        // 换号登录：清掉上一账号的离线快照，首次拉取前不展示他人余额。
+        prefs.clearSnapshots()
         _session.value = session
     }
 
@@ -69,6 +84,16 @@ class AccountManager @Inject constructor(
     fun logout() {
         prefs.clearSession()
         prefs.clearCardKey()
+        prefs.clearSnapshots()
+        _session.value = null
+    }
+
+    /**
+     * 会话失效（服务端 401）：只清登录态，保留已落盘的卡密——
+     * AI 网关凭证与登录解耦（[applyGateway]），token 过期不应顺带中断已购额度。
+     */
+    fun expireSession() {
+        prefs.clearSession()
         _session.value = null
     }
 
@@ -78,33 +103,69 @@ class AccountManager @Inject constructor(
      *
      * 成功返回 null 并持久化卡密；失败返回 `REASON_*` 常量（不落盘、不改供应商）。
      */
-    suspend fun applyGateway(cardKey: String): String? {
+    suspend fun applyGateway(cardKey: String, model: String = DEFAULT_GATEWAY_MODEL): String? {
         if (cardKey.isBlank()) return REASON_CARD_INVALID
-        val agent = agentRepository.getDefaultAgent() ?: return REASON_NO_AGENT
         return runCatching {
-            agentRepository.update(
-                agent.copy(baseUrl = api.gatewayBaseUrl()),
-                newPlaintextApiKey = cardKey,
-            )
+            val existing = agentRepository.getDefaultAgent()
+            if (existing == null) {
+                // 首次绑定卡密：直接创建云端默认 Agent（用户无需再手填 key/地址）。
+                agentRepository.save(
+                    Agent(
+                        name = DEFAULT_AGENT_NAME,
+                        provider = ProviderId.OPENAI_COMPATIBLE,
+                        baseUrl = api.gatewayBaseUrl(),
+                        model = model,
+                        isDefault = true,
+                    ),
+                    cardKey,
+                )
+            } else {
+                agentRepository.update(
+                    existing.copy(baseUrl = api.gatewayBaseUrl(), model = model),
+                    newPlaintextApiKey = cardKey,
+                )
+            }
             prefs.saveCardKey(cardKey)
             null
         }.getOrElse { REASON_GATEWAY }
     }
 
-    /** 站点注册页（跟随当前服务器地址）。 */
-    fun registerUrl(): String = api.registerUrl()
+    /**
+     * 注册好参谋账号（productId=haocanmou，注册即用）。成功返回服务端结果；
+     * 失败抛 [AccountException]（REASON_* + 服务端原因），由展示层映射文案。
+     * 注册不自动登录——成功后回登录页由用户登录（登录门口径不变）。
+     */
+    suspend fun register(
+        email: String,
+        password: String,
+        confirmPassword: String,
+        code: String?,
+        uuid: String?,
+    ): AccountApi.RegisterResult = api.register(email, password, confirmPassword, code, uuid)
 
     /**
-     * 装包登录门（用户口径「装完打开先登录」）：包的 lastUpdateTime 与上次登录成功
-     * 时记录值不一致＝装包（安装/升级）后首启，即使本地会话未过期也强制先出登录页；
-     * [consumeInstallGate] 在登录成功后消费，同一次安装内的后续启动不再强制。
+     * 装包登录门：仅“全新安装”强制先登录；覆盖升级必须保留登录态。
+     * 规则：
+     *  - 本机已有登录过的时间戳（非 0）→ 永不因安装/升级触发登录门；
+     *  - 时间戳为 0 且当前无会话 → 全新安装，触发登录门；
+     *  - 时间戳为 0 但已有有效会话 → 旧版本遗留升级，按升级处理，补记时间戳。
+     *
+     * 旧实现比较包 `lastUpdateTime`，任何安装/升级都会强制重登；本方法改为
+     * 只认“本机是否登录过”，从根上满足升级不重登。
      */
-    fun installGatePending(packageLastUpdateTime: Long): Boolean =
-        prefs.loadInstallGateTime() != packageLastUpdateTime
+    fun installGatePending(): Boolean =
+        prefs.loadInstallGateTime() == 0L && !isLoggedIn
 
     /** 消费装包登录门（登录成功后调用）。 */
-    fun consumeInstallGate(packageLastUpdateTime: Long) {
-        prefs.saveInstallGateTime(packageLastUpdateTime)
+    fun consumeInstallGate() {
+        prefs.saveInstallGateTime(System.currentTimeMillis())
+    }
+
+    /** 旧版本升级兼容：已有会话但从未记录过时间戳时，静默补记一次。 */
+    fun ensureInstallGateRecorded() {
+        if (prefs.loadInstallGateTime() == 0L) {
+            prefs.saveInstallGateTime(System.currentTimeMillis())
+        }
     }
 
     /**
@@ -122,17 +183,39 @@ class AccountManager @Inject constructor(
         return info
     }
 
-    /** 我的已绑定卡密列表（服务端实时余额/到期）；未登录抛 [AccountException]。 */
+    /**
+     * 我的已绑定卡密列表（服务端实时余额/到期）；未登录抛 [AccountException]。
+     * 成功即覆盖离线快照，供断网时继续展示存量卡密。
+     */
     suspend fun myCards(): List<AccountApi.MyCard> {
         val token = _session.value?.accessToken ?: throw AccountException(REASON_NOT_LOGGED_IN)
-        return api.fetchMyCards(token)
+        val cards = api.fetchMyCards(token)
+        runCatching { prefs.saveCardsSnapshot(json.encodeToString(cards)) }
+        return cards
     }
 
-    /** 查询积分钱包；未登录抛 [AccountException]，网络/服务端错误同。 */
+    /**
+     * 查询积分钱包；未登录抛 [AccountException]，网络/服务端错误同。
+     * 成功即覆盖离线快照，供断网时继续展示存量积分。
+     */
     suspend fun wallet(): AccountApi.Wallet {
         val token = _session.value?.accessToken ?: throw AccountException(REASON_NOT_LOGGED_IN)
-        return api.fetchWallet(token)
+        val wallet = api.fetchWallet(token)
+        runCatching { prefs.saveWalletSnapshot(json.encodeToString(wallet)) }
+        return wallet
     }
+
+    /** 离线兜底的最近一次成功钱包快照；无缓存或解析失败返回 null。 */
+    fun cachedWallet(): AccountApi.Wallet? =
+        prefs.loadWalletSnapshot()?.let { raw ->
+            runCatching { json.decodeFromString<AccountApi.Wallet>(raw) }.getOrNull()
+        }
+
+    /** 离线兜底的最近一次成功卡密快照；无缓存或解析失败返回空列表。 */
+    fun cachedCards(): List<AccountApi.MyCard> =
+        prefs.loadCardsSnapshot()?.let { raw ->
+            runCatching { json.decodeFromString<List<AccountApi.MyCard>>(raw) }.getOrNull()
+        }.orEmpty()
 
     /**
      * 测试免登录（仅 [AccountApi.TEST_LOGIN_ENABLED] 构建放行）：
@@ -159,11 +242,15 @@ class AccountManager @Inject constructor(
         )
         prefs.saveSession(session)
         _session.value = session
+        // 自动化测试一并注入卡密与模型（等价于用户绑定卡密后的网关落盘），
+        // 读不到卡密或默认 Agent 缺失时静默跳过，不阻断登录注入本身。
+        intent.getStringExtra("debugCardKey")?.takeIf { it.isNotBlank() }?.let { cardKey ->
+            val model = intent.getStringExtra("debugModel")?.takeIf { it.isNotBlank() }
+                ?: DEFAULT_GATEWAY_MODEL
+            ioScope.launch { applyGateway(cardKey, model) }
+        }
         // 免登录即视为已过装包登录门，否则首启仍会被门拦回登录页。
-        val lastUpdateTime = runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
-        }.getOrDefault(0L)
-        consumeInstallGate(lastUpdateTime)
+        consumeInstallGate()
         return true
     }
 
@@ -173,5 +260,11 @@ class AccountManager @Inject constructor(
         const val REASON_CARD_INVALID = "REASON_CARD_INVALID"
         const val REASON_GATEWAY = "REASON_GATEWAY"
         const val REASON_NOT_LOGGED_IN = "REASON_NOT_LOGGED_IN"
+
+        /** 默认云端模型（与 service 端 defaultModel 一致）。 */
+        const val DEFAULT_GATEWAY_MODEL = "deepseek-flash"
+
+        /** 首次绑定卡密时自动创建的默认 Agent 名称（不暴露给配置向导的卡片文案）。 */
+        const val DEFAULT_AGENT_NAME = "好参谋 AI"
     }
 }

@@ -207,8 +207,14 @@ class AdvisorPrefs @Inject constructor(
         val totalTurns: Long = 0L,
         val sessionInput: Long = 0L,
         val sessionOutput: Long = 0L,
+        /** 累计消耗积分（毫积分）。 */
+        val totalPointsMilli: Long = 0L,
+        /** 本次会话消耗积分（毫积分）。 */
+        val sessionPointsMilli: Long = 0L,
     ) {
         val sessionTotal: Long get() = sessionInput + sessionOutput
+        val totalPoints: Double get() = totalPointsMilli / 1000.0
+        val sessionPoints: Double get() = sessionPointsMilli / 1000.0
     }
 
     private val prefs = context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
@@ -511,12 +517,19 @@ class AdvisorPrefs @Inject constructor(
     /** 记录一个主参谋回合的实际用量（模型 Usage 事件；缺测按 0 计），累计持久化。 */
     fun recordTurnUsage(inputTokens: Long, outputTokens: Long) {
         val current = _tokenStats.value
+        val turnPointsMilli = com.verlintas.baic2.core.model.PointsPricing.deductPointsMilli(
+            promptTokens = inputTokens.coerceAtLeast(0L),
+            completionTokens = outputTokens.coerceAtLeast(0L),
+            coefficientMilli = com.verlintas.baic2.core.model.ModelPricing.coefficientMilli(null),
+        )
         val updated = TokenStats(
             totalInput = current.totalInput + inputTokens.coerceAtLeast(0L),
             totalOutput = current.totalOutput + outputTokens.coerceAtLeast(0L),
             totalTurns = current.totalTurns + 1,
             sessionInput = current.sessionInput + inputTokens.coerceAtLeast(0L),
             sessionOutput = current.sessionOutput + outputTokens.coerceAtLeast(0L),
+            totalPointsMilli = current.totalPointsMilli + turnPointsMilli,
+            sessionPointsMilli = current.sessionPointsMilli + turnPointsMilli,
         )
         prefs.edit()
             .putLong(KEY_TOTAL_INPUT, updated.totalInput)
@@ -524,6 +537,8 @@ class AdvisorPrefs @Inject constructor(
             .putLong(KEY_TOTAL_TURNS, updated.totalTurns)
             .putLong(KEY_SESSION_INPUT, updated.sessionInput)
             .putLong(KEY_SESSION_OUTPUT, updated.sessionOutput)
+            .putLong(KEY_TOTAL_POINTS, updated.totalPointsMilli)
+            .putLong(KEY_SESSION_POINTS, updated.sessionPointsMilli)
             .apply()
         _tokenStats.value = updated
     }
@@ -531,8 +546,8 @@ class AdvisorPrefs @Inject constructor(
     /** 开始新一轮连续参谋时清零会话级计数（总计不清）。 */
     fun resetSessionUsage() {
         val current = _tokenStats.value
-        val updated = current.copy(sessionInput = 0L, sessionOutput = 0L)
-        prefs.edit().remove(KEY_SESSION_INPUT).remove(KEY_SESSION_OUTPUT).apply()
+        val updated = current.copy(sessionInput = 0L, sessionOutput = 0L, sessionPointsMilli = 0L)
+        prefs.edit().remove(KEY_SESSION_INPUT).remove(KEY_SESSION_OUTPUT).remove(KEY_SESSION_POINTS).apply()
         _tokenStats.value = updated
     }
 
@@ -541,6 +556,7 @@ class AdvisorPrefs @Inject constructor(
         prefs.edit()
             .remove(KEY_TOTAL_INPUT).remove(KEY_TOTAL_OUTPUT).remove(KEY_TOTAL_TURNS)
             .remove(KEY_SESSION_INPUT).remove(KEY_SESSION_OUTPUT)
+            .remove(KEY_TOTAL_POINTS).remove(KEY_SESSION_POINTS)
             .apply()
         _tokenStats.value = TokenStats()
     }
@@ -551,6 +567,8 @@ class AdvisorPrefs @Inject constructor(
         totalTurns = prefs.getLong(KEY_TOTAL_TURNS, 0L).coerceAtLeast(0L),
         sessionInput = prefs.getLong(KEY_SESSION_INPUT, 0L).coerceAtLeast(0L),
         sessionOutput = prefs.getLong(KEY_SESSION_OUTPUT, 0L).coerceAtLeast(0L),
+        totalPointsMilli = prefs.getLong(KEY_TOTAL_POINTS, 0L).coerceAtLeast(0L),
+        sessionPointsMilli = prefs.getLong(KEY_SESSION_POINTS, 0L).coerceAtLeast(0L),
     )
 
     fun conversationId(): Long = prefs.getLong(KEY_CONVERSATION_ID, 0L)
@@ -645,6 +663,8 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_TOTAL_TURNS = "usage_total_turns"
         const val KEY_SESSION_INPUT = "usage_session_input"
         const val KEY_SESSION_OUTPUT = "usage_session_output"
+        const val KEY_TOTAL_POINTS = "usage_total_points_milli"
+        const val KEY_SESSION_POINTS = "usage_session_points_milli"
         const val DEFAULT_MAX_SESSION = 30 * 60_000L
 
         /** 工作/停歇段允许档（毫秒）：5/10/15/20 分钟；0 仅停歇合法（=不停歇）。 */

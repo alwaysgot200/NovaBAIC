@@ -51,6 +51,8 @@ data class ChatMessage(
     val starred: Boolean = false,
     val usageInput: Long? = null,
     val usageOutput: Long? = null,
+    /** 本条回复消耗积分（毫积分，完成时按模型倍率快照；旧消息为空）。 */
+    val usagePointsMilli: Long? = null,
 )
 
 /** A restorable backup of the messages a compression replaced. */

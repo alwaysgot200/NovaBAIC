@@ -102,33 +102,57 @@ import androidx.compose.runtime.remember
 @Composable
 fun AgentsPage(
     onBack: () -> Unit,
-    onAdd: () -> Unit,
-    onEdit: (Long) -> Unit,
+    onSelectModel: (String) -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    var deleteTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    // 每次进入目录都拉一次服务端模型（运营上下线后无需重启 App）。
+    LaunchedEffect(Unit) { viewModel.refreshModels() }
 
     SettingsPage(
         title = stringResource(R.string.settings_agents_title),
         onBack = onBack,
     ) {
-        item(key = "add") {
-            OutlinedButton(
-                onClick = onAdd,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(Baic2Spacing.sm))
-                Text(stringResource(R.string.settings_agents_add))
+        item(key = "hint") {
+            Text(
+                text = stringResource(R.string.settings_models_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = Baic2Spacing.xs, bottom = Baic2Spacing.sm),
+            )
+        }
+        if (state.modelsLoading && state.models.isEmpty()) {
+            item(key = "loading") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(Baic2Spacing.lg),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(Baic2Spacing.sm))
+                    Text(stringResource(R.string.settings_models_loading), style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
-        if (state.agents.isEmpty()) {
+        state.modelsError?.let { error ->
+            item(key = "error") {
+                SettingsCard {
+                    Text(
+                        text = stringResource(R.string.settings_models_error, error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(Baic2Spacing.lg),
+                    )
+                }
+            }
+        }
+        if (!state.modelsLoading && state.models.isEmpty() && state.modelsError == null) {
             item(key = "empty") {
                 SettingsCard {
                     Text(
-                        text = stringResource(R.string.settings_agents_none),
+                        text = stringResource(R.string.settings_models_empty),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(Baic2Spacing.lg),
@@ -136,100 +160,61 @@ fun AgentsPage(
                 }
             }
         }
-        items(state.agents.size, key = { state.agents[it].id }) { index ->
-            val agent = state.agents[index]
-            AgentRow(
-                agent = agent,
-                onEdit = { onEdit(agent.id) },
-                onSetDefault = { viewModel.setDefaultAgent(agent.id) },
-                onDelete = { deleteTarget = agent.id },
+        items(state.models.size, key = { state.models[it].key }) { index ->
+            val model = state.models[index]
+            ModelCatalogRow(
+                title = model.displayName,
+                summary = stringResource(
+                    R.string.settings_models_summary,
+                    model.key,
+                    model.coefficientLabel,
+                    formatMaxTokens(model.maxMode?.maxTokens ?: model.modes.firstOrNull()?.maxTokens ?: 4096),
+                ),
+                selected = model.key == state.selectedModelKey,
+                onClick = { onSelectModel(model.key) },
             )
         }
-        item(key = "hint") {
+        item(key = "footer") {
             Text(
-                text = stringResource(R.string.settings_agents_hint),
+                text = stringResource(R.string.settings_models_footer),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(
-                    start = Baic2Spacing.xs,
-                    top = Baic2Spacing.md,
-                ),
+                modifier = Modifier.padding(start = Baic2Spacing.xs, top = Baic2Spacing.md),
             )
         }
-    }
-
-    deleteTarget?.let { id ->
-        AlertDialog(
-            onDismissRequest = { deleteTarget = null },
-            title = { Text(stringResource(R.string.settings_agents_delete)) },
-            text = { Text(stringResource(R.string.settings_agents_delete_confirm)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.deleteAgent(id)
-                        deleteTarget = null
-                    },
-                ) {
-                    Text(stringResource(R.string.settings_agents_delete))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteTarget = null }) {
-                    Text(stringResource(R.string.settings_cancel))
-                }
-            },
-        )
     }
 }
 
 @Composable
-private fun AgentRow(
-    agent: Agent,
-    onEdit: () -> Unit,
-    onSetDefault: () -> Unit,
-    onDelete: () -> Unit,
+private fun ModelCatalogRow(
+    title: String,
+    summary: String,
+    selected: Boolean,
+    onClick: () -> Unit,
 ) {
     SettingsRow(
-        title = agent.name,
-        summary = "${providerLabel(agent.provider)} · ${agent.model}",
+        title = title,
+        summary = summary,
         showChevron = true,
-        onClick = onEdit,
+        onClick = onClick,
         trailing = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onSetDefault),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (agent.isDefault) {
-                        Icon(
-                            imageVector = Icons.Outlined.Check,
-                            contentDescription = stringResource(R.string.settings_agents_default),
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(14.dp)
-                                .clip(CircleShape)
-                                .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
-                        )
-                    }
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        imageVector = Icons.Outlined.Delete,
-                        contentDescription = stringResource(R.string.settings_agents_delete),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Outlined.Check,
+                    contentDescription = stringResource(R.string.settings_models_selected),
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         },
     )
+}
+
+/** 最大输出 tokens 紧凑展示（8192 → 8K）。 */
+private fun formatMaxTokens(tokens: Int): String = when {
+    tokens >= 1_000_000 -> "${tokens / 1_000_000}M"
+    tokens >= 1_000 -> "${tokens / 1_000}K"
+    else -> tokens.toString()
 }
 
 // ---------------------------------------------------------------- appearance
@@ -677,14 +662,9 @@ fun AboutPage(
                             modifier = Modifier.weight(1f),
                         )
                         AnimatedStat(
-                            label = stringResource(R.string.settings_about_stats_tokens_in),
-                            value = state.stats?.tokensIn,
-                            modifier = Modifier.weight(1f),
-                        )
-                        AnimatedStat(
-                            label = stringResource(R.string.settings_about_stats_tokens_out),
-                            value = state.stats?.tokensOut,
-                            modifier = Modifier.weight(1f),
+                            label = stringResource(R.string.settings_about_stats_points),
+                            value = state.stats?.pointsMilli?.div(1000L),
+                            modifier = Modifier.weight(2f),
                         )
                     }
                 }

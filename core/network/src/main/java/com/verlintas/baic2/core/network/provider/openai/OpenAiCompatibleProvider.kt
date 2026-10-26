@@ -194,10 +194,27 @@ class OpenAiCompatibleProvider(
 
     private fun buildHttpRequest(request: ChatRequest): Request {
         val body = json.encodeToString(WireRequest.serializer(), buildPayload(request))
-        return Request.Builder()
+        val builder = Request.Builder()
             .url(joinUrl(request.config.baseUrl, "chat/completions"))
             .header("Authorization", "Bearer ${request.config.apiKey}")
             .header("Accept", "text/event-stream")
+        // 好参谋云端网关：把「本轮用户问题前 30 字」写进 LiteLLM spend log metadata，
+        // 服务端结算时落成用量记录的 contentPreview（不存完整对话）。
+        if (request.config.baseUrl.contains("/llm/v1")) {
+            request.messages.lastOrNull { it.role == com.verlintas.baic2.core.model.ChatRole.USER }
+                ?.content
+                ?.trim()
+                ?.take(30)
+                ?.takeIf { it.isNotBlank() }
+                ?.let { preview ->
+                    // HTTP 头只允许 ASCII：中文摘要走 base64，服务端结算时解码。
+                    val encoded = java.util.Base64.getEncoder()
+                        .encodeToString(preview.toByteArray(Charsets.UTF_8))
+                    val metadata = buildJsonObject { put("preview_b64", encoded) }
+                    builder.header("x-litellm-spend-logs-metadata", metadata.toString())
+                }
+        }
+        return builder
             .post(body.toRequestBody(JSON_MEDIA_TYPE))
             .build()
     }

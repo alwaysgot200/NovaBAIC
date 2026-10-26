@@ -303,11 +303,19 @@ private fun AssistantMessage(
             Spacer(Modifier.size(Baic2Spacing.sm))
             ToolCard(call = call)
         }
-        // 逐条 token 用量（随消息持久化，模型上报过才显示）。
-        if (message.usageInput != null || message.usageOutput != null) {
+        // 逐条积分消耗（完成时快照；旧消息按 token + 当前倍率兜底换算）。
+        val pointsMilli = message.usagePointsMilli ?: if (message.usageInput != null || message.usageOutput != null) {
+            com.verlintas.baic2.core.model.PointsPricing.deductPointsMilli(
+                promptTokens = message.usageInput ?: 0L,
+                completionTokens = message.usageOutput ?: 0L,
+                coefficientMilli = com.verlintas.baic2.core.model.ModelPricing.coefficientMilli(message.model),
+            )
+        } else {
+            null
+        }
+        if (pointsMilli != null) {
             Text(
-                text = "↑" + formatTokens(message.usageInput ?: 0L) +
-                    "  ↓" + formatTokens(message.usageOutput ?: 0L),
+                text = "积分 " + String.format("%.1f", pointsMilli / 1000.0),
                 style = Baic2Mono.label,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.padding(top = Baic2Spacing.xs),

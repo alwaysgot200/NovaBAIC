@@ -806,6 +806,10 @@ interface ProactivePolicyDao {
     @Query("SELECT * FROM proactive_policies WHERE contactId = :contactId")
     suspend fun forContact(contactId: Long): ProactivePolicyEntity?
 
+    /** 删除单联系人策略行（贴档删除/演示重置用，避免墓碑档残留主动政策）。 */
+    @Query("DELETE FROM proactive_policies WHERE contactId = :contactId")
+    suspend fun delete(contactId: Long)
+
     // ---- M2-b（追加式）：检点枚举 + 设置页观察 ----
 
     /** 全部策略行（V-C §4.5：显式行优先，无行按风格分档给缺省，需读全量判重）。 */

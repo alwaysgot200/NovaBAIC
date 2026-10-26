@@ -35,6 +35,7 @@ import com.verlintas.baic2.floatball.FloatBallService
 import com.verlintas.baic2.floatball.ScreenAdvisor
 import com.verlintas.baic2.floatball.advisor.EngagementRules
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
+import com.verlintas.baic2.floatball.auto.AutoSessionScheduler
 import com.verlintas.baic2.floatball.auto.ImNavigator
 import com.verlintas.baic2.floatball.contact.ContactDirectory
 import com.verlintas.baic2.floatball.notify.NotifyGate
@@ -81,6 +82,10 @@ class AdvisorNotificationListener : NotificationListenerService() {
     @Inject
     lateinit var imNavigator: ImNavigator
 
+    /** 多会话自动托管串行调度器（方案 §5.4）：命中托管目标的通知入队而非起草。 */
+    @Inject
+    lateinit var scheduler: AutoSessionScheduler
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** 单飞：同一时刻只跑一个通知回合（turnMutex 已串行，这里防排队堆积）。 */
@@ -88,8 +93,10 @@ class AdvisorNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val notification = sbn ?: return
-        // 主开关默认关（隐私优先，须在设置页显式开启 + 授予通知读取权限）。
-        if (!advisorPrefs.state.value.draftEnabled) return
+        // 主开关默认关（隐私优先，须在设置页显式开启 + 授予通知读取权限）；
+        // 自动托管（多会话）运行期间即使起草档关闭也要放行感知（方案 §5.4.1）。
+        val draftEnabled = advisorPrefs.state.value.draftEnabled
+        if (!draftEnabled && !scheduler.isRunning()) return
         val pkg = notification.packageName ?: return
         if (pkg == packageName) return
         if (notification.isOngoing) return
@@ -108,10 +115,14 @@ class AdvisorNotificationListener : NotificationListenerService() {
         imNavigator.remember(pkg, parsed.contactTitle, contentIntent)
         // 节流在解析之后、建档查询之前：重复通知连 DB 都不打。
         if (!gate.shouldDispatch(Throttle.keyOf(parsed), System.currentTimeMillis())) return
-        scope.launch { handleDraftTurn(parsed, contentIntent) }
+        scope.launch { handleDraftTurn(parsed, contentIntent, draftEnabled) }
     }
 
-    private suspend fun handleDraftTurn(parsed: IncomingNotification, contentIntent: PendingIntent?) {
+    private suspend fun handleDraftTurn(
+        parsed: IncomingNotification,
+        contentIntent: PendingIntent?,
+        draftEnabled: Boolean,
+    ) {
         if (!inFlight.compareAndSet(false, true)) return
         try {
             val contact = contactDirectory.resolve(
@@ -122,7 +133,7 @@ class AdvisorNotificationListener : NotificationListenerService() {
                 // 未建档联系人：陌生来信通知（方案 §3.4）——不创建会话不落库
                 //（M0 同款纪律），不拟稿不自动回复，只通知主人；点击通知经原
                 // contentIntent 直开该聊天（不消耗 LLM）。
-                postStrangerNotification(parsed, contentIntent)
+                if (draftEnabled) postStrangerNotification(parsed, contentIntent)
                 return
             }
             // 导航缓存补挂 contactId 键（§四.A.2）：回合成败与否，键先就位。
@@ -135,6 +146,13 @@ class AdvisorNotificationListener : NotificationListenerService() {
             advisorDb.proactivePolicyDao().forContact(contact.contactId)
                 ?.takeIf { !it.enabled }
                 ?.let { return }
+            // 命中自动托管组：入串行调度器队列（去抖/去重/配额由调度器负责），
+            // 不再走「起草待确认」路径（方案 §5.4.2）。
+            if (scheduler.matches(parsed.packageName, contact.contactId)) {
+                scheduler.enqueue(parsed.packageName, contact, parsed.contactTitle, parsed.body)
+                return
+            }
+            if (!draftEnabled) return
             val result = screenAdvisor.submitNotificationTurn(parsed.body, contact)
             if (result.outcome != ScreenAdvisor.SubmitOutcome.RAN) return
             // 接管通报命中（2026-10-20 通报方案 §4.5）：铃声通报是唯一出口，

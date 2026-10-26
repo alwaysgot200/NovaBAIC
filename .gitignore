@@ -7,6 +7,8 @@ build/
 # Android
 local.properties
 *.apk
+# 内置安装包（docs/2026-10-26-内置安装Shizuku方案.md）：随 App 打包，必须入库
+!app/src/main/assets/shizuku.apk
 *.aab
 *.ap_
 *.dex
@@ -37,6 +39,10 @@ keystore.properties
 
 # 临时测试产物（模拟器截图等），整个目录不受 git 控制
 /tests/tempImg/
+
+# 演示数据/真机联调本地密钥与探测结果（禁止入库）
+/tests/demo/.env.demo
+/tests/demo/.origin.generated
 
 # Reference-only asset the owner dropped in for design study
 /Coupon Reveal.json

@@ -47,6 +47,7 @@ import com.verlintas.baic2.floatball.FloatBallService
 import com.verlintas.baic2.floatball.OverlayPermissionScreen
 import com.verlintas.baic2.floatball.account.AccountManager
 import com.verlintas.baic2.floatball.account.LoginScreen
+import com.verlintas.baic2.floatball.home.AdvisorSelfWindowGate
 import com.verlintas.baic2.keepalive.KeepAlivePrefs
 import com.verlintas.baic2.keepalive.KeepAliveSetupGuideActivity
 import dagger.hilt.android.AndroidEntryPoint
@@ -79,6 +80,10 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var accountManager: AccountManager
 
+    /** 客户端升级门：强制更新优先于登录/主界面/悬浮球。 */
+    @Inject
+    lateinit var updateManager: com.verlintas.baic2.floatball.update.AppUpdateManager
+
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
         val tag = language.languageTag
@@ -94,10 +99,8 @@ class MainActivity : ComponentActivity() {
     // 冷启动时默认只留悬浮球：拿到悬浮窗权限后立刻退到后台。
     private var autoHideWhenReady = false
 
-    // 装包登录门（用户口径「装完打开先登录」）：安装/升级后首启无条件先出登录页，
-    // 登录成功消费后才走主界面/自动隐藏流程；旧会话不得跳过登录。
+    // 装包登录门：仅全新安装强制先登录；覆盖升级保留登录态（升级不重登）。
     private var installGatePending by mutableStateOf(false)
-    private var packageUpdateTime = 0L
 
     private var overlayGranted by mutableStateOf(false)
 
@@ -114,20 +117,20 @@ class MainActivity : ComponentActivity() {
         val deepLink = (intent?.getLongExtra(EXTRA_OPEN_RUN_ID, -1L) ?: -1L) >= 0L ||
             (intent?.getLongExtra(EXTRA_OPEN_CONVERSATION_ID, -1L) ?: -1L) >= 0L ||
             !intent?.getStringExtra(EXTRA_OPEN_TAB).isNullOrBlank()
-        // 装包登录门：与包 lastUpdateTime 比对，装过/升级过后的首启强制先登录。
-        packageUpdateTime = runCatching {
-            packageManager.getPackageInfo(packageName, 0).lastUpdateTime
-        }.getOrDefault(0L)
+        // 装包登录门：只认“本机是否登录过”；升级不再触发登录页。
+        installGatePending = accountManager.installGatePending()
+        if (!installGatePending) accountManager.ensureInstallGateRecorded()
         // [upstream-touch] 测试免登录（自动化测试）：debug 测试构建允许
         // `am start --es debugToken <token>` 直接注入会话跳过登录框；
         // 只在全新启动消费（旋转恢复同一 intent 不重复生效），生产构建恒不放行。
         val debugLoggedIn = savedInstanceState == null &&
             accountManager.debugInjectFromIntent(this, intent)
-        installGatePending = accountManager.installGatePending(packageUpdateTime)
+        installGatePending = accountManager.installGatePending()
         // 只有"正常启动"（图标冷启动）且已登录才自动隐藏；从悬浮球拉起的不隐藏，
-        // 登录页可见期间（未登录或装包门待消费）绝不自动隐藏。
+        // 登录页可见期间（未登录或装包门待消费）绝不自动隐藏；强制更新期间也不隐藏。
         autoHideWhenReady = intent?.getBooleanExtra(EXTRA_FROM_FLOAT, false) != true && !deepLink &&
-            accountManager.isLoggedIn && !installGatePending && !debugLoggedIn
+            accountManager.isLoggedIn && !installGatePending && !debugLoggedIn &&
+            !updateManager.forcedBlocked()
         // Rotation restores the same intent: only consume the deep link on a
         // fresh launch (or via onNewIntent), never twice.
         pendingRunId.value = if (savedInstanceState == null) {
@@ -164,41 +167,43 @@ class MainActivity : ComponentActivity() {
                 }
             }
             Baic2Theme(darkTheme = darkTheme, accent = accent) {
-                val session by accountManager.session.collectAsStateWithLifecycle()
-                when {
-                    // 登录门（商业化 P0 + 装包登录门）：未登录、或装包/升级后首启未消费
-                    // 装包门时只出登录页（旧会话不得跳过登录）；登录成功后停留主界面
-                    // （autoHideWhenReady 已置 false，不压回后台）。
-                    session == null || installGatePending -> LoginScreen(
-                        accountManager = accountManager,
-                        onLoggedIn = {
-                            autoHideWhenReady = false
-                            accountManager.consumeInstallGate(packageUpdateTime)
-                            installGatePending = false
-                            if (Settings.canDrawOverlays(this@MainActivity)) {
-                                ContextCompat.startForegroundService(
-                                    this@MainActivity,
-                                    Intent(this@MainActivity, FloatBallService::class.java),
-                                )
-                                // 首启保活引导挪到登录之后：登录页之前不弹任何旁路界面。
-                                KeepAliveSetupGuideActivity.maybeLaunch(
-                                    this@MainActivity,
-                                    keepAlivePrefs,
-                                )
-                            }
-                        },
-                        onExit = { moveTaskToBack(true) },
-                    )
-                    overlayGranted -> Baic2App(
-                        initialRunId = pendingRunId.value,
-                        onRunDeepLinkConsumed = { pendingRunId.value = null },
-                        initialConversationId = pendingConversationId.value,
-                        onConversationDeepLinkConsumed = { pendingConversationId.value = null },
-                        initialTab = pendingTab.value,
-                        onTabConsumed = { pendingTab.value = null },
-                        accountName = session?.username?.takeIf { it.isNotBlank() },
-                    )
-                    else -> OverlayPermissionScreen(onGrant = { requestOverlayPermission() })
+                com.verlintas.baic2.floatball.update.AdvisorUpdateGate(updateManager) {
+                    val session by accountManager.session.collectAsStateWithLifecycle()
+                    when {
+                        // 登录门（商业化 P0 + 装包登录门）：未登录、或全新安装未消费
+                        // 装包门时只出登录页；登录成功后停留主界面
+                        // （autoHideWhenReady 已置 false，不压回后台）。
+                        session == null || installGatePending -> LoginScreen(
+                            accountManager = accountManager,
+                            onLoggedIn = {
+                                autoHideWhenReady = false
+                                accountManager.consumeInstallGate()
+                                installGatePending = false
+                                if (Settings.canDrawOverlays(this@MainActivity)) {
+                                    ContextCompat.startForegroundService(
+                                        this@MainActivity,
+                                        Intent(this@MainActivity, FloatBallService::class.java),
+                                    )
+                                    // 首启保活引导挪到登录之后：登录页之前不弹任何旁路界面。
+                                    KeepAliveSetupGuideActivity.maybeLaunch(
+                                        this@MainActivity,
+                                        keepAlivePrefs,
+                                    )
+                                }
+                            },
+                            onExit = { moveTaskToBack(true) },
+                        )
+                        overlayGranted -> Baic2App(
+                            initialRunId = pendingRunId.value,
+                            onRunDeepLinkConsumed = { pendingRunId.value = null },
+                            initialConversationId = pendingConversationId.value,
+                            onConversationDeepLinkConsumed = { pendingConversationId.value = null },
+                            initialTab = pendingTab.value,
+                            onTabConsumed = { pendingTab.value = null },
+                            accountName = session?.username?.takeIf { it.isNotBlank() },
+                        )
+                        else -> OverlayPermissionScreen(onGrant = { requestOverlayPermission() })
+                    }
                 }
             }
         }
@@ -210,7 +215,8 @@ class MainActivity : ComponentActivity() {
         overlayGranted = granted
         // 登录门守卫：登录页（未登录或装包门待消费）可见期间不得自动隐藏、
         // 不弹旁路引导——首屏永远是登录页；登录成功后停留主界面。
-        val loginRequired = !accountManager.isLoggedIn || installGatePending
+        val loginRequired = !accountManager.isLoggedIn || installGatePending ||
+            updateManager.forcedBlocked()
         if (loginRequired) {
             autoHideWhenReady = false
         }
@@ -235,6 +241,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         mainHandler.removeCallbacks(backgroundRunnable)
+        // 参谋主页入口的自身窗口隐藏握手：服务侧截屏前必须确认本界面已不在屏上
+        // （否则会把自家主页文字喂给 LLM，方案 §5.5 自噬防护）。
+        AdvisorSelfWindowGate.markHidden()
         // Rotations, the speech recognizer dialog and the screen-capture
         // consent screen all call onStop without the user leaving the app:
         // flip to "background" only after a short grace period.

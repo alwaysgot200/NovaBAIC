@@ -19,15 +19,20 @@
 package com.verlintas.baic2.floatball.account
 
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -61,6 +66,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -146,23 +152,84 @@ internal fun AccountScreen(
     val context = LocalContext.current
     val session by accountManager.session.collectAsStateWithLifecycle()
 
-    var wallet by remember { mutableStateOf<AccountApi.Wallet?>(null) }
+    // 先展示本地存量（离线兜底），再后台拉取实时值：网络不好时也能看到上次成功的数据。
+    // 未登录不读快照，避免退出后仍显示上一账号的余额/卡密。
+    var wallet by remember {
+        mutableStateOf(if (accountManager.session.value != null) accountManager.cachedWallet() else null)
+    }
     var walletBusy by remember { mutableStateOf(false) }
-    var cards by remember { mutableStateOf<List<AccountApi.MyCard>>(emptyList()) }
+    var cards by remember {
+        mutableStateOf(
+            if (accountManager.session.value != null) {
+                accountManager.cachedCards()
+            } else {
+                emptyList()
+            },
+        )
+    }
     var cardsBusy by remember { mutableStateOf(false) }
     val entries = remember { mutableStateListOf(CardEntry()) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var noticeText by remember { mutableStateOf<String?>(null) }
+    // 网络不可达：保留存量数据（不清屏），仅在页底居中提示「网络无法连接」。
+    // networkDown 表示「当前连不上服务器」，任一请求成功即视为网络恢复；钱包/卡密
+    // 各自另记离线标记，用于积分「（离线）」后缀与卡密空态文案。
+    var networkDown by remember { mutableStateOf(false) }
+    var walletOffline by remember { mutableStateOf(false) }
+    var cardsOffline by remember { mutableStateOf(false) }
+    val offlineText = stringResource(R.string.float_account_offline)
+    val pointsOfflineSuffix = stringResource(R.string.float_account_points_offline_suffix)
     val cardSuccessText = stringResource(R.string.float_account_card_success)
     val cardInvalidText = stringResource(R.string.float_account_error_card_invalid)
+    // 购买点卡：商城页按打开环境提供支付方式。
+    // 「分享并购买」分享商城链接（社交 App 抓取商城页自带 OG 生成卡片），
+    // 「浏览器购买」直接打开商城页（支付宝支付）；淘宝/拼多多店铺为灰色占位。
+    val buyUrl = AccountApi.RECHARGE_URL
+    val buyShareSubject = stringResource(R.string.float_account_buy_share_subject)
+    val buyShareChooser = stringResource(R.string.float_account_buy_share_chooser)
+    val buyShareText = stringResource(R.string.float_account_buy_share_text, buyUrl)
+
+    /**
+     * 会话失效（服务端 401）：静默登出并给中性提示，不把「登录已过期」渲染成红色报错。
+     * 返回 true 表示已按失效处理，调用方不再写 [errorText]。
+     */
+    fun handleUnauthorized(t: Throwable): Boolean {
+        if ((t as? AccountException)?.reason != AccountApi.REASON_UNAUTHORIZED) return false
+        accountManager.expireSession()
+        wallet = null
+        cards = emptyList()
+        errorText = null
+        networkDown = false
+        walletOffline = false
+        cardsOffline = false
+        noticeText = context.getString(R.string.float_account_session_expired)
+        return true
+    }
+
+    /** 网络不可达（会话仍有效）：保留存量数据，只标记离线提示。 */
+    fun isOffline(t: Throwable): Boolean =
+        (t as? AccountException)?.reason == AccountApi.REASON_NETWORK
 
     fun refreshWallet() {
         scope.launch {
             walletBusy = true
             errorText = null
             runCatching { accountManager.wallet() }
-                .onSuccess { wallet = it }
-                .onFailure { errorText = errorTextOf(it, context) }
+                .onSuccess {
+                    wallet = it
+                    walletOffline = false
+                    networkDown = false
+                }
+                .onFailure {
+                    if (!handleUnauthorized(it)) {
+                        if (isOffline(it)) {
+                            walletOffline = true
+                            networkDown = true
+                        } else {
+                            errorText = errorTextOf(it, context)
+                        }
+                    }
+                }
             walletBusy = false
         }
     }
@@ -172,8 +239,21 @@ internal fun AccountScreen(
         scope.launch {
             cardsBusy = true
             runCatching { accountManager.myCards() }
-                .onSuccess { cards = it }
-                .onFailure { errorText = errorTextOf(it, context) }
+                .onSuccess {
+                    cards = it
+                    cardsOffline = false
+                    networkDown = false
+                }
+                .onFailure {
+                    if (!handleUnauthorized(it)) {
+                        if (isOffline(it)) {
+                            cardsOffline = true
+                            networkDown = true
+                        } else {
+                            errorText = errorTextOf(it, context)
+                        }
+                    }
+                }
             cardsBusy = false
         }
     }
@@ -195,15 +275,26 @@ internal fun AccountScreen(
                 entries.removeAt(index)
                 if (entries.isEmpty()) entries.add(CardEntry())
             }.onFailure { t ->
-                entries[index] = entries[index].copy(busy = false, error = errorTextOf(t, context))
+                entries[index] = when {
+                    handleUnauthorized(t) -> entries[index].copy(busy = false, error = null)
+                    isOffline(t) -> {
+                        // 绑定必须联网：断网时不清输入、不报红错，只保留离线提示。
+                        networkDown = true
+                        walletOffline = true
+                        cardsOffline = true
+                        entries[index].copy(busy = false, error = null)
+                    }
+                    else -> entries[index].copy(busy = false, error = errorTextOf(t, context))
+                }
             }
             if (result.isSuccess) refreshCards()
         }
     }
 
+    // 进页面总是先渲染快照，再后台拉实时值（网络好则刷新、断网则保留存量并标记离线）。
     LaunchedEffect(session) {
         if (session != null) {
-            if (wallet == null) refreshWallet()
+            refreshWallet()
             refreshCards()
         }
     }
@@ -212,47 +303,83 @@ internal fun AccountScreen(
         title = stringResource(R.string.float_account_manage_title),
         onBack = onClose,
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .padding(innerPadding)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = Baic2Spacing.lg),
+                .fillMaxSize(),
         ) {
-            Column(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
-                // 账号信息卡：账号名称 + 有效总积分（多卡合并展示，到期只在每张卡明细里显示）。
-                AccountCard(stringResource(R.string.float_account_section_profile)) {
-                    val current = session
-                    if (current == null) {
-                        Text(
-                            text = stringResource(R.string.float_login_required),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        Text(
-                            text = stringResource(R.string.float_account_name_row, current.username),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(top = Baic2Spacing.xs),
-                        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = Baic2Spacing.lg),
+            ) {
+                Column(modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth()) {
+                    // 账号信息卡：账号名称 + 有效总积分（多卡合并展示，到期只在每张卡明细里显示）。
+                    AccountCard(stringResource(R.string.float_account_section_profile)) {
+                        val current = session
+                        if (current == null) {
                             Text(
-                                text = stringResource(
-                                    R.string.float_account_points_balance,
-                                    formatPoints(wallet?.pointsBalanceMilli),
-                                ),
+                                text = stringResource(R.string.float_login_required),
                                 style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            OutlinedButton(
-                                onClick = { refreshWallet() },
-                                enabled = !walletBusy,
+                        } else {
+                            Text(
+                                text = stringResource(R.string.float_account_name_row, current.username),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = Baic2Spacing.xs),
                             ) {
                                 Text(
                                     text = stringResource(
-                                        if (walletBusy) {
+                                        R.string.float_account_points_balance,
+                                        formatPoints(wallet?.pointsBalanceMilli),
+                                    ) + if (walletOffline) pointsOfflineSuffix else "",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                OutlinedButton(
+                                    onClick = { refreshWallet() },
+                                    enabled = !walletBusy,
+                                ) {
+                                    Text(
+                                        text = stringResource(
+                                            if (walletBusy) {
+                                                R.string.float_account_points_loading
+                                            } else {
+                                                R.string.float_account_points_refresh
+                                            },
+                                        ),
+                                    )
+                                }
+                            }
+                            Text(
+                                text = stringResource(R.string.float_account_points_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = Baic2Spacing.xs),
+                            )
+                        }
+                    }
+    
+                    // 卡密卡：有效卡按绑定先后排队（首张「使用中」），下方是「输入框 + 绑定使用」条目。
+                    AccountCard(stringResource(R.string.float_account_section_card)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = stringResource(R.string.float_account_card_list_title),
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            OutlinedButton(
+                                onClick = { refreshCards() },
+                                enabled = !cardsBusy && session != null,
+                            ) {
+                                Text(
+                                    text = stringResource(
+                                        if (cardsBusy) {
                                             R.string.float_account_points_loading
                                         } else {
                                             R.string.float_account_points_refresh
@@ -261,112 +388,172 @@ internal fun AccountScreen(
                                 )
                             }
                         }
-                        Text(
-                            text = stringResource(R.string.float_account_points_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = Baic2Spacing.xs),
-                        )
-                    }
-                }
-
-                // 卡密卡：有效卡按绑定先后排队（首张「使用中」），下方是「输入框 + 绑定使用」条目。
-                AccountCard(stringResource(R.string.float_account_section_card)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = stringResource(R.string.float_account_card_list_title),
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedButton(
-                            onClick = { refreshCards() },
-                            enabled = !cardsBusy && session != null,
-                        ) {
+                        if (cards.isEmpty()) {
                             Text(
                                 text = stringResource(
-                                    if (cardsBusy) {
-                                        R.string.float_account_points_loading
+                                    if (cardsOffline) {
+                                        R.string.float_account_cards_offline_empty
                                     } else {
-                                        R.string.float_account_points_refresh
+                                        R.string.float_account_card_empty
                                     },
                                 ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = Baic2Spacing.xs),
                             )
+                        } else {
+                            // 服务端已按绑定先后升序返回，且只含「生效中·未过期·仍有余额」的卡：
+                            // 首张即当前正在消耗的卡，其余为待用。
+                            cards.forEachIndexed { index, card ->
+                                BoundCardRow(card = card, consuming = index == 0)
+                            }
                         }
-                    }
-                    if (cards.isEmpty()) {
                         Text(
-                            text = stringResource(R.string.float_account_card_empty),
+                            text = stringResource(R.string.float_account_card_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = Baic2Spacing.xs),
+                            modifier = Modifier.padding(top = Baic2Spacing.sm),
                         )
-                    } else {
-                        // 服务端已按绑定先后升序返回，且只含「生效中·未过期·仍有余额」的卡：
-                        // 首张即当前正在消耗的卡，其余为待用。
-                        cards.forEachIndexed { index, card ->
-                            BoundCardRow(card = card, consuming = index == 0)
+                        val anyBusy = entries.any { it.busy }
+                        entries.forEachIndexed { index, entry ->
+                            CardEntryRow(
+                                entry = entry,
+                                enabled = session != null && !anyBusy,
+                                showRemove = entries.size > 1 && !anyBusy,
+                                onValueChange = { entries[index] = entry.copy(input = it, error = null) },
+                                onRemove = { entries.removeAt(index) },
+                                onBind = { bindCard(index) },
+                            )
+                        }
+                        TextButton(
+                            onClick = { entries.add(CardEntry()) },
+                            enabled = !anyBusy,
+                            modifier = Modifier.padding(top = Baic2Spacing.xs),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Add,
+                                contentDescription = null,
+                            )
+                            Spacer(modifier = Modifier.width(Baic2Spacing.xs))
+                            Text(stringResource(R.string.float_account_card_add))
                         }
                     }
-                    Text(
-                        text = stringResource(R.string.float_account_card_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = Baic2Spacing.sm),
-                    )
-                    val anyBusy = entries.any { it.busy }
-                    entries.forEachIndexed { index, entry ->
-                        CardEntryRow(
-                            entry = entry,
-                            enabled = session != null && !anyBusy,
-                            showRemove = entries.size > 1 && !anyBusy,
-                            onValueChange = { entries[index] = entry.copy(input = it, error = null) },
-                            onRemove = { entries.removeAt(index) },
-                            onBind = { bindCard(index) },
+    
+                    // 购买点卡卡：分享到微信/支付宝/浏览器，由打开环境决定支付方式（微信内微信支付，
+                    // 浏览器或支付宝内支付宝）；付款成功回本页填卡密绑定；淘宝/拼多多店铺暂为灰态占位。
+                    AccountCard(stringResource(R.string.float_account_section_buy)) {
+                        Text(
+                            text = stringResource(R.string.float_account_buy_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        // 四个按钮两行两列等宽：主操作「分享并购买」实心，其余描边。
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = Baic2Spacing.sm),
+                            horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.sm),
+                        ) {
+                            Button(
+                                onClick = {
+                                    val send = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, buyShareSubject)
+                                        // 文字卡片：标题/权益 + 支付方式 + 链接分行；微信会抓取链接页
+                                        // 的 og 信息渲染预览卡片，微信/支付宝/浏览器均能识别其中的链接。
+                                        putExtra(Intent.EXTRA_TEXT, buyShareText)
+                                    }
+                                    context.startActivity(Intent.createChooser(send, buyShareChooser))
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(stringResource(R.string.float_account_buy_share))
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    // 浏览器购买：系统浏览器打开商城页，页内用支付宝支付。
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(buyUrl)))
+                                },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(stringResource(R.string.float_account_buy_browser))
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = Baic2Spacing.xs),
+                            horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.sm),
+                        ) {
+                            OutlinedButton(
+                                onClick = {},
+                                enabled = false,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(stringResource(R.string.float_account_buy_taobao))
+                            }
+                            OutlinedButton(
+                                onClick = {},
+                                enabled = false,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(stringResource(R.string.float_account_buy_pinduoduo))
+                            }
+                        }
+                    }
+    
+                    noticeText?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = Baic2Spacing.sm),
                         )
                     }
-                    TextButton(
-                        onClick = { entries.add(CardEntry()) },
-                        enabled = !anyBusy,
-                        modifier = Modifier.padding(top = Baic2Spacing.xs),
+                    errorText?.let { message ->
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = Baic2Spacing.sm),
+                        )
+                    }
+    
+                    Spacer(modifier = Modifier.height(Baic2Spacing.xl))
+                    OutlinedButton(
+                        onClick = {
+                            accountManager.logout()
+                            onClose()
+                        },
+                        enabled = session != null,
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Add,
-                            contentDescription = null,
-                        )
-                        Spacer(modifier = Modifier.width(Baic2Spacing.xs))
-                        Text(stringResource(R.string.float_account_card_add))
+                        Text(stringResource(R.string.float_account_logout))
                     }
+                    Spacer(modifier = Modifier.height(Baic2Spacing.xxl))
                 }
-
-                noticeText?.let { message ->
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = Baic2Spacing.sm),
-                    )
-                }
-                errorText?.let { message ->
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = Baic2Spacing.sm),
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(Baic2Spacing.xl))
-                OutlinedButton(
-                    onClick = {
-                        accountManager.logout()
-                        onClose()
-                    },
-                    enabled = session != null,
-                    modifier = Modifier.fillMaxWidth(),
+            }
+            // 网络不可达：页底居中红字（带底色，避免与滚动内容重叠），积分标记「离线」表示非实时值。
+            if (networkDown) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth(),
                 ) {
-                    Text(stringResource(R.string.float_account_logout))
+                    Text(
+                        text = offlineText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                horizontal = Baic2Spacing.lg,
+                                vertical = Baic2Spacing.xs,
+                            ),
+                    )
                 }
-                Spacer(modifier = Modifier.height(Baic2Spacing.xxl))
             }
         }
     }
@@ -519,6 +706,7 @@ private fun errorTextOf(t: Throwable, context: Context): String {
         ?: return context.getString(R.string.float_account_error_op, t.message ?: t.toString())
     return when (e.reason) {
         AccountApi.REASON_NETWORK -> context.getString(R.string.float_account_error_network)
+        AccountApi.REASON_UNAUTHORIZED -> context.getString(R.string.float_account_session_expired)
         AccountApi.REASON_BAD_RESPONSE -> context.getString(R.string.float_account_error_bad_response)
         AccountManager.REASON_NOT_LOGGED_IN -> context.getString(R.string.float_login_required)
         AccountManager.REASON_CARD_INVALID -> context.getString(R.string.float_account_error_card_invalid)

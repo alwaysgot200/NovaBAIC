@@ -43,7 +43,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SnapshotEntity::class,
         ScheduledTaskEntity::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = true,
 )
 abstract class Baic2Database : RoomDatabase() {
@@ -81,6 +81,13 @@ abstract class Baic2Database : RoomDatabase() {
     abstract fun scheduledTaskDao(): ScheduledTaskDao
 
     companion object {
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 每条回复的积分消耗快照（与 token 用量同源，展示不再换算 token）。
+                db.execSQL("ALTER TABLE messages ADD COLUMN usagePointsMilli INTEGER")
+            }
+        }
+
         val MIGRATION_20_21 = object : Migration(20, 21) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 // Notification-triggered automations: package + keyword filters.

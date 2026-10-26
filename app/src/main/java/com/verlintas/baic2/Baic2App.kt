@@ -117,6 +117,7 @@ import com.verlintas.baic2.feature.settings.SettingsScreen
 import com.verlintas.baic2.feature.tasks.TasksScreen
 import com.verlintas.baic2.floatball.FloatSettingsActivity
 import com.verlintas.baic2.floatball.account.AccountActivity
+import com.verlintas.baic2.floatball.home.AdvisorHomeBar
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -316,9 +317,16 @@ private fun ChatsZone(
         },
     ) {
         composable(ROUTE_CONVERSATIONS) {
-            ConversationsScreen(
-                onOpenConversation = { id -> navController.navigate("chat/$id") },
-            )
+            // [upstream-touch] 主页三态参谋入口（方案 §4）：仅叠加操作条 + 状态签，
+            // 不改 ConversationsScreen 本体（feature 模块零改动）。
+            Box(Modifier.fillMaxSize()) {
+                ConversationsScreen(
+                    onOpenConversation = { id -> navController.navigate("chat/$id") },
+                )
+                AdvisorHomeBar(
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                )
+            }
         }
         composable(
             route = ROUTE_CHAT,

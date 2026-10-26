@@ -42,6 +42,9 @@ val devProperties = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 val devDeepseekApiKey: String = devProperties.getProperty("dev.deepseekApiKey") ?: ""
+// 升级测试：debug 构建可配 dev.updateManifestUrl=http://.../manifest.json 模拟高版本；
+// release 恒空，走 BuildConfig.SERVER_ORIGIN + 生产 manifest。
+val devUpdateManifestUrl: String = devProperties.getProperty("dev.updateManifestUrl") ?: ""
 
 // 服务器地址按环境分流（server-config.properties，App 内无运行时入口）：
 // server.env（或 -Pbaic.serverEnv）可显式指定 test/prod；留空时按构建类型
@@ -52,7 +55,11 @@ val serverConfig = Properties().apply {
 }
 val serverOriginProd: String = serverConfig.getProperty("server.origin.prod")
     ?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: "https://autojs6.80fafa.com"
-val serverOriginTest: String = serverConfig.getProperty("server.origin.test")
+// 测试环境地址优先级：-Pbaic.testOrigin > NOVA_TEST_ORIGIN 环境变量 > server-config.properties。
+// 真机联调时由 tests/demo/net.ps1 自动注入本机局域网地址（不再依赖 adb reverse）。
+val serverOriginTest: String = (providers.gradleProperty("baic.testOrigin").orNull
+    ?: System.getenv("NOVA_TEST_ORIGIN")
+    ?: serverConfig.getProperty("server.origin.test"))
     ?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: serverOriginProd
 val serverEnv: String = (providers.gradleProperty("baic.serverEnv").orNull
     ?: serverConfig.getProperty("server.env"))
@@ -75,6 +82,9 @@ android {
             ?: 302
         versionName = providers.gradleProperty("baic.versionName").orNull
             ?: "0.3.2"
+
+        // 自更新测试地址：release 恒空（走 SERVER_ORIGIN），debug 由下方覆盖。
+        buildConfigField("String", "DEV_UPDATE_MANIFEST_URL", "\"\"")
 
         // ABI 按变体分流。AGP 会把 defaultConfig 与 buildType 的 abiFilters 合并
         // 取并集，所以默认只声明发行基线 arm64-v8a；debug 显式补齐模拟器冒烟所需
@@ -105,6 +115,8 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "DEV_DEEPSEEK_API_KEY", "\"$devDeepseekApiKey\"")
+            // 升级测试地址（默认空 -> debug 不参与自动更新）
+            buildConfigField("String", "DEV_UPDATE_MANIFEST_URL", "\"$devUpdateManifestUrl\"")
             // 测试环境服务器（server-config.properties）
             buildConfigField("String", "SERVER_ORIGIN", "\"$serverOriginDebug\"")
             // 模拟器冒烟需要 x86_64；显式列全三 ABI，无论 AGP 合并语义是并集

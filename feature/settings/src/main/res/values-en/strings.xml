@@ -30,9 +30,16 @@
     <string name="settings_brand_name">BetterAIChat2</string>
 
     <string name="settings_section_services">Services &amp; capabilities</string>
-    <string name="settings_agents_summary">%1$d services · default %2$s</string>
+    <string name="settings_agents_summary">%1$d server models · current %2$s</string>
     <string name="settings_agents_none">No service configured yet, tap to add one</string>
     <string name="settings_agents_hint">Tap a service to edit; use the dot on the right to set it as default</string>
+    <string name="settings_models_hint">Models are managed by the server — just pick one and edit its parameters</string>
+    <string name="settings_models_loading">Fetching model catalog…</string>
+    <string name="settings_models_error">Failed to load models: %1$s</string>
+    <string name="settings_models_empty">No models available, please retry later</string>
+    <string name="settings_models_summary">%1$s · %2$s rate · max %3$s</string>
+    <string name="settings_models_selected">In use</string>
+    <string name="settings_models_footer">Models are enabled/disabled server-side; no app update needed</string>
     <string name="settings_agents_delete_confirm">The key and configuration of this service will be permanently removed.</string>
     <string name="settings_permissions_summary">Automation, screen, notifications and runtime permissions</string>
 
@@ -145,6 +152,7 @@
     <string name="settings_about_stats_messages">Messages</string>
     <string name="settings_about_stats_runs">Runs</string>
     <string name="settings_about_stats_tool_calls">Tool calls</string>
+    <string name="settings_about_stats_points">Points used</string>
     <string name="settings_about_stats_tokens_in">Tokens in</string>
     <string name="settings_about_stats_tokens_out">Tokens out</string>
     <string name="settings_about_share">Share app</string>

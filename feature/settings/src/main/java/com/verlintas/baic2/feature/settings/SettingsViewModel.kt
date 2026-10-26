@@ -21,6 +21,8 @@ package com.verlintas.baic2.feature.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.verlintas.baic2.core.data.gateway.AdvisorGateway
+import com.verlintas.baic2.core.data.gateway.GatewayModel
 import com.verlintas.baic2.core.data.prefs.AppLocaleStore
 import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.data.repository.AgentRepository
@@ -50,6 +52,19 @@ data class SettingsUiState(
     val language: AppLanguage = AppLanguage.SYSTEM,
     val storage: StorageUsage? = null,
     val stats: UsageStats? = null,
+    /** 服务端模型目录（AI 服务页唯一数据源）。 */
+    val models: List<GatewayModel> = emptyList(),
+    val modelsLoading: Boolean = false,
+    val modelsError: String? = null,
+    /** 默认 Agent 当前选择的模型 key（高亮用）。 */
+    val selectedModelKey: String? = null,
+)
+
+private data class ModelCatalogState(
+    val models: List<GatewayModel> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+    val selectedModelKey: String? = null,
 )
 
 data class UsageStats(
@@ -57,8 +72,8 @@ data class UsageStats(
     val messages: Int,
     val runs: Int,
     val toolCalls: Int,
-    val tokensIn: Long,
-    val tokensOut: Long,
+    /** 全部会话累计消耗积分（毫积分）。 */
+    val pointsMilli: Long,
 )
 
 sealed interface UpdateState {
@@ -77,15 +92,40 @@ class SettingsViewModel @Inject constructor(
     private val appStorage: AppStorage,
     private val conversationRepository: ConversationRepository,
     private val runRepository: RunRepository,
+    private val gateway: AdvisorGateway,
 ) : ViewModel() {
 
     private val storage = MutableStateFlow<StorageUsage?>(null)
     private val stats = MutableStateFlow<UsageStats?>(null)
     private val updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    private val modelCatalog = MutableStateFlow(ModelCatalogState())
 
     init {
         refreshStorage()
         refreshStats()
+        refreshModels()
+    }
+
+    fun refreshModels() {
+        if (modelCatalog.value.loading) return
+        modelCatalog.value = modelCatalog.value.copy(loading = true, error = null)
+        viewModelScope.launch {
+            val selected = agentRepository.getDefaultAgent()?.model
+            runCatching { gateway.config() }
+                .onSuccess { config ->
+                    modelCatalog.value = ModelCatalogState(
+                        models = config.models,
+                        loading = false,
+                        selectedModelKey = selected ?: config.defaultModel,
+                    )
+                }
+                .onFailure { error ->
+                    modelCatalog.value = modelCatalog.value.copy(
+                        loading = false,
+                        error = error.message ?: error.javaClass.simpleName,
+                    )
+                }
+        }
     }
 
     fun updateState(): StateFlow<UpdateState> = updateState.asStateFlow()
@@ -107,14 +147,12 @@ class SettingsViewModel @Inject constructor(
 
     fun refreshStats() {
         viewModelScope.launch {
-            val (tokensIn, tokensOut) = conversationRepository.tokenTotals()
             stats.value = UsageStats(
                 conversations = conversationRepository.conversationCount(),
                 messages = conversationRepository.messageCount(),
                 runs = runRepository.count(),
                 toolCalls = runRepository.totalToolCalls(),
-                tokensIn = tokensIn,
-                tokensOut = tokensOut,
+                pointsMilli = conversationRepository.pointsTotalMilli(),
             )
         }
     }
@@ -135,8 +173,16 @@ class SettingsViewModel @Inject constructor(
         },
         storage,
         stats,
-    ) { base, storageUsage, usageStats ->
-        base.copy(storage = storageUsage, stats = usageStats)
+        modelCatalog,
+    ) { base, storageUsage, usageStats, catalog ->
+        base.copy(
+            storage = storageUsage,
+            stats = usageStats,
+            models = catalog.models,
+            modelsLoading = catalog.loading,
+            modelsError = catalog.error,
+            selectedModelKey = catalog.selectedModelKey,
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),

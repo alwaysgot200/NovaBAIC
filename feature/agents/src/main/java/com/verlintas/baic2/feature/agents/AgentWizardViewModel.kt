@@ -21,405 +21,196 @@ package com.verlintas.baic2.feature.agents
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.verlintas.baic2.core.data.gateway.AdvisorGateway
+import com.verlintas.baic2.core.data.gateway.GatewayMode
+import com.verlintas.baic2.core.data.gateway.GatewayModel
 import com.verlintas.baic2.core.data.repository.AgentRepository
 import com.verlintas.baic2.core.model.Agent
-import com.verlintas.baic2.core.model.ModelCatalog
-import com.verlintas.baic2.core.model.ModelEntry
-import com.verlintas.baic2.core.model.ProviderConfig
-import com.verlintas.baic2.core.model.ProviderError
 import com.verlintas.baic2.core.model.ProviderId
-import com.verlintas.baic2.core.network.provider.ProviderException
-import com.verlintas.baic2.core.network.provider.ProviderFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** A provider service preset; labels live in the UI layer. */
-enum class AgentPreset(
-    val id: String,
-    val provider: ProviderId,
-    val baseUrl: String,
-    val model: String,
-    val defaultName: String,
-    val family: String?,
-) {
-    DEEPSEEK(
-        "deepseek",
-        ProviderId.OPENAI_COMPATIBLE,
-        "https://api.deepseek.com/v1",
-        "deepseek-flash",
-        "DeepSeek",
-        "deepseek",
-    ),
-    OPENAI("openai", ProviderId.OPENAI_COMPATIBLE, "https://api.openai.com/v1", "gpt-5.6-luna", "OpenAI", "openai"),
-    SILICONFLOW(
-        "siliconflow",
-        ProviderId.OPENAI_COMPATIBLE,
-        "https://api.siliconflow.cn/v1",
-        "deepseek-ai/DeepSeek-V4-Flash",
-        "SiliconFlow",
-        "deepseek",
-    ),
-    MOONSHOT(
-        "moonshot",
-        ProviderId.OPENAI_COMPATIBLE,
-        "https://api.moonshot.cn/v1",
-        "kimi-k3",
-        "Kimi",
-        "moonshot",
-    ),
-    QWEN(
-        "qwen",
-        ProviderId.OPENAI_COMPATIBLE,
-        "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "qwen3.7-plus",
-        "Qwen",
-        "qwen",
-    ),
-    CLAUDE("claude", ProviderId.ANTHROPIC, "https://api.anthropic.com", "claude-sonnet-5-5", "Claude", "anthropic"),
-    GEMINI(
-        "gemini",
-        ProviderId.GEMINI,
-        "https://generativelanguage.googleapis.com",
-        "gemini-3.8-flash",
-        "Gemini",
-        "gemini",
-    ),
-    CUSTOM("custom", ProviderId.OPENAI_COMPATIBLE, "", "", "", null),
-}
-
 enum class WizardStep {
-    PROVIDER,
-    CONNECTION,
-    TUNING,
+    PARAMS,
     PROMPT,
 }
 
 data class AgentWizardUiState(
     val editingId: Long = 0L,
-    val step: WizardStep = WizardStep.PROVIDER,
-    val preset: AgentPreset = AgentPreset.DEEPSEEK,
-    val name: String = AgentPreset.DEEPSEEK.defaultName,
-    val baseUrl: String = AgentPreset.DEEPSEEK.baseUrl,
-    val apiKey: String = "",
-    val keyPrefilled: Boolean = false,
-    val detectedByKey: Boolean = false,
-    val model: String = AgentPreset.DEEPSEEK.model,
-    val models: List<String> = emptyList(),
-    val modelsLoading: Boolean = false,
-    val modelsError: String? = null,
+    val step: WizardStep = WizardStep.PARAMS,
+    val modelKey: String = "",
+    val displayName: String = "",
+    val coefficientLabel: String = "",
+    val supportsReasoning: Boolean = false,
+    /** 服务端下发的绝对网关地址（用户不可见、不可改）。 */
+    val baseUrl: String = "",
+    /** 输出 tokens 拉满（Max 模式）；关闭后按精细度档位选择。 */
+    val maxMode: Boolean = true,
+    val selectedModeKey: String = "standard",
+    val modes: List<GatewayMode> = emptyList(),
     val temperature: Float = 0.7f,
-    val maxTokens: Int? = null,
     val reasoning: Boolean = false,
     val systemPrompt: String = "",
+    val cardBound: Boolean = false,
+    val loading: Boolean = true,
+    val loadError: String? = null,
     val saving: Boolean = false,
     val saved: Boolean = false,
     val error: SetupError? = null,
-)
+) {
+    /** 最终落库的最大输出 tokens。 */
+    val resolvedMaxTokens: Int
+        get() = if (maxMode) {
+            modes.firstOrNull { it.key == "max" }?.maxTokens ?: DEFAULT_MAX_TOKENS
+        } else {
+            modes.firstOrNull { it.key == selectedModeKey }?.maxTokens
+                ?: modes.firstOrNull { it.key != "max" }?.maxTokens
+                ?: (DEFAULT_MAX_TOKENS / 2)
+        }
+
+    companion object {
+        const val DEFAULT_MAX_TOKENS = 4096
+    }
+}
 
 sealed interface SetupError {
-    data object MissingKey : SetupError
-
-    data object MissingUrl : SetupError
+    data object MissingCard : SetupError
 
     data object MissingModel : SetupError
 
     data object KeyStore : SetupError
-
-    data class Request(val kind: ProviderError.Kind, val detail: String) : SetupError
 }
 
+/**
+ * 模型设置（服务端模型目录选定后只编辑参数）：Max/精细度、温度、思考、系统提示词。
+ *
+ * 不再有服务商、API Key、上游地址；保存时模型、地址、凭证全部由服务端目录 + 卡密决定。
+ */
 @HiltViewModel
 class AgentWizardViewModel @Inject constructor(
     private val agentRepository: AgentRepository,
-    private val providerFactory: ProviderFactory,
+    private val gateway: AdvisorGateway,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AgentWizardUiState())
     val uiState: StateFlow<AgentWizardUiState> = _uiState.asStateFlow()
 
-    private var autoFetchJob: Job? = null
-    private var modelEdited = false
-
-    fun startForNew() {
-        _uiState.value = AgentWizardUiState()
-        modelEdited = false
-        scheduleAutoFetch()
-    }
-
-    fun startForEdit(agentId: Long) {
+    fun startForModel(modelKey: String) {
+        _uiState.value = AgentWizardUiState(modelKey = modelKey)
         viewModelScope.launch {
-            val agent = agentRepository.getAgent(agentId) ?: return@launch
-            val preset = AgentPreset.entries.firstOrNull {
-                it.provider == agent.provider && it.baseUrl == agent.baseUrl
-            } ?: AgentPreset.CUSTOM
-            _uiState.value = AgentWizardUiState(
-                editingId = agent.id,
-                preset = preset,
-                name = agent.name,
-                baseUrl = agent.baseUrl,
-                model = agent.model,
-                temperature = agent.temperature.toFloat(),
-                maxTokens = agent.maxTokens,
-                reasoning = agent.reasoning,
-                systemPrompt = agent.systemPrompt,
-                keyPrefilled = true,
-            )
-            modelEdited = true
-            scheduleAutoFetch()
+            val cardKey = runCatching { gateway.cardKey() }.getOrNull()
+            runCatching { gateway.config() }
+                .onSuccess { config ->
+                    val model = config.models.firstOrNull { it.key == modelKey }
+                        ?: config.models.firstOrNull { it.key == config.defaultModel }
+                        ?: config.models.firstOrNull()
+                    if (model == null) {
+                        _uiState.update {
+                            it.copy(loading = false, loadError = "no_models", cardBound = !cardKey.isNullOrBlank())
+                        }
+                        return@launch
+                    }
+                    val existing = agentRepository.getDefaultAgent()?.takeIf { it.model == model.key }
+                    val modes = normalizeModes(model)
+                    val maxModeTokens = modes.firstOrNull { it.key == "max" }?.maxTokens ?: AgentWizardUiState.DEFAULT_MAX_TOKENS
+                    val existingMax = existing?.maxTokens
+                    val maxMode = existingMax == null || existingMax >= maxModeTokens
+                    _uiState.update {
+                        it.copy(
+                            modelKey = model.key,
+                            displayName = model.displayName,
+                            coefficientLabel = model.coefficientLabel,
+                            supportsReasoning = model.supportsReasoning,
+                            baseUrl = config.baseUrl,
+                            modes = modes,
+                            maxMode = maxMode,
+                            selectedModeKey = if (maxMode) "standard" else nearestModeKey(modes, existingMax),
+                            temperature = existing?.temperature?.toFloat() ?: 0.7f,
+                            reasoning = (existing?.reasoning ?: false) && model.supportsReasoning,
+                            systemPrompt = existing?.systemPrompt.orEmpty(),
+                            editingId = existing?.id ?: 0L,
+                            cardBound = !cardKey.isNullOrBlank(),
+                            loading = false,
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            loading = false,
+                            loadError = error.message ?: error.javaClass.simpleName,
+                            cardBound = !cardKey.isNullOrBlank(),
+                        )
+                    }
+                }
         }
     }
 
-    // --- step 1: provider & key ---
+    fun setMaxMode(enabled: Boolean) = _uiState.update { it.copy(maxMode = enabled, error = null) }
 
-    fun selectPreset(preset: AgentPreset) {
-        _uiState.update { current ->
-            current.copy(
-                preset = preset,
-                name = preset.defaultName.ifBlank { current.name },
-                baseUrl = preset.baseUrl.ifBlank { current.baseUrl },
-                model = preset.model.ifBlank { current.model },
-                models = emptyList(),
-                modelsError = null,
-                error = null,
-            )
-        }
-        modelEdited = false
-        scheduleAutoFetch()
+    fun selectMode(modeKey: String) = _uiState.update {
+        it.copy(selectedModeKey = modeKey, maxMode = false, error = null)
     }
 
-    fun updateApiKey(value: String) {
-        val detected = detectPreset(value)
-        _uiState.update { current ->
-            if (detected != null) {
-                current.copy(
-                    apiKey = value,
-                    preset = detected,
-                    detectedByKey = true,
-                    baseUrl = detected.baseUrl,
-                    name = if (current.editingId == 0L) detected.defaultName else current.name,
-                    model = if (current.model.isBlank() || current.detectedByKey) {
-                        detected.model
-                    } else {
-                        current.model
-                    },
-                    models = emptyList(),
-                    error = null,
-                )
-            } else {
-                current.copy(apiKey = value, error = null)
-            }
-        }
-        modelEdited = detected == null && modelEdited
-        scheduleAutoFetch()
-    }
+    fun updateTemperature(value: Float) = _uiState.update { it.copy(temperature = value) }
 
-    /** Key prefix automation: sk-ant- -> Claude, AIza -> Gemini, sk- -> OpenAI family. */
-    private fun detectPreset(key: String): AgentPreset? {
-        val trimmed = key.trim()
-        return when {
-            trimmed.startsWith("sk-ant-") -> AgentPreset.CLAUDE
-            trimmed.startsWith("AIza") -> AgentPreset.GEMINI
-            trimmed.startsWith("sk-or-") -> AgentPreset.OPENAI
-            trimmed.startsWith("sk-") && _uiState.value.preset.provider != ProviderId.OPENAI_COMPATIBLE ->
-                AgentPreset.DEEPSEEK
-            else -> null
-        }
-    }
+    fun updateReasoning(value: Boolean) = _uiState.update { it.copy(reasoning = value) }
 
-    fun updateBaseUrl(value: String) {
-        _uiState.update { it.copy(baseUrl = value, error = null) }
-        autoFetchJob?.cancel()
-        autoFetchJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(900)
-            val state = _uiState.value
-            if (hasUsableKey(state) && state.baseUrl.isNotBlank()) fetchModels()
-        }
-    }
-
-    fun updateName(value: String) = _uiState.update { it.copy(name = value) }
+    fun updateSystemPrompt(value: String) = _uiState.update { it.copy(systemPrompt = value) }
 
     fun next() {
-        val current = _uiState.value
-        when (current.step) {
-            WizardStep.PROVIDER -> {
-                if (current.baseUrl.isBlank()) {
-                    _uiState.update { it.copy(error = SetupError.MissingUrl) }
-                    return
-                }
-                if (current.apiKey.isBlank() && !current.keyPrefilled) {
-                    _uiState.update { it.copy(error = SetupError.MissingKey) }
-                    return
-                }
-                _uiState.update { it.copy(step = WizardStep.CONNECTION, error = null) }
-                scheduleAutoFetch(0)
-            }
-
-            WizardStep.CONNECTION -> {
-                if (current.model.isBlank()) {
-                    _uiState.update { it.copy(error = SetupError.MissingModel) }
-                    return
-                }
-                _uiState.update { it.copy(step = WizardStep.TUNING, error = null) }
-            }
-
-            WizardStep.TUNING -> _uiState.update { it.copy(step = WizardStep.PROMPT, error = null) }
-
+        when (_uiState.value.step) {
+            WizardStep.PARAMS -> _uiState.update { it.copy(step = WizardStep.PROMPT, error = null) }
             WizardStep.PROMPT -> save()
         }
     }
 
     fun back() {
-        val previous = when (_uiState.value.step) {
-            WizardStep.PROVIDER -> null
-            WizardStep.CONNECTION -> WizardStep.PROVIDER
-            WizardStep.TUNING -> WizardStep.CONNECTION
-            WizardStep.PROMPT -> WizardStep.TUNING
-        }
-        if (previous != null) _uiState.update { it.copy(step = previous, error = null) }
-    }
-
-    // --- step 2: connection & models ---
-
-    /** Debounced auto-pull of the account's model list whenever creds change. */
-    private fun scheduleAutoFetch(delayMs: Long = 700) {
-        autoFetchJob?.cancel()
-        autoFetchJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(delayMs)
-            val state = _uiState.value
-            if (hasUsableKey(state) && state.baseUrl.isNotBlank()) fetchModels()
+        if (_uiState.value.step == WizardStep.PROMPT) {
+            _uiState.update { it.copy(step = WizardStep.PARAMS, error = null) }
         }
     }
-
-    fun fetchModels() {
-        val current = _uiState.value
-        if (current.modelsLoading) return
-        if (current.baseUrl.isBlank() || !hasUsableKey(current)) {
-            _uiState.update { it.copy(modelsError = "missing_credentials") }
-            return
-        }
-        _uiState.update { it.copy(modelsLoading = true, modelsError = null) }
-        viewModelScope.launch {
-            try {
-                // Editing an existing agent: the field is intentionally empty,
-                // so authenticate with the stored (decrypted) key instead of
-                // sending a placeholder that 401s every fetch.
-                val storedKey = if (current.editingId != 0L) {
-                    runCatching { agentRepository.resolveConfig(current.editingId) }.getOrNull()?.apiKey
-                } else {
-                    null
-                }
-                val apiKey = current.apiKey.trim().ifBlank { storedKey.orEmpty() }
-                if (apiKey.isBlank()) {
-                    _uiState.update { it.copy(modelsLoading = false, modelsError = "missing_credentials") }
-                    return@launch
-                }
-                val fetched = providerFactory.create(current.preset.provider)
-                    .listModels(current.toConfig().copy(apiKey = apiKey))
-                val models = fetched.filter(::isLikelyChatModel).ifEmpty { fetched }.sorted()
-                _uiState.update { state ->
-                    val selected = pickInitialModel(models, state.model, modelEdited)
-                    val entry = ModelCatalog.entryFor(state.preset.provider, selected)
-                    state.copy(
-                        modelsLoading = false,
-                        models = models,
-                        modelsError = null,
-                        model = selected,
-                        temperature = if (!modelEdited && entry != null) {
-                            entry.temperature.toFloat()
-                        } else {
-                            state.temperature
-                        },
-                        maxTokens = if (!modelEdited && entry != null) entry.maxTokens else state.maxTokens,
-                        reasoning = if (!modelEdited && entry != null) {
-                            entry.supportsReasoning
-                        } else {
-                            state.reasoning
-                        },
-                    )
-                }
-            } catch (e: ProviderException) {
-                _uiState.update {
-                    it.copy(
-                        modelsLoading = false,
-                        modelsError = e.error.message,
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(modelsLoading = false, modelsError = e.message ?: "request_failed")
-                }
-            }
-        }
-    }
-
-    private fun hasUsableKey(state: AgentWizardUiState): Boolean =
-        state.apiKey.isNotBlank() || state.keyPrefilled
-
-    /** Applies a curated catalog entry: model id plus its tuned defaults. */
-    fun pickCatalogModel(entry: ModelEntry) {
-        modelEdited = true
-        _uiState.update {
-            it.copy(
-                model = entry.id,
-                temperature = entry.temperature.toFloat(),
-                maxTokens = entry.maxTokens,
-                reasoning = entry.supportsReasoning,
-                error = null,
-            )
-        }
-    }
-
-    fun updateModel(value: String) {
-        modelEdited = true
-        _uiState.update { it.copy(model = value, error = null) }
-    }
-
-    // --- step 3: tuning ---
-
-    fun updateTemperature(value: Float) = _uiState.update { it.copy(temperature = value) }
-
-    fun updateMaxTokens(value: String) {
-        val parsed = value.filter { it.isDigit() }.takeIf { it.isNotBlank() }?.toIntOrNull()
-        _uiState.update { it.copy(maxTokens = parsed) }
-    }
-
-    fun updateReasoning(value: Boolean) = _uiState.update { it.copy(reasoning = value) }
-
-    // --- step 4: prompt & save ---
-
-    fun updateSystemPrompt(value: String) = _uiState.update { it.copy(systemPrompt = value) }
 
     private fun save() {
         val current = _uiState.value
-        if (current.model.isBlank()) {
+        if (current.modelKey.isBlank()) {
             _uiState.update { it.copy(error = SetupError.MissingModel) }
             return
         }
         _uiState.update { it.copy(saving = true, error = null) }
         viewModelScope.launch {
+            val cardKey = runCatching { gateway.cardKey() }.getOrNull()
+            val existing = agentRepository.getDefaultAgent()
+            val existingKey = existing?.id?.let { id ->
+                runCatching { agentRepository.resolveConfig(id) }.getOrNull()?.apiKey
+            }
+            val apiKey = cardKey ?: existingKey
+            if (apiKey.isNullOrBlank()) {
+                _uiState.update { it.copy(saving = false, error = SetupError.MissingCard) }
+                return@launch
+            }
             try {
                 val agent = Agent(
-                    id = current.editingId,
-                    name = current.name.ifBlank { current.model },
-                    provider = current.preset.provider,
+                    id = existing?.id ?: 0L,
+                    name = current.displayName.ifBlank { current.modelKey },
+                    provider = ProviderId.OPENAI_COMPATIBLE,
                     baseUrl = current.baseUrl.trim().trimEnd('/'),
-                    model = current.model.trim(),
+                    model = current.modelKey,
                     temperature = current.temperature.toDouble(),
-                    maxTokens = current.maxTokens,
+                    maxTokens = current.resolvedMaxTokens,
                     reasoning = current.reasoning,
                     systemPrompt = current.systemPrompt.trim(),
-                    isDefault = current.editingId == 0L,
+                    isDefault = true,
                 )
-                if (current.editingId == 0L) {
-                    agentRepository.save(agent, current.apiKey.trim())
+                if (existing == null) {
+                    agentRepository.save(agent, apiKey)
                 } else {
-                    agentRepository.update(agent, current.apiKey.trim().takeIf { it.isNotBlank() })
+                    agentRepository.update(agent, apiKey.takeIf { it != existingKey })
                 }
                 _uiState.update { it.copy(saving = false, saved = true) }
             } catch (e: Exception) {
@@ -428,39 +219,23 @@ class AgentWizardViewModel @Inject constructor(
         }
     }
 
-    private fun AgentWizardUiState.toConfig() = ProviderConfig(
-        provider = preset.provider,
-        baseUrl = baseUrl.trim().trimEnd('/'),
-        apiKey = apiKey.trim(),
-        model = model.trim(),
-    )
-}
+    /** 服务端未给档位时兜底（Max / 标准 / 精省）。 */
+    private fun normalizeModes(model: GatewayModel): List<GatewayMode> {
+        if (model.modes.isNotEmpty()) return model.modes
+        val max = model.maxMode?.maxTokens ?: AgentWizardUiState.DEFAULT_MAX_TOKENS
+        return listOf(
+            GatewayMode("max", "Max", max),
+            GatewayMode("standard", "标准", maxOf(512, max / 2)),
+            GatewayMode("economy", "精省", maxOf(256, max / 8)),
+        )
+    }
 
-/**
- * Model lists from gateways include embeddings, TTS and image endpoints; the
- * wizard only offers chat-capable ids (with a fallback to the raw list when
- * the filter would hide everything).
- */
-internal fun isLikelyChatModel(id: String): Boolean {
-    val normalized = id.lowercase()
-    return NON_CHAT_MARKERS.none { normalized.contains(it) }
+    /** 现有 maxTokens 最接近的档位（编辑历史配置时回显）。 */
+    private fun nearestModeKey(modes: List<GatewayMode>, maxTokens: Int?): String {
+        val candidates = modes.filter { it.key != "max" }
+        if (candidates.isEmpty()) return "standard"
+        if (maxTokens == null) return candidates.first().key
+        return candidates.minByOrNull { kotlin.math.abs(it.maxTokens - maxTokens) }?.key
+            ?: candidates.first().key
+    }
 }
-
-/**
- * Keeps the saved/manual choice when the user touched the model, otherwise
- * prefers the model already selected when it exists on the account and falls
- * back to the first entry the API returned.
- */
-internal fun pickInitialModel(models: List<String>, current: String, edited: Boolean): String {
-    if (models.isEmpty()) return current
-    if (edited) return current
-    return models.firstOrNull { it.equals(current, ignoreCase = true) } ?: models.first()
-}
-
-private val NON_CHAT_MARKERS = listOf(
-    "embedding", "embed-", "bge-", "gte-", "e5-", "m3e",
-    "rerank", "whisper", "tts", "text-to-speech", "speech",
-    "transcribe", "audio", "realtime", "moderation",
-    "dall-e", "stable-diffusion", "sdxl", "flux", "upscaler",
-    "clip-", "image", "codec",
-)

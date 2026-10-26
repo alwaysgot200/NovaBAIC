@@ -28,6 +28,14 @@
     <string name="wizard_step_provider">Provider</string>
     <string name="wizard_step_connection">Connection &amp; model</string>
     <string name="wizard_step_tuning">Tuning</string>
+    <string name="wizard_step_model">Pick model</string>
+    <string name="wizard_gateway_hint">Cloud AI is built in — just pick a model, no API key needed</string>
+    <string name="wizard_no_card">Bind a card first, then pick a model</string>
+    <string name="wizard_models_empty">No models available yet, please retry later</string>
+    <string name="wizard_model_reasoning_tag">Reasoning</string>
+    <string name="wizard_max_mode">Max mode</string>
+    <string name="wizard_max_mode_desc">Use the model limit of %1$d output tokens; turn off to choose a lower precision</string>
+    <string name="wizard_output_precision">Output precision</string>
     <string name="wizard_step_prompt">System prompt</string>
     <string name="wizard_key_hint">Paste the key and the provider is detected automatically</string>
     <string name="wizard_detected">Detected: %1$s</string>

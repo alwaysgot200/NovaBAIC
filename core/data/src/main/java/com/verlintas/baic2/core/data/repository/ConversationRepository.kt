@@ -83,6 +83,9 @@ class ConversationRepository @Inject constructor(
     suspend fun tokenTotals(): Pair<Long, Long> =
         db.messageDao().totalInputTokens() to db.messageDao().totalOutputTokens()
 
+    /** 全部会话累计消耗积分（毫积分）。 */
+    suspend fun pointsTotalMilli(): Long = db.messageDao().totalPointsMilli()
+
     suspend fun create(agentId: Long?, mode: AppMode, title: String): Long {
         val now = System.currentTimeMillis()
         return db.conversationDao().insert(
@@ -93,7 +96,23 @@ class ConversationRepository @Inject constructor(
     }
 
     suspend fun append(message: ChatMessage): Long = db.withTransaction {
-        val id = db.messageDao().insert(mapper.messageToEntity(message))
+        // 助手消息：完成时按模型倍率快照积分消耗（展示不再换算 token）。
+        val enriched = if (
+            message.role == ChatRole.ASSISTANT &&
+            message.usagePointsMilli == null &&
+            (message.usageInput != null || message.usageOutput != null)
+        ) {
+            message.copy(
+                usagePointsMilli = com.verlintas.baic2.core.model.PointsPricing.deductPointsMilli(
+                    promptTokens = message.usageInput ?: 0L,
+                    completionTokens = message.usageOutput ?: 0L,
+                    coefficientMilli = com.verlintas.baic2.core.model.ModelPricing.coefficientMilli(message.model),
+                ),
+            )
+        } else {
+            message
+        }
+        val id = db.messageDao().insert(mapper.messageToEntity(enriched))
         db.conversationDao().touch(message.conversationId, System.currentTimeMillis())
         id
     }
