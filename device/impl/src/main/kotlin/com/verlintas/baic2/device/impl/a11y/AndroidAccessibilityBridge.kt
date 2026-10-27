@@ -24,6 +24,7 @@ import android.accessibilityservice.GestureDescription
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
@@ -221,6 +222,25 @@ class AndroidAccessibilityBridge @Inject constructor() : AccessibilityBridge {
             )
         suspendCancellableCoroutine { continuation ->
             active.captureScreenCompat { result ->
+                if (continuation.isActive) continuation.resume(result)
+            }
+        }
+    }
+
+    /**
+     * 直取位图（2026-10-27 回复慢归因优化）：跳过 PNG 编码/解码往返，交付
+     * ARGB_8888 位图。找图帧源 [FrameSource] 的 a11y 首选项走此通道。
+     */
+    override suspend fun captureScreenBitmap(): Result<Bitmap> = withContext(Dispatchers.Main) {
+        val active = service
+            ?: return@withContext Result.failure(
+                IllegalStateException(
+                    "accessibility_not_enabled: ask the user to enable the BAIC2 accessibility service " +
+                        "in 设置 → 无障碍, then retry.",
+                ),
+            )
+        suspendCancellableCoroutine { continuation ->
+            active.captureScreenBitmapCompat { result ->
                 if (continuation.isActive) continuation.resume(result)
             }
         }

@@ -19,6 +19,9 @@
 
 package com.verlintas.baic2.floatball
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
@@ -52,6 +55,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import android.view.animation.DecelerateInterpolator
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.PopupWindow
@@ -74,6 +78,7 @@ import com.verlintas.baic2.floatball.auto.CompanionWindowController
 import com.verlintas.baic2.floatball.home.AdvisorRunState
 import com.verlintas.baic2.floatball.home.AdvisorSelfWindowGate
 import com.verlintas.baic2.floatball.notify.EscalationNotifier
+import com.verlintas.baic2.floatball.rpa.RpaEntryPoints
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.keepalive.KeepAliveManager
 import dagger.hilt.android.AndroidEntryPoint
@@ -158,7 +163,20 @@ class FloatBallService : Service() {
 
     private enum class Mode { IDLE, ONESHOT, RECORDING, AUTO }
 
+    /**
+     * 状态机。进入非空闲态先把球从“贴边收起”滑回完整形态；回到空闲后
+     * 重新计时，是否真正收起由 [scheduleEdgeTuck] 的贴边/遮挡判定决定。
+     */
     private var mode = Mode.IDLE
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value == Mode.IDLE) {
+                scheduleEdgeTuck()
+            } else {
+                revealBall(restartTimer = false)
+            }
+        }
 
     /** M3-b：RECORDING 态的子语义——true=自动陪伴窗口（收尾走窗口汇总通知）。 */
     private var companionWindow = false
@@ -215,6 +233,15 @@ class FloatBallService : Service() {
     private var ballX = Int.MIN_VALUE
     private var ballY = Int.MIN_VALUE
 
+    /**
+     * 靠边自动隐藏：逻辑坐标仍是 [ballX]/[ballY]，收起时只把窗口可视 x
+     * 推到屏外；[ballTuckAnimator] 只改 WindowManager 参数，不回写逻辑坐标。
+     */
+    private var ballTucked = false
+    private var ballTuckSide: FloatEdgeTuck.Side? = null
+    private var ballTuckAnimator: ValueAnimator? = null
+    private val ballTuckRunnable = Runnable { tuckBallIfIdle() }
+
     private var askJob: Job? = null
 
     /** 输入行手动发送的回合（区别于长按单次 askJob / 连续模式 diffEngine）。 */
@@ -242,7 +269,10 @@ class FloatBallService : Service() {
         super.onConfigurationChanged(newConfig)
         val params = ballParams ?: return
         val view = ball?.root ?: return
-        moveBallWithFollow(view, params, params.x, params.y)
+        // 收起态下 params.x 是屏外可视值，必须用逻辑坐标重钳，否则旋转后跑位。
+        val logicalX = if (ballX != Int.MIN_VALUE) ballX else params.x
+        val logicalY = if (ballY != Int.MIN_VALUE) ballY else params.y
+        moveBallWithFollow(view, params, logicalX, logicalY)
     }
 
     override fun onCreate() {
@@ -540,7 +570,13 @@ class FloatBallService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_SHOW_BALL -> if (ball == null && mode != Mode.ONESHOT) showBall()
+            ACTION_SHOW_BALL -> when {
+                mode == Mode.ONESHOT -> Unit
+                ball == null -> showBall()
+                // 已收起时通知栏「显示悬浮球」应把球滑出来并保持可见，
+                // 不在 2.5s 后立刻收回；下一次触摸/拖动会重新起计时。
+                else -> revealBall(restartTimer = false)
+            }
             // 通知权限刚授予后，重挂前台通知让常驻提示立即可见。
             ACTION_REPOST_NOTIFICATION -> startInForeground()
             // 免双击入口（通知栏自动化/测试）：与双击同一状态机路径。
@@ -618,6 +654,9 @@ class FloatBallService : Service() {
         var startX = 0
         var startY = 0
         var dragging = false
+        // 本次触摸序列是否只是“把收起的球滑出来”：是则吞掉单击/双击/长按，
+        // 避免用户想滑出时误开菜单或误进参谋。
+        var revealedFromTuck = false
 
         // 双击仲裁：菜单窗口盖住主球朝向侧，抢先展开会吃掉双击第二击的落点；
         // 但等系统 onSingleTapConfirmed 的 300ms 确认窗太迟钝。改为 tap-UP 后
@@ -634,6 +673,7 @@ class FloatBallService : Service() {
             this,
             object : GestureDetector.SimpleOnGestureListener() {
                 override fun onSingleTapUp(e: MotionEvent): Boolean {
+                    if (revealedFromTuck) return true
                     if (suppressTapUp) {
                         suppressTapUp = false
                         return true
@@ -657,6 +697,7 @@ class FloatBallService : Service() {
                 }
 
                 override fun onDoubleTap(e: MotionEvent): Boolean {
+                    if (revealedFromTuck) return true
                     suppressTapUp = true
                     when (mode) {
                         Mode.IDLE -> {
@@ -675,6 +716,7 @@ class FloatBallService : Service() {
                 }
 
                 override fun onLongPress(e: MotionEvent) {
+                    if (revealedFromTuck) return
                     // 长按=单次参谋；OneShot/Recording 态长按拒绝。
                     if (mode == Mode.IDLE) {
                         cancelPendingExpand()
@@ -688,10 +730,15 @@ class FloatBallService : Service() {
             detector.onTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // 从收起态唤醒：先滑回完整球，本次触摸序列只做这件事；
+                    // 拖动仍可继续，起点改用逻辑坐标，避免从屏外位置跳变。
+                    val wasTucked = ballTucked
+                    revealedFromTuck = wasTucked
+                    if (wasTucked) revealBall(restartTimer = false)
                     downRawX = event.rawX
                     downRawY = event.rawY
-                    startX = params.x
-                    startY = params.y
+                    startX = if (ballX != Int.MIN_VALUE) ballX else params.x
+                    startY = if (ballY != Int.MIN_VALUE) ballY else params.y
                     dragging = false
                     // 新一触点：清上一轮双击抑制，避免吞掉后续合法单击。
                     suppressTapUp = false
@@ -699,7 +746,11 @@ class FloatBallService : Service() {
                     // 并行，长按确认后毫秒级进 LLM（拖动/抬起均自动丢弃）。
                     // 面板可见时禁预热：无障碍连 overlay 文字一起读，预读结果
                     // 将全是面板自身文字（bug ①自噬），宁走像素路径。
-                    if (mode == Mode.IDLE && (split == null || splitDetached)) {
+                    // 收起唤醒只是一次 UI 动作，不预热。
+                    if (!revealedFromTuck &&
+                        mode == Mode.IDLE &&
+                        (split == null || splitDetached)
+                    ) {
                         screenAdvisor.preheat()
                     }
                     true
@@ -711,6 +762,11 @@ class FloatBallService : Service() {
                     if (dragging) {
                         requestBallMove(startX + dx.toInt(), startY + dy.toInt())
                     }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    // 松手/取消后重新计时；菜单若在仲裁窗后展开，会自行取消计时。
+                    scheduleEdgeTuck()
                     true
                 }
                 else -> true
@@ -745,6 +801,12 @@ class FloatBallService : Service() {
         x: Int,
         y: Int,
     ) {
+        // 任何移动都先取消收起计时/动画，把球恢复到可拖动的逻辑位置。
+        mainHandler.removeCallbacks(ballTuckRunnable)
+        ballTuckAnimator?.cancel()
+        ballTuckAnimator = null
+        ballTucked = false
+        ballTuckSide = null
         val screen = screenSize()
         params.x = x.coerceIn(
             -dp(FloatUi.BALL_SIZE_DP / 2),
@@ -760,6 +822,103 @@ class FloatBallService : Service() {
         ballX = params.x
         ballY = params.y
         followMenu(params)
+        // 拖动/旋转结束后重新计时；连续 MOVE 会不断重置，不会提前收起。
+        scheduleEdgeTuck()
+    }
+
+    // ------------------------------------------------------ edge auto-hide
+
+    /**
+     * 靠边收起计时：只有空闲、无菜单/分屏/方向弹层、且逻辑位置贴边时才启动。
+     * 每次移动/菜单关闭/状态回到 Idle 都会重置。
+     */
+    private fun scheduleEdgeTuck() {
+        mainHandler.removeCallbacks(ballTuckRunnable)
+        if (ballTucked) return
+        if (mode != Mode.IDLE || ball == null || ballParams == null) return
+        if (menuView != null || cardMenuView != null ||
+            split != null || directionPopup != null
+        ) {
+            return
+        }
+        if (ballX == Int.MIN_VALUE) return
+        val screen = screenSize()
+        ballTuckSide = FloatEdgeTuck.sideFor(
+            logicalX = ballX,
+            screenWidth = screen.x,
+            ballSize = dp(FloatUi.BALL_SIZE_DP),
+            proximity = dp(FloatEdgeTuck.EDGE_PROXIMITY_DP),
+        ) ?: return
+        mainHandler.postDelayed(ballTuckRunnable, FloatEdgeTuck.IDLE_DELAY_MS)
+    }
+
+    /** 计时到点：再核一遍状态，避免菜单/忙碌态在 2.5s 内打开后仍收起。 */
+    private fun tuckBallIfIdle() {
+        if (mode != Mode.IDLE || ball == null || ballParams == null) return
+        if (menuView != null || cardMenuView != null ||
+            split != null || directionPopup != null
+        ) {
+            return
+        }
+        val side = ballTuckSide ?: return
+        tuckBall(side)
+    }
+
+    /** 把球滑到屏外，只留 [FloatEdgeTuck.SLIVER_DP] 宽边条；不写 ballX。 */
+    private fun tuckBall(side: FloatEdgeTuck.Side) {
+        val view = ball?.root ?: return
+        val params = ballParams ?: return
+        if (ballX == Int.MIN_VALUE) return
+        val target = FloatEdgeTuck.tuckedX(
+            side = side,
+            screenWidth = screenSize().x,
+            ballSize = dp(FloatUi.BALL_SIZE_DP),
+            sliver = dp(FloatEdgeTuck.SLIVER_DP),
+        )
+        ballTucked = true
+        ballTuckSide = side
+        ballTuckAnimator?.cancel()
+        ballTuckAnimator = ValueAnimator.ofInt(ballX, target).apply {
+            duration = FloatEdgeTuck.ANIM_MS
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { animator ->
+                params.x = animator.animatedValue as Int
+                runCatching { windowManager.updateViewLayout(view, params) }
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (ballTuckAnimator === animation) ballTuckAnimator = null
+                }
+            })
+            start()
+        }
+    }
+
+    /** 从收起态滑回逻辑位置；[restartTimer] 为 false 表示马上要开菜单/进忙碌态。 */
+    private fun revealBall(restartTimer: Boolean = true) {
+        mainHandler.removeCallbacks(ballTuckRunnable)
+        ballTuckAnimator?.cancel()
+        ballTuckAnimator = null
+        if (ballTucked) {
+            ballTucked = false
+            ballTuckSide = null
+            val view = ball?.root
+            val params = ballParams
+            if (view != null && params != null && ballX != Int.MIN_VALUE) {
+                params.x = ballX
+                runCatching { windowManager.updateViewLayout(view, params) }
+            }
+        }
+        if (restartTimer) scheduleEdgeTuck()
+    }
+
+    /** 摘窗/销毁前彻底取消计时与动画，不做回弹（球可能即将被移除）。 */
+    private fun cancelEdgeTuck() {
+        mainHandler.removeCallbacks(ballTuckRunnable)
+        ballTuckAnimator?.cancel()
+        ballTuckAnimator = null
+        ballTucked = false
+        ballTuckSide = null
     }
 
     // ------------------------------------------------------- one shot
@@ -891,8 +1050,9 @@ class FloatBallService : Service() {
                 if (granted) {
                     mainHandler.postDelayed({
                         // 授权等待期用户可能已双击停止（或服务被重建）：授权
-                        // 晚到时绝不能在非 RECORDING 态拉起差分循环。
-                        if (mode == Mode.RECORDING) {
+                        // 晚到时绝不能在非录制态拉起差分循环。自动档在窗口
+                        // 启动成功后已切到 AUTO，这里必须一并放行。
+                        if (mode == Mode.RECORDING || (mode == Mode.AUTO && autoRun)) {
                             startRecordingLoop()
                         }
                     }, CONSENT_SETTLE_MS)
@@ -931,7 +1091,7 @@ class FloatBallService : Service() {
         }
     }
 
-    private fun stopRecording() {
+    private fun stopRecording(quiet: Boolean = false) {
         diffEngine.stop()
         // MPManager 常驻投影跨会话复用（方案 2026-10-22），停止录制不释放。
         // 陪伴窗口收尾：静默结束——不发「已停止」toast，汇总/续期由控制器通知。
@@ -939,19 +1099,27 @@ class FloatBallService : Service() {
         companionWindow = false
         if (wasCompanion) companionController.finish("service_stop")
         abortRecording()
-        if (!wasCompanion) toast(R.string.float_recording_stopped)
+        // 分屏「自动」切档等场景静默停止，避免提示音/Toast 污染目标聊天页。
+        if (!wasCompanion && !quiet) toast(R.string.float_recording_stopped)
     }
 
     /** 录制态回退到 Idle：球已存在时也要恢复外观（不重建窗口）。 */
     private fun abortRecording() {
+        // 自动档单会话依赖录制循环持续观察目标聊天；投影授权被拒/超时时
+        // 录制起不来，必须整体退出自动，否则会出现「球回蓝但状态签仍自动中」。
+        val abortedAuto = autoRun
         mode = Mode.IDLE
         completionCount = 0
         companionWindow = false
         quietRecordingStart = false
         stopOnSplitClose = false
-        // 自动档（单会话陪伴窗口）的停止由 stopAuto/finishAutoRun 统一收尾；
-        // 手动档回空闲态。
-        if (!autoRun) advisorRunState.setIdle()
+        if (abortedAuto) {
+            autoRun = false
+            autoCompanionStarted = false
+            if (autoSessionScheduler.isRunning()) autoSessionScheduler.stop()
+            ball?.setAutoRunning(false)
+        }
+        advisorRunState.setIdle()
         ball?.setMode(FloatUi.BallMode.NORMAL, this)
         ball?.setBadge(0)
         restoreBall()
@@ -969,23 +1137,54 @@ class FloatBallService : Service() {
     // ------------------------------------------------- companion window
 
     /**
-     * 陪伴窗口入口（M3-b，方案 §8.1 W1）：扇形菜单「自动」子球 / 分屏「自动」
-     * 键，对当前绑定联系人开启。三档互斥、总闸、白名单的判定全在
-     * [CompanionWindowController.start]，服务层只映射结果为用户提示。
+     * 分屏「自动」键（M3-b）：对当前屏绑定的联系人开启托管。与悬浮球子菜单、
+     * 主页自动键走同一个 [applyAutoTargets] 入口——总闸、白名单、选择集、
+     * 运行态、导航、陪伴窗口/调度器全部一致，不再出现「某个入口只开了窗口、
+     * 没进自动态」的分叉。
      */
     private fun startCompanionWindow() {
-        beginCompanion(screenAdvisor.activeContact.value)
+        val contact = screenAdvisor.activeContact.value
+        if (contact == null) {
+            toast(R.string.float_companion_need_contact)
+            return
+        }
+        scope.launch {
+            val target = resolveCurrentAutoTarget(contact)
+            if (target == null) {
+                toast(R.string.float_companion_need_contact)
+                return@launch
+            }
+            applyAutoTargets(
+                targets = listOf(target),
+                navigate = false,
+                source = AdvisorRunState.Source.FLOAT_BALL,
+                announce = true,
+            )
+        }
     }
 
-    /** 收尾通知「续 30 分钟」按钮：按联系人 id 重建引用后走同一开启路径。 */
+    /** 收尾通知「续 30 分钟」按钮：按联系人 id 重建引用后走同一自动入口。 */
     private fun onCompanionRenew(intent: Intent?) {
         val contactId = intent?.getLongExtra(CompanionWindowController.EXTRA_CONTACT_ID, -1L)
             ?: -1L
         if (contactId <= 0L) return
-        scope.launch { beginCompanion(companionController.contactRefFor(contactId)) }
+        scope.launch {
+            val contact = companionController.contactRefFor(contactId) ?: return@launch
+            val target = resolveCurrentAutoTarget(contact) ?: return@launch
+            applyAutoTargets(
+                targets = listOf(target),
+                navigate = false,
+                source = AdvisorRunState.Source.FLOAT_BALL,
+                announce = false,
+            )
+        }
     }
 
-    private fun beginCompanion(contact: ContactRef?) {
+    private fun beginCompanion(
+        contact: ContactRef?,
+        announceAuto: Boolean = false,
+        imPackage: String? = null,
+    ) {
         if (contact == null) {
             toast(R.string.float_companion_need_contact)
             return
@@ -996,25 +1195,44 @@ class FloatBallService : Service() {
         }
         scope.launch {
             val result = companionController.start(
-                contact,
+                contact = contact,
+                imPackage = imPackage,
                 manualContinuousActive = mode == Mode.RECORDING,
             )
-            handleCompanionStart(result)
+            handleCompanionStart(result, contact, announceAuto)
         }
     }
 
-    private fun handleCompanionStart(result: CompanionWindowController.StartResult) {
+    private fun handleCompanionStart(
+        result: CompanionWindowController.StartResult,
+        contact: ContactRef?,
+        announceAuto: Boolean,
+    ) {
         when (result) {
             CompanionWindowController.StartResult.STARTED -> {
                 companionWindow = true
                 if (autoRun) {
-                    // 自动档单会话（主页入口，方案 §5.3.3）：不弹「陪伴窗口已开启」
-                    // 以免污染首帧；起录制循环后切 AUTO 态（红球 + 脉冲红点）。
+                    // 自动档单会话：不弹「陪伴窗口已开启」以免污染首帧；起录制
+                    // 循环后切 AUTO 态（红球 + 脉冲红点），并立刻主动开第一轮。
                     if (mode == Mode.IDLE) startRecording(forCompanion = true, quiet = true)
                     mode = Mode.AUTO
                     ball?.setMode(FloatUi.BallMode.RECORDING, this)
                     ball?.setAutoRunning(true)
                     autoCompanionStarted = true
+                    if (contact != null) {
+                        companionController.kickoffAuto(contact)
+                        if (announceAuto) {
+                            // 延迟到首帧采集之后再提示，避免自家 Toast 进 OCR。
+                            mainHandler.postDelayed({
+                                toast(
+                                    getString(
+                                        R.string.float_auto_scope_started,
+                                        contact.displayName,
+                                    ),
+                                )
+                            }, AUTO_ANNOUNCE_DELAY_MS)
+                        }
+                    }
                     return
                 }
                 toast(R.string.float_companion_started)
@@ -1108,13 +1326,43 @@ class FloatBallService : Service() {
                 toast(R.string.float_home_self_hide_timeout)
                 return@launch
             }
-            applyAutoSelection(selection.targets)
+            applyAutoTargets(
+                targets = selection.targets,
+                navigate = true,
+                source = AdvisorRunState.Source.HOME,
+                announce = false,
+            )
         }
     }
 
-    private fun applyAutoSelection(targets: List<AutoSelectionStore.Target>) {
-        if (mode != Mode.IDLE) return
-        if (!advisorPrefs.state.value.autoModeEnabled) advisorPrefs.setAutoModeEnabled(true)
+    /**
+     * 自动档唯一启动口（子菜单 / 分屏 / 主页三处共用）：
+     * 开总闸 → 加白名单 → 持久化选择集 → 单目标导航并开陪伴窗口、
+     * 多目标交给串行调度器；两条路径都置 `autoRun`、写 [AdvisorRunState]、
+     * 切红球 + 脉冲红点。失败路径均有显式 Toast，绝不静默回到空闲。
+     *
+     * 分屏「自动」可能在手动连续（RECORDING）中点按：先静默停旧档再进自动，
+     * 避免 ModeGate 的三档互斥把用户挡在门外。
+     */
+    private fun applyAutoTargets(
+        targets: List<AutoSelectionStore.Target>,
+        navigate: Boolean,
+        source: AdvisorRunState.Source,
+        announce: Boolean,
+    ) {
+        if (mode != Mode.IDLE && mode != Mode.RECORDING) {
+            toast(R.string.float_home_disabled_busy)
+            return
+        }
+        if (targets.isEmpty()) {
+            toast(R.string.float_home_scope_empty)
+            return
+        }
+        if (!advisorPrefs.state.value.autoModeEnabled) {
+            // 三个入口都是用户显式选择托管目标，视同确认开启总闸；
+            // 白名单仍是红线，只有本次选中的联系人会被自动发送。
+            advisorPrefs.setAutoModeEnabled(true)
+        }
         // ActionDispatcher 硬审要求联系人在白名单内；会话级目标共用联系人白名单。
         for (contactId in targets.map { it.contactId }.distinct()) {
             if (!advisorPrefs.addAutoWhitelistContact(contactId)) {
@@ -1122,25 +1370,37 @@ class FloatBallService : Service() {
                 return
             }
         }
+        // 持久化本次选择：主页「自动」键与后续续期都按同一目标集启动。
+        autoSelectionStore.save(AutoSelectionStore.Selection(targets = targets))
+        if (mode == Mode.RECORDING) stopRecording(quiet = true)
         val single = targets.size == 1 && targets.first().imPackage != null
         if (single) {
             val target = targets.first()
             val imPackage = target.imPackage ?: return
             val channel = target.channelName.orEmpty()
             autoRun = true
+            autoCompanionStarted = false
             advisorRunState.setAuto(
                 targetCount = 1,
                 activeContact = target.displayName,
                 activeApp = appLabel(imPackage),
+                source = source,
             )
             scope.launch {
-                val nav = imChatNavigator.openChat(imPackage, channel)
-                if (nav is com.verlintas.baic2.floatball.auto.ImChatNavigator.NavResult.Fail) {
-                    imChatNavigator.toastResult(nav, channel)
-                    finishAutoRun()
-                    return@launch
+                if (navigate) {
+                    val nav = imChatNavigator.openChat(imPackage, channel)
+                    if (nav is com.verlintas.baic2.floatball.auto.ImChatNavigator.NavResult.Fail) {
+                        imChatNavigator.toastResult(nav, channel)
+                        finishAutoRun()
+                        return@launch
+                    }
                 }
-                beginCompanion(companionController.contactRefFor(target.contactId))
+                if (!autoRun) return@launch
+                beginCompanion(
+                    contact = companionController.contactRefFor(target.contactId),
+                    announceAuto = announce,
+                    imPackage = imPackage,
+                )
             }
         } else {
             // 多目标 / 联系人级：通知事件驱动的串行调度器，球红 + 脉冲红点。
@@ -1150,7 +1410,67 @@ class FloatBallService : Service() {
             autoSessionScheduler.start(targets)
             ball?.setMode(FloatUi.BallMode.RECORDING, this)
             ball?.setAutoRunning(true)
+            if (announce) {
+                toast(getString(R.string.float_auto_scope_started_many, targets.size))
+            }
         }
+    }
+
+    /**
+     * 子菜单选中具体 APP 会话：补全联系人显示名与通道名后走统一入口。
+     * 选「所有 APP」（navPkg=null）时 imPackage 留空，交给通知驱动调度器。
+     */
+    private suspend fun resolveAutoTarget(
+        contactId: Long,
+        navPkg: String?,
+        navEntryName: String?,
+    ): AutoSelectionStore.Target? {
+        val profile = contactRepository.profile(contactId) ?: return null
+        if (navPkg == null) {
+            return AutoSelectionStore.Target(
+                contactId = contactId,
+                imPackage = null,
+                channelName = null,
+                displayName = profile.displayName,
+            )
+        }
+        val channels = runCatching { contactRepository.channelsOf(contactId) }
+            .getOrDefault(emptyList())
+        val chosen = channels.firstOrNull {
+            it.imPackage == navPkg && (
+                navEntryName == null ||
+                    it.displayName == navEntryName ||
+                    it.channelKey == navEntryName
+                )
+        } ?: channels.firstOrNull { it.imPackage == navPkg }
+        return AutoSelectionStore.Target(
+            contactId = contactId,
+            imPackage = navPkg,
+            channelName = chosen?.displayName ?: navEntryName ?: profile.displayName,
+            displayName = profile.displayName,
+        )
+    }
+
+    /**
+     * 分屏「自动」：当前屏联系人可能同时有微信/企微号，优先使用最近识别到的
+     * 聊天通道（[ScreenAdvisor.lastChatCandidate]），保证自动发送落在眼前
+     * 这个 APP 的会话上，而不是档案默认 APP。
+     */
+    private suspend fun resolveCurrentAutoTarget(contact: ContactRef): AutoSelectionStore.Target? {
+        val profile = contactRepository.profile(contact.contactId) ?: return null
+        val channels = runCatching { contactRepository.channelsOf(contact.contactId) }
+            .getOrDefault(emptyList())
+        val candidate = screenAdvisor.lastChatCandidate
+        val imPackage = candidate?.first?.takeIf { it.isNotBlank() } ?: profile.imPackage
+        val channelName = candidate?.second?.takeIf { it.isNotBlank() }
+            ?: channels.firstOrNull { it.imPackage == imPackage }?.displayName
+            ?: contact.displayName
+        return AutoSelectionStore.Target(
+            contactId = contact.contactId,
+            imPackage = imPackage,
+            channelName = channelName,
+            displayName = contact.displayName,
+        )
     }
 
     /** 自动档统一停止（主页自动键 / 双击球 / 通知）：清队列、收窗口、灭红点。 */
@@ -1254,7 +1574,7 @@ class FloatBallService : Service() {
         consentPending = false
         FloatCaptureBridge.clear()
         if (mode == Mode.ONESHOT) finishOneShot()
-        if (mode == Mode.RECORDING) abortRecording()
+        if (mode == Mode.RECORDING || (mode == Mode.AUTO && autoRun)) abortRecording()
         reattachSplitWindow() // 授权流程终止：恢复可能被摘下的结果面板
         restoreBall()
     }
@@ -1275,6 +1595,9 @@ class FloatBallService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = ballX
             y = ballY
+            // 靠边收起要把窗口滑到屏幕外只留一条边；不加此 flag 时 WMS
+            // 会把窗口静默钳回父框架，动画看起来像「缩了一下又弹回来」。
+            flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         }
         val view = FloatUi.buildBall(this)
         attachBallGesture(view.root, params)
@@ -1282,6 +1605,10 @@ class FloatBallService : Service() {
         ball = view
         ballParams = params
         excludeSystemGestures(view.root)
+        // 重建/首次挂窗都从完全可见形态开始，空闲时重新起收起计时。
+        ballTucked = false
+        ballTuckSide = null
+        scheduleEdgeTuck()
         // 重建后按当前状态机恢复外观（录制/自动=红球）。
         view.setMode(
             when (mode) {
@@ -1999,6 +2326,8 @@ class FloatBallService : Service() {
     /** 单击：朝屏幕中央的水平扇形弹出 6 个子球（单次/连续/自动/主界面/更多/退出）。 */
     private fun expandMenu() {
         if (menuView != null || ball == null) return
+        // 菜单锚点必须用逻辑落点：球若正收起，先滑回再取参数。
+        revealBall(restartTimer = false)
         val from = ballParams ?: return
 
         val ballCenterX = from.x + dp(FloatUi.BALL_SIZE_DP) / 2
@@ -2188,28 +2517,50 @@ class FloatBallService : Service() {
                 runCatching { windowManager.removeView(fan.root) }
             }
         }, FloatUi.FAN_ANIM_MS * 3)
+        // 菜单关闭后回到空闲形态，重新开始靠边收起计时。
+        scheduleEdgeTuck()
     }
 
     // ------------------------------------------------------ card menus
 
     /**
-     * 「更多」子球：贴球弹出次级入口卡片（方案 §3.2）：设置 / 帮助 / 好参谋
-     * 设置 / 联系人画像 / 关于。点行=关弹窗再执行；点空白或「✕」=仅关弹窗。
+     * 「更多」子球：贴球弹出次级入口卡片（方案 §3.2）。分组顺序固定为
+     * RPA 工具置顶、设置与帮助在后；P1 只放已可用的「RPA 设计」，布局分析/
+     * 以图找图可用后再进同一分组，避免死入口。点行=关弹窗再执行。
      */
     private fun openMoreMenu() {
         if (cardMenuView != null || ball == null) return
+        revealBall(restartTimer = false)
         val params = ballParams ?: return
         val screen = screenSize()
-        val menu = FloatUi.buildListMenu(
+        val menu = FloatUi.buildGroupedListMenu(
             this,
-            items = listOf(
-                FloatUi.ListMenuItem(R.string.float_fan_settings) { openMainSettings() },
-                FloatUi.ListMenuItem(R.string.float_fan_help) { openHelp() },
-                FloatUi.ListMenuItem(R.string.float_more_advisor_settings) {
-                    openAdvisorSettings()
-                },
-                FloatUi.ListMenuItem(R.string.float_more_profile) { openProfileList() },
-                FloatUi.ListMenuItem(R.string.float_more_about) { openAbout() },
+            groups = listOf(
+                FloatUi.ListMenuGroup(
+                    titleRes = R.string.float_more_group_rpa,
+                    items = listOf(
+                        FloatUi.ListMenuItem(
+                            labelRes = R.string.float_rpa_tool_design,
+                            descRes = R.string.float_rpa_tool_design_desc,
+                        ) { openRpaDesign() },
+                    ),
+                ),
+                FloatUi.ListMenuGroup(
+                    titleRes = R.string.float_more_group_settings,
+                    items = listOf(
+                        FloatUi.ListMenuItem(R.string.float_fan_settings) {
+                            openMainSettings()
+                        },
+                        FloatUi.ListMenuItem(R.string.float_fan_help) { openHelp() },
+                        FloatUi.ListMenuItem(R.string.float_more_advisor_settings) {
+                            openAdvisorSettings()
+                        },
+                        FloatUi.ListMenuItem(R.string.float_more_profile) {
+                            openProfileList()
+                        },
+                        FloatUi.ListMenuItem(R.string.float_more_about) { openAbout() },
+                    ),
+                ),
             ),
             ballCenterX = params.x + dp(FloatUi.BALL_SIZE_DP) / 2,
             ballCenterY = params.y + dp(FloatUi.BALL_SIZE_DP) / 2,
@@ -2218,6 +2569,14 @@ class FloatBallService : Service() {
             onDismiss = { dismissCardMenu() },
         )
         attachCardMenu(menu)
+    }
+
+    /** 「RPA 设计」：脚本库 + 拖拽编排；从悬浮菜单进入时不预填 IM 包名。 */
+    private fun openRpaDesign() {
+        startActivity(
+            RpaEntryPoints.design(this)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 
     /** 「好参谋设置」：好参谋专属设置页（抓帧节奏/权限直达/会话管理等）。 */
@@ -2302,6 +2661,7 @@ class FloatBallService : Service() {
      * 监听未开时提示缺因并引导去系统设置（不静默失效，铁律 §4.5）。
      */
     private fun startAutoForAll() {
+        dismissCardMenu()
         if (!NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)) {
             toast(R.string.float_auto_need_listener)
             runCatching {
@@ -2315,31 +2675,30 @@ class FloatBallService : Service() {
         if (!advisorPrefs.state.value.draftEnabled) {
             advisorPrefs.setDraftEnabled(true)
         }
+        // 全量托管保持「纯通知拟稿」安全档，但也持久化选择集，主页状态一致。
+        autoSelectionStore.save(AutoSelectionStore.Selection(allContacts = true))
         toast(R.string.float_auto_draft_enabled)
     }
 
     /**
-     * 选定范围的托管（方案 §3.3）：联系人入自动白名单（满
-     * [AdvisorPrefs.MAX_AUTO_WHITELIST] 报因终止）→ 指定 APP 会话则 RPA
-     * 拉起该聊天页 → 进陪伴窗口（Gatekeeper 硬审在窗口内生效）。导航
-     * 失败不阻断托管。
+     * 子菜单选定的托管范围：先补全目标（联系人 + APP 会话），再走与主页/
+     * 分屏共用的 [applyAutoTargets]。选具体 APP 时先撤掉范围卡片再导航，
+     * 避免自家弹窗遮挡 RPA 搜索/OCR；导航失败显式报因并整体回退空闲。
      */
     private fun startAutoForContact(contactId: Long, navPkg: String?, navEntryName: String?) {
-        if (!advisorPrefs.addAutoWhitelistContact(contactId)) {
-            toast(
-                getString(
-                    R.string.float_auto_whitelist_full,
-                    AdvisorPrefs.MAX_AUTO_WHITELIST,
-                ),
-            )
-            return
-        }
+        dismissCardMenu()
         scope.launch {
-            if (navPkg != null && navEntryName != null) {
-                val nav = imChatNavigator.openChat(navPkg, navEntryName)
-                imChatNavigator.toastResult(nav, navEntryName)
+            val target = resolveAutoTarget(contactId, navPkg, navEntryName)
+            if (target == null) {
+                toast(R.string.float_companion_need_contact)
+                return@launch
             }
-            beginCompanion(companionController.contactRefFor(contactId))
+            applyAutoTargets(
+                targets = listOf(target),
+                navigate = target.imPackage != null,
+                source = AdvisorRunState.Source.FLOAT_BALL,
+                announce = true,
+            )
         }
     }
 
@@ -2364,6 +2723,8 @@ class FloatBallService : Service() {
         cardMenuView = null
         cardMenuParams = null
         runCatching { windowManager.removeView(view) }
+        // 卡片关闭后球恢复可收起；若行动作已切走页面/进忙碌态，计时会自行失效。
+        scheduleEdgeTuck()
     }
 
     // ------------------------------------------------ main / dialogs
@@ -2496,10 +2857,16 @@ class FloatBallService : Service() {
     private fun restoreBall() {
         // 分屏开着也恢复球（面板留着展示结果，球可拖动避让）；只有菜单
         // 展开时球本就存在，无需重建。
-        if (ball == null && menuView == null) showBall()
+        if (ball == null && menuView == null) {
+            showBall()
+        } else {
+            scheduleEdgeTuck()
+        }
     }
 
     private fun hideAllOverlays() {
+        // 球窗口即将摘除，收起计时/动画必须一起取消，否则回调会操作死窗口。
+        cancelEdgeTuck()
         ball?.root?.let { runCatching { windowManager.removeView(it) } }
         ball = null
         menuView?.let { runCatching { windowManager.removeView(it) } }
@@ -2604,6 +2971,9 @@ class FloatBallService : Service() {
         const val SELF_HIDE_SETTLE_MS = 250L
 
         const val CONSENT_SETTLE_MS = 350L
+
+        /** 自动托管开启提示延迟：避开差分引擎首帧 OCR，防自家 Toast 污染。 */
+        const val AUTO_ANNOUNCE_DELAY_MS = 1_200L
 
         /** 单击展开扇形菜单的双击仲裁窗：tap-UP 后该时间内无第二击即展开。 */
         const val TAP_ARB_MS = 120L

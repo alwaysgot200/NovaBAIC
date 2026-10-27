@@ -61,6 +61,35 @@ class Baic2AccessibilityService : AssistsService() {
      * runtime dialog and no MediaProjection involved.
      */
     fun captureScreenCompat(onResult: (Result<ByteArray>) -> Unit) {
+        captureScreenBitmapCompat { result ->
+            val bytes = result.getOrNull()?.let { bitmap ->
+                val encoded = runCatching {
+                    ByteArrayOutputStream().use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                        out.toByteArray()
+                    }
+                }.getOrNull()
+                bitmap.recycle()
+                encoded
+            }
+            if (bytes != null) {
+                onResult(Result.success(bytes))
+            } else {
+                onResult(Result.failure(IllegalStateException("screenshot_decode_failed")))
+            }
+        }
+    }
+
+    /**
+     * Bitmap variant of [captureScreenCompat]（2026-10-27 回复慢归因优化）：
+     * 需要像素的消费方（找图帧源/OCR 前置）直接拿 ARGB_8888 位图，省掉
+     * 「PNG 编码 → 再解码」往返——1080×2460 真机实测每帧 0.2~0.3s，发送链
+     * 一次要取 3~4 帧（聚焦/定位/取证），累计 0.6~1.2s/回合。
+     *
+     * 注意：成功回调的 Bitmap 归调用方所有（用毕须 recycle）；本方法不做任何
+     * 缓存/复用，每次调用都是一次真实截屏。
+     */
+    fun captureScreenBitmapCompat(onResult: (Result<Bitmap>) -> Unit) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             onResult(Result.failure(IllegalStateException("screenshot_requires_api_30")))
             return
@@ -70,7 +99,7 @@ class Baic2AccessibilityService : AssistsService() {
             mainExecutor,
             object : TakeScreenshotCallback {
                 override fun onSuccess(screenshot: ScreenshotResult) {
-                    val bytes = runCatching {
+                    val bitmap = runCatching {
                         val hardware = Bitmap.wrapHardwareBuffer(
                             screenshot.hardwareBuffer,
                             screenshot.colorSpace,
@@ -78,15 +107,10 @@ class Baic2AccessibilityService : AssistsService() {
                         val soft = hardware?.copy(Bitmap.Config.ARGB_8888, false)
                         hardware?.recycle()
                         screenshot.hardwareBuffer.close()
-                        soft?.let { bmp ->
-                            val out = ByteArrayOutputStream()
-                            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-                            bmp.recycle()
-                            out.toByteArray()
-                        }
+                        soft
                     }.getOrNull()
-                    if (bytes != null) {
-                        onResult(Result.success(bytes))
+                    if (bitmap != null) {
+                        onResult(Result.success(bitmap))
                     } else {
                         onResult(Result.failure(IllegalStateException("screenshot_decode_failed")))
                     }

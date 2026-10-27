@@ -73,7 +73,24 @@ internal object IncomingCue {
         "切换", "视频号", "公众号", "服务号", "通讯录",
     )
 
+    /**
+     * 输入法工具条/candidate 条整行词（2026-10-27 真机：Sogou「随写」面板被
+     * 一并 OCR 后，末尾两行可能是「中英」「123」，[latestIncoming] 会把它当成
+     * 对方来信，自回声判定也因此看不到真实气泡）。仅整行相等才跳过。
+     */
+    private val IME_TOOLBAR_EXACT = setOf(
+        "随写", "中英", "中/英", "英文", "拼音", "手写", "笔画", "空格", "换行",
+        "符", "拼", "123", "1234567890",
+    )
+
     private val WHITESPACE = Regex("""\s+""")
+
+    /**
+     * 拼音候选行特征（2026-10-27 真机消息 id=115/119：Sogou 候选条 `kě,kè`
+     * 被 [latestIncoming] 当成对方来信，LLM 对它成稿回复）。声调符号在中文
+     * 聊天里几乎不出现，命中即跳过该行。
+     */
+    private val PINYIN_TONE = Regex("""[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜü]""")
 
     /** 发言行：名字（1–12 个非冒号非空白字符）+ 冒号。 */
     private val SPEAKER_LINE = Regex("""^([^：:\s]{1,12})[：:]""")
@@ -157,7 +174,8 @@ internal object IncomingCue {
 
     private fun isSkipLine(line: String): Boolean =
         TIME_LINE.matches(line) || DATE_LINE.matches(line) ||
-            isStructural(line) || line in CHROME_EXACT
+            isStructural(line) || line in CHROME_EXACT || line in IME_TOOLBAR_EXACT ||
+            PINYIN_TONE.containsMatchIn(line)
 
     private fun isStructural(line: String): Boolean {
         if (STRUCT_PATTERNS.any { it.matches(line) }) return true

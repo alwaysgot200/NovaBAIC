@@ -150,8 +150,25 @@ internal object StrategistPrompt {
         ruled.permit.lying.takeIf { it.use || it.useNotDefault() }?.let { l ->
             append("【不实陈述】").append(renderDim(l.use, l.claim, l.why, false)).append('\n')
         }
-        ruled.permit.promising.takeIf { it.use || it.useNotDefault() }?.let { p ->
-            append("【承诺保证】").append(renderDim(p.use, p.claim, p.why, ruled.needsHuman)).append('\n')
+        val promising = ruled.permit.promising
+        when {
+            // 2026-10-27 真机修复：未获许可/超授权时即便 claim/why 为空也必须
+            // 明示禁令——旧实现只渲染非默认对象，模型收不到「不能说期限承诺」
+            // 的指令，稿子写了「明天发您」被 Gatekeeper 词表拦下、自动回复
+            // 连续降级（真机 02:48~02:50 两轮 auto_gate_blocked）。
+            ruled.needsHuman -> append(
+                "【承诺保证】授权存疑：本回合不要直接答应任何事项或给出期限，如对方坚持则表示需要向用户确认；" +
+                    "正文不要出现「今天/明天/后天/本周/下周/周末/月底/小时/分钟」等时间承诺，也不要出现" +
+                    "「保证/承诺/一定/绝对/包/书面」等承诺字样。\n",
+            )
+            !promising.use -> append(
+                "【承诺保证】本回合不要替用户做任何承诺、保证或期限表态；" +
+                    "正文不要出现「今天/明天/后天/本周/下周/周末/月底/小时/分钟」等时间承诺，也不要出现" +
+                    "「保证/承诺/一定/绝对/包/书面」等承诺字样。\n",
+            )
+            else -> append("【承诺保证】")
+                .append(renderDim(promising.use, promising.claim, promising.why, false))
+                .append('\n')
         }
     }.takeIf { it.isNotBlank() }
 

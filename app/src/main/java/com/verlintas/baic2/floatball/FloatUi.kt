@@ -1863,8 +1863,21 @@ internal object FloatUi {
 
     // ── 更多弹窗与自动托管范围选择器（2026-10-22 菜单改版方案 §3.2/§3.3） ──
 
-    /** 更多弹窗的一行入口（[action] 由服务层接线，触发前工厂先回调 onDismiss）。 */
-    class ListMenuItem(val labelRes: Int, val action: () -> Unit)
+    /**
+     * 更多弹窗的一行入口（[action] 由服务层接线，触发前工厂先回调 onDismiss）。
+     * [descRes] 非空时显示第二行说明，行高抬到 48dp。
+     */
+    class ListMenuItem(
+        val labelRes: Int,
+        val descRes: Int? = null,
+        val action: () -> Unit,
+    )
+
+    /** 更多弹窗的一个分组；[titleRes] 为 null 时不画分组头。 */
+    class ListMenuGroup(
+        val titleRes: Int? = null,
+        val items: List<ListMenuItem>,
+    )
 
     /** 自动托管范围选择器的一条 APP 聊天会话（[entryName] 为该 APP 内的会话名）。 */
     class ScopeApp(
@@ -2024,6 +2037,8 @@ internal object FloatUi {
     /**
      * 「更多」弹窗（方案 §3.2）：标题行 + 次级入口列表。行点击 = onDismiss
      * 后执行动作；点接罩空白或右上角 ✕ 仅关闭。
+     *
+     * 保留旧签名作为单组包装；需要分组头时用 [buildGroupedListMenu]。
      */
     fun buildListMenu(
         context: Context,
@@ -2033,21 +2048,103 @@ internal object FloatUi {
         screenWidth: Int,
         screenHeight: Int,
         onDismiss: () -> Unit,
+    ): CardMenu = buildGroupedListMenu(
+        context = context,
+        groups = listOf(ListMenuGroup(items = items)),
+        ballCenterX = ballCenterX,
+        ballCenterY = ballCenterY,
+        screenWidth = screenWidth,
+        screenHeight = screenHeight,
+        onDismiss = onDismiss,
+    )
+
+    /**
+     * 「更多」分组弹窗：标题行 + 高度封顶的滚动区。
+     *
+     * - 分组头不可点；组间画分隔线；
+     * - 行点击先 [onDismiss] 再执行动作；
+     * - 列表区上限屏高 [CARD_LIST_MAX_RATIO]，标题行不滚走。
+     */
+    fun buildGroupedListMenu(
+        context: Context,
+        groups: List<ListMenuGroup>,
+        ballCenterX: Int,
+        ballCenterY: Int,
+        screenWidth: Int,
+        screenHeight: Int,
+        titleRes: Int = R.string.float_more_title,
+        onDismiss: () -> Unit,
     ): CardMenu {
         val menu = cardSkeleton(
-            context, R.string.float_more_title,
+            context, titleRes,
             ballCenterX, ballCenterY, screenWidth, screenHeight, onDismiss,
         )
-        items.forEach { item ->
-            menu.card.addView(
-                cardRow(context, context.getString(item.labelRes)) {
-                    onDismiss()
-                    item.action()
-                },
-            )
+        val rows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        groups.forEachIndexed { index, group ->
+            if (index > 0) rows.addView(divider(context))
+            group.titleRes?.let { rows.addView(groupHeader(context, it)) }
+            group.items.forEach { item ->
+                rows.addView(
+                    listRow(context, item) {
+                        onDismiss()
+                        item.action()
+                    },
+                )
+            }
         }
+        val scroll = CappedScrollView(context, (screenHeight * CARD_LIST_MAX_RATIO).toInt())
+        scroll.addView(
+            rows,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        menu.card.addView(scroll)
         menu.place()
         return menu
+    }
+
+    /** 分组头：小号半透明白字，不可点。 */
+    private fun groupHeader(context: Context, titleRes: Int): TextView = TextView(context).apply {
+        text = context.getString(titleRes)
+        setTextColor(0x99FFFFFF.toInt())
+        textSize = 11.5f
+        typeface = Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(context, 16), dp(context, 10), dp(context, 16), dp(context, 4))
+        minHeight = dp(context, 28)
+    }
+
+    /** 分组内一行：有 [ListMenuItem.descRes] 时两行显示，否则沿用单行 [cardRow]。 */
+    private fun listRow(
+        context: Context,
+        item: ListMenuItem,
+        onClick: () -> Unit,
+    ): View {
+        val descRes = item.descRes
+        if (descRes == null) {
+            return cardRow(context, context.getString(item.labelRes), onClick = onClick)
+        }
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            isClickable = true
+            selectableBackground(this)
+            setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 8))
+            minimumHeight = dp(context, 48)
+            setOnClickListener { onClick() }
+            addView(TextView(context).apply {
+                text = context.getString(item.labelRes)
+                setTextColor(0xEEFFFFFF.toInt())
+                textSize = 14f
+            })
+            addView(TextView(context).apply {
+                text = context.getString(descRes)
+                setTextColor(0x80FFFFFF.toInt())
+                textSize = 11f
+                setPadding(0, dp(context, 1), 0, 0)
+            })
+        }
     }
 
     /** 高度封顶的 ScrollView：联系人多时滚动，不把卡片顶出屏幕。 */

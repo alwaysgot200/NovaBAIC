@@ -40,6 +40,10 @@ keystore.properties
 # 临时测试产物（模拟器截图等），整个目录不受 git 控制
 /tests/tempImg/
 
+# 临时测试工作目录：截图/录屏/日志/数据库/UI dump 等本地运行时产物整目录不入库；
+# 可复用的诊断脚本放 tests/tools/（受 git 控制）
+/tests/temp/
+
 # 演示数据/真机联调本地密钥与探测结果（禁止入库）
 /tests/demo/.env.demo
 /tests/demo/.origin.generated

@@ -37,6 +37,7 @@ import com.verlintas.baic2.floatball.advisor.EngagementRules
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.auto.AutoSessionScheduler
 import com.verlintas.baic2.floatball.auto.ImNavigator
+import com.verlintas.baic2.floatball.auto.SendableDraftExtractor
 import com.verlintas.baic2.floatball.contact.ContactDirectory
 import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.AndroidEntryPoint
@@ -158,14 +159,20 @@ class AdvisorNotificationListener : NotificationListenerService() {
             // 接管通报命中（2026-10-20 通报方案 §4.5）：铃声通报是唯一出口，
             // 抑制 AI 草稿通知——接管场景答案必须用户亲笔，不挂一键发送。
             if (result.handoff) return
-            val draft = result.draft ?: return
+            val full = result.draft ?: return
             val conversationId = result.conversationId ?: return
+            // 起草档与自动档共用同一确定性抽取口径（托管方案 §二十四）：有纯回复
+            // 就只展示纯回复，供一键发出；抽取不到才保留全文，交人肉编辑。
+            val sendable = SendableDraftExtractor.extract(
+                full,
+                advisorPrefs.state.value.answerTargetChars,
+            )
             postDraftNotification(
                 contactName = contact.displayName,
                 imPackage = parsed.packageName,
                 conversationId = conversationId,
                 contactId = contact.contactId,
-                draft = draft,
+                draft = sendable?.text ?: full,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled

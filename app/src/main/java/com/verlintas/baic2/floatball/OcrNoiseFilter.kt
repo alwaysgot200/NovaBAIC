@@ -35,6 +35,16 @@ import kotlinx.serialization.json.Json
  */
 internal object OcrNoiseFilter {
 
+    /**
+     * 聊天页时间分割胶囊整行（2026-10-27 真机修复）：微信的「上午10:52」常被
+     * OCR 读成带前导竖线的 `|上午10:46`，裸 `HH:MM` 规则漏网。写成「可选符号
+     * 前缀 + 可选时段词 + 时分（可选秒）」的形式，同时兼容 `\d{1,2}\s*[:：]\s*\d{2}`。
+     * 与我方气泡剔除叠加后：只有我方气泡的屏幕上，正文会因此清空——差分不再
+     * 派出「只有时间戳」的空回合。
+     */
+    const val TIMESTAMP_LINE =
+        """^[\p{P}\p{S}\s]{0,2}(?:上午|下午|凌晨|中午|早上|晚上|今天|昨天|前天|星期[一二三四五六日天])?[\p{P}\p{S}\s]{0,2}\d{1,2}\s*[:：]\s*\d{2}(?::\d{2})?$"""
+
     /** 一帧 OCR 的几何分区结果。正文行已按 top（再 left）排序。 */
     data class Partition(
         val titleLines: List<OcrLine>,
@@ -132,7 +142,10 @@ class ScreenGeometryProvider @Inject constructor(
             heightPx = height,
             statusBarPx = statusBar.coerceIn(0, height / 4),
             titleBandBottomPx = titleBand.coerceIn(statusBar, height / 3),
-            bottomBandPx = bottom.coerceIn(0, height / 3),
+            // IME 展开时底部带是整块键盘（不是系统手势条），旧 1/3 上限会把
+            // 0.58H 的掩膜裁回 0.33H，键盘上半部仍漏进 OCR（2026-10-27 真机
+            // 「随写/中英/拼音候选当选民来信」事故）。
+            bottomBandPx = bottom.coerceIn(0, if (imeOpen) height * 3 / 4 else height / 3),
         )
     }
 
@@ -147,7 +160,14 @@ class ScreenGeometryProvider @Inject constructor(
         const val TITLE_BAND_DP = 48
         const val STATUS_FALLBACK = 0.05
         const val NAV_FALLBACK = 0.04
-        const val IME_BOTTOM_RATIO = 0.14
+
+        /**
+         * IME 展开时底部掩膜带占屏高比例（2026-10-27 真机修复）：Sogou 键盘 +
+         * 候选/工具条实测把聊天正文压到 ~0.42H 以上，旧 0.14 只掩了候选栏，
+         * 整块键盘 chrome（随写/中英/拼音候选）被 OCR 当正文送进 LLM。取 0.58
+         * 对齐「键盘上沿 ≈ 0.42H」，聊天内容一条不丢。
+         */
+        const val IME_BOTTOM_RATIO = 0.58
     }
 }
 
@@ -196,12 +216,26 @@ class NoiseRules @Inject constructor(
         const val ASSET_PATH = "advisor/noise_rules.json"
 
         val DEFAULT_LINE_PATTERNS = listOf(
+            // 聊天页时间分割胶囊（2026-10-27 真机「时间戳当来信」事故）：微信把
+            // 「上午10:52」渲染成居中灰胶囊，OCR 常带前导竖线（`|上午10:46`）。
+            // 旧规则只认裸 `HH:MM`，带时段前缀的一律漏进正文——当屏幕只剩我方
+            // 绿气泡（已被 OwnBubbleLocator 剔除）时，整屏正文就只剩这些胶囊，
+            // 于是差分把「对方说了什么」变成两条时间戳，白跑一整个 LLM 回合
+            // （真机 10:46/10:52 两次，成稿全是「屏幕只有时间戳」）并把垃圾
+            // 回复写进会话历史，污染后续提示词。
+            OcrNoiseFilter.TIMESTAMP_LINE,
             """^\d{1,2}:\d{2}$""",
             """^\d{1,2}:\d{2}:\d{2}$""",
             """^\d+(?:\.\d+)?%$""",
             """^[2-9][0-9]?$""",
             """^[\p{P}\p{S}\s]+$""",
             """^.{0,1}$""",
+            // 输入法工具条整行（2026-10-27 真机：Sogou「随写/中英/123」被 OCR
+            // 当正文送进 LLM，伪造出一整个「对方来信」回合）。
+            """^(?:随写|中英|中/英|英文|拼音|手写|笔画|空格|换行|符|拼|123|1234567890)$""",
+            // 拼音候选行：含声调字符（`kě,kè` / `hǎo`）。中文聊天几乎不用声调
+            // 符号，命中即视为候选条；前后 .{0,40} 满足 matches() 全串匹配。
+            """.{0,40}[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜü].{0,40}""",
         )
         val DEFAULT_BLOCKED_WORDS =
             listOf("对方正在输入", "正在输入", "已读", "未读", "VoLTE", "LTE", "4G", "5G", "HD")

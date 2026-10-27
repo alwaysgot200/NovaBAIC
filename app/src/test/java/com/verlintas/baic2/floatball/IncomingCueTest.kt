@@ -72,6 +72,61 @@ class IncomingCueTest {
     }
 
     @Test
+    fun skipsSogouImeToolbarInsteadOfTakingItAsIncoming() {
+        // 2026-10-27 真机：发完消息键盘未收起，Sogou 工具条「随写/中英/123」
+        // 被 OCR 读进正文，末尾两行被当成对方来信（「中英 123」）。
+        val screen = listOf(
+            "【屏幕内容】",
+            "凌晨2:13",
+            "您之前提的滑点和时间戳对齐,我",
+            "已经补完了,测数据跟基线的对比",
+            "细节。",
+            "自您之前提的滑点和时间戳对",
+            "随写",
+            "中英",
+            "123",
+        ).joinToString("\n")
+
+        assertEquals(
+            "细节。 自您之前提的滑点和时间戳对",
+            IncomingCue.latestIncoming(screen),
+        )
+    }
+
+    @Test
+    fun skipsPinyinCandidateLines() {
+        // 2026-10-27 真机消息 id=119：Sogou 拼音候选「kě,kè」被当成来信。
+        val screen = listOf(
+            "上午10:46",
+            "很好,你干得很不错,加油",
+            "()可",
+            "(B发送",
+            "kě,kè",
+            "可丁可以 可打行啊〉",
+            "随写",
+            "中英",
+            "123",
+        ).joinToString("\n")
+
+        assertEquals(
+            "(B发送 可丁可以 可打行啊〉",
+            IncomingCue.latestIncoming(screen),
+        )
+    }
+
+    @Test
+    fun keepsRealShortReplyAfterOurBubble() {
+        // 我方气泡末行在上一行、对方新短句在最后一行：候选含两段，最后一段是真来信。
+        val screen = listOf(
+            "凌晨2:18",
+            "省得后面来回对细节。",
+            "很好",
+        ).joinToString("\n")
+
+        assertEquals("省得后面来回对细节。 很好", IncomingCue.latestIncoming(screen))
+    }
+
+    @Test
     fun returnsNullForArticleScreenWithoutChatMarkers() {
         val article = listOf(
             "英伟达发布新一代消费级芯片",

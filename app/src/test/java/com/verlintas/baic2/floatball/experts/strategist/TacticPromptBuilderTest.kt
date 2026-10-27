@@ -65,9 +65,32 @@ class TacticPromptBuilderTest {
     // ---- 作战指令段 ----
 
     @Test
-    fun `mixed 且无敏感维许可时整段省略`() {
+    fun `mixed 且承诺未批时仍渲染禁令（2026-10-27 真机修复）`() {
+        // 旧实现「缺省维不渲染」导致模型收不到禁令，主回合写出「明天发您」
+        // 被 Gatekeeper 词表拦下、自动回复连续降级（真机 02:48~02:50）。
         val ruled = StrategistRules.enforce(Permit(), neverStrategy, PRIVACY_POLICY_HANDOFF)
-        assertNull(StrategistPrompt.commandSection(ruled))
+        val section = StrategistPrompt.commandSection(ruled)
+        assertNotNull(section)
+        assertTrue(section!!.contains("【承诺保证】"))
+        assertTrue(section.contains("不要替用户做任何承诺"))
+        assertTrue(section.contains("今天/明天/后天/本周/下周/周末/月底/小时/分钟"))
+        assertFalse("mixed 不渲染重点行", section.contains("本回合重点"))
+    }
+
+    @Test
+    fun `承诺超授权（claim 为空）时渲染问主人禁令`() {
+        // within=false 且 claim/why 全空：旧实现同样整段省略，模型无从得知
+        // 「不能给期限」；现在必须落到「授权存疑」话术。
+        val ruled = StrategistRules.enforce(
+            Permit(promising = TacticRuling(use = true, within = false)),
+            freeStrategy,
+            PRIVACY_POLICY_HANDOFF,
+        )
+        val section = StrategistPrompt.commandSection(ruled)
+        assertNotNull(section)
+        assertTrue(section!!.contains("【承诺保证】授权存疑"))
+        assertTrue(section.contains("需要向用户确认"))
+        assertFalse(section.contains("可自然提及"))
     }
 
     @Test
@@ -125,12 +148,16 @@ class TacticPromptBuilderTest {
 
     @Test
     fun `缺省维对象不渲染（避免空指令噪声）`() {
+        // 缺省维仍然省略；但承诺维恒渲染（未批禁令见上一个用例）。
         val ruled = StrategistRules.enforce(
             Permit(disclosure = TacticRuling(use = false)),
             neverStrategy,
             PRIVACY_POLICY_HANDOFF,
         )
-        assertNull(StrategistPrompt.commandSection(ruled))
+        val section = StrategistPrompt.commandSection(ruled)
+        assertNotNull(section)
+        assertFalse("缺省 disclosure 不渲染", section!!.contains("【隐私披露】"))
+        assertTrue(section.contains("【承诺保证】"))
     }
 
     // ---- 降级禁令段 ----

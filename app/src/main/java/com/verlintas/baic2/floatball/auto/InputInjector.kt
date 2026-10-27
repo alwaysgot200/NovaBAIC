@@ -55,8 +55,17 @@ interface InputInjector {
     suspend fun foregroundPackage(): String?
 }
 
-/** 定位结果：发送按钮在屏幕坐标系的点击中心。 */
-data class SendTarget(val centerX: Int, val centerY: Int)
+/**
+ * 定位结果：发送按钮在屏幕坐标系的点击中心；[width]/[height] 为按钮外接盒
+ * （像素定位器产出，供点击后「按钮是否仍在」的发送证据判定；OCR 定位器
+ * 无盒子信息时保持 0，证据判定退化为坐标比较）。
+ */
+data class SendTarget(
+    val centerX: Int,
+    val centerY: Int,
+    val width: Int = 0,
+    val height: Int = 0,
+)
 
 /**
  * 发送按钮定位器（与执行通道解耦）：模式 A 由 a11y 节点树定位

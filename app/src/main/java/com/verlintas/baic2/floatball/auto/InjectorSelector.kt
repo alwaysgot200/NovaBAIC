@@ -38,11 +38,29 @@ object InjectorSelector {
     val CONFIG_OPTIONS = setOf(CONFIG_AUTO, CONFIG_A11Y, CONFIG_SHIZUKU)
 
     /** [configured] 为 AdvisorPrefs 持久化的通道配置（非法值按 auto 处理）。 */
-    fun select(configured: String?, a11yReady: Boolean, shizukuReady: Boolean): InjectorChannel = when {
-        configured == CONFIG_A11Y -> if (a11yReady) InjectorChannel.A11y else InjectorChannel.DraftFallback
-        configured == CONFIG_SHIZUKU -> if (shizukuReady) InjectorChannel.Shizuku else InjectorChannel.DraftFallback
-        a11yReady -> InjectorChannel.A11y
-        shizukuReady -> InjectorChannel.Shizuku
-        else -> InjectorChannel.DraftFallback
-    }
+    fun select(configured: String?, a11yReady: Boolean, shizukuReady: Boolean): InjectorChannel =
+        plan(configured, a11yReady, shizukuReady).firstOrNull() ?: InjectorChannel.DraftFallback
+
+    /**
+     * 运行期降级链（2026-10-27 真机修复）：返回**按序尝试**的通道列表，末位
+     * 兜底不是 C（本地通道全不可用时列表为空，调用方按 [InjectorChannel.DraftFallback]
+     * 处理）。与 [select] 的差别只在 auto 档多一位候选：
+     *
+     * - `a11y`/`shizuku` 强制配置：只含该通道（可用时），不可用即空——用户指定
+     *   即强制，绝不静默换道（与 [select] 同口径）。
+     * - `auto`：A 可用先 A；A 失败且「确定未发出」时回落 B 再试一遍。真机
+     *   2026-10-27 事故正是 A 选得中但微信节点树为空（`input_inject_failed`）
+     *   导致整轮静默——B（Shizuku + OCR 定位）本来是通的，只是没人去试。
+     *
+     * 是否允许换道由 `SendSequence.safeToRetryElsewhere` 判定（证据不足绝不重发）。
+     */
+    fun plan(configured: String?, a11yReady: Boolean, shizukuReady: Boolean): List<InjectorChannel> =
+        when (configured) {
+            CONFIG_A11Y -> if (a11yReady) listOf(InjectorChannel.A11y) else emptyList()
+            CONFIG_SHIZUKU -> if (shizukuReady) listOf(InjectorChannel.Shizuku) else emptyList()
+            else -> buildList {
+                if (a11yReady) add(InjectorChannel.A11y)
+                if (shizukuReady) add(InjectorChannel.Shizuku)
+            }
+        }
 }

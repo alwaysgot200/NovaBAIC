@@ -20,6 +20,7 @@
 package com.verlintas.baic2.floatball
 
 import android.content.Context
+import com.verlintas.baic2.floatball.auto.HumanPace
 import com.verlintas.baic2.floatball.auto.InjectorSelector
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -45,11 +46,12 @@ class AdvisorPrefs @Inject constructor(
         /**
          * 连续模式工作段时长（毫秒）：到点后停歇 [restMs] 再继续（休憩循环，
          * 无人值守 RPA 的录屏节奏——不能一直不停录，中间要停歇降功耗降痕迹）。
-         * restMs=0 时该值不生效。
+         * restMs=0 时该值不生效。2026-10-27 默认改 1 分钟（真机联调要求
+         * 「录 1 分钟停 1 分钟」反复循环），旧装机的 10 分钟档照旧可读。
          */
-        val workMs: Long = 10 * 60_000L,
+        val workMs: Long = DEFAULT_WORK_REST_MS,
         /** 工作段之间的停歇时长（毫秒），0 = 不停歇（连续抓帧）。 */
-        val restMs: Long = 10 * 60_000L,
+        val restMs: Long = DEFAULT_WORK_REST_MS,
         /** 单次参谋额外上滑几屏（0=单屏，上限 3；方案 §6.6）。 */
         val autoScrollScreens: Int = 2,
         /** 每次滑动后等待渲染的毫秒（600~1500）。 */
@@ -134,6 +136,13 @@ class AdvisorPrefs @Inject constructor(
          * 显式通道不可用时不静默换道，直接降起草档。
          */
         val autoExecutorChannel: String = InjectorSelector.CONFIG_AUTO,
+        /**
+         * 拟人节奏下限/上限（毫秒，闭区间均匀采样，方案 §8.2）：自动档派发前的
+         * 随机延迟区间。真机联调抱怨「回复太慢」，根因之一即默认 8~90 秒
+         * （均值 ~49s）；档位见 [PACE_OPTIONS]，取值必须整对命中档位。
+         */
+        val autoPaceMinMs: Long = HumanPace.MIN_DELAY_MS,
+        val autoPaceMaxMs: Long = HumanPace.MAX_DELAY_MS,
         /**
          * 接管/达成通报总闸（2026-10-20 通报方案 §十）：H 接管型与 G 达成型命中
          * 后铃声通知主人。默认开启——通报只是旁路提醒，不改变任何发送决策。
@@ -226,10 +235,10 @@ class AdvisorPrefs @Inject constructor(
         Settings(
             pollIntervalMs = prefs.getLong(KEY_POLL, 800L).coerceIn(300L, 5_000L),
             maxSessionMs = prefs.getLong(KEY_MAX_SESSION, DEFAULT_MAX_SESSION),
-            workMs = prefs.getLong(KEY_WORK_MS, 10 * 60_000L)
-                .takeIf { it in WORK_REST_OPTIONS } ?: 10 * 60_000L,
-            restMs = prefs.getLong(KEY_REST_MS, 10 * 60_000L)
-                .takeIf { it in WORK_REST_OPTIONS } ?: 10 * 60_000L,
+            workMs = prefs.getLong(KEY_WORK_MS, DEFAULT_WORK_REST_MS)
+                .takeIf { it in WORK_REST_OPTIONS } ?: DEFAULT_WORK_REST_MS,
+            restMs = prefs.getLong(KEY_REST_MS, DEFAULT_WORK_REST_MS)
+                .takeIf { it in WORK_REST_OPTIONS } ?: DEFAULT_WORK_REST_MS,
             autoScrollScreens = prefs.getInt(KEY_SCROLL_SCREENS, 2).coerceIn(0, 3),
             scrollSettleMs = prefs.getLong(KEY_SCROLL_SETTLE, 800L).coerceIn(600L, 1_500L),
             scrollBack = prefs.getBoolean(KEY_SCROLL_BACK, true),
@@ -279,6 +288,10 @@ class AdvisorPrefs @Inject constructor(
                 .coerceIn(0f, 1f),
             autoExecutorChannel = prefs.getString(KEY_AUTO_EXECUTOR, InjectorSelector.CONFIG_AUTO)
                 ?.takeIf { it in InjectorSelector.CONFIG_OPTIONS } ?: InjectorSelector.CONFIG_AUTO,
+            autoPaceMinMs = prefs.getLong(KEY_PACE_MIN, HumanPace.MIN_DELAY_MS)
+                .coerceIn(0L, PACE_CEILING_MS),
+            autoPaceMaxMs = prefs.getLong(KEY_PACE_MAX, HumanPace.MAX_DELAY_MS)
+                .coerceIn(0L, PACE_CEILING_MS),
             escalationEnabled = prefs.getBoolean(KEY_ESCALATION_ENABLED, true),
             escalationStrict = prefs.getBoolean(KEY_ESCALATION_STRICT, false),
             escalationMailEnabled = prefs.getBoolean(KEY_ESCALATION_MAIL, false),
@@ -447,6 +460,17 @@ class AdvisorPrefs @Inject constructor(
             ?: InjectorSelector.CONFIG_AUTO
         prefs.edit().putString(KEY_AUTO_EXECUTOR, value).apply()
         _state.update { it.copy(autoExecutorChannel = value) }
+    }
+
+    /**
+     * 拟人节奏区间（毫秒）：入参区间倒置自动纠正，各自夹到
+     * [0, PACE_CEILING_MS]；下一回合的派发延迟即生效（在途延迟任务不变）。
+     */
+    fun setAutoPace(minMs: Long, maxMs: Long) {
+        val lo = minOf(minMs, maxMs).coerceIn(0L, PACE_CEILING_MS)
+        val hi = maxOf(minMs, maxMs).coerceIn(0L, PACE_CEILING_MS)
+        prefs.edit().putLong(KEY_PACE_MIN, lo).putLong(KEY_PACE_MAX, hi).apply()
+        _state.update { it.copy(autoPaceMinMs = lo, autoPaceMaxMs = hi) }
     }
 
     // ── 接管/达成通报（2026-10-20 通报方案 §十） ──
@@ -627,6 +651,8 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_COMPANION_MAX_SENDS = "companion_max_sends"
         const val KEY_REUSE_CLIFF = "reuse_cliff_similarity"
         const val KEY_AUTO_EXECUTOR = "auto_executor_channel"
+        const val KEY_PACE_MIN = "auto_pace_min_ms"
+        const val KEY_PACE_MAX = "auto_pace_max_ms"
         const val KEY_ESCALATION_ENABLED = "escalation_enabled"
         const val KEY_ESCALATION_STRICT = "escalation_strict"
         const val KEY_ESCALATION_MAIL = "escalation_mail_enabled"
@@ -667,8 +693,29 @@ class AdvisorPrefs @Inject constructor(
         const val KEY_SESSION_POINTS = "usage_session_points_milli"
         const val DEFAULT_MAX_SESSION = 30 * 60_000L
 
-        /** 工作/停歇段允许档（毫秒）：5/10/15/20 分钟；0 仅停歇合法（=不停歇）。 */
-        val WORK_REST_OPTIONS = setOf(0L, 5 * 60_000L, 10 * 60_000L, 15 * 60_000L, 20 * 60_000L)
+        /**
+         * 工作/停歇段允许档（毫秒）：1/5/10/15/20 分钟；0 仅停歇合法（=不停歇）。
+         * 1 分钟档供真机联调「录 1 分钟停 1 分钟」快循环（2026-10-27）。
+         */
+        val WORK_REST_OPTIONS = setOf(0L, 60_000L, 5 * 60_000L, 10 * 60_000L, 15 * 60_000L, 20 * 60_000L)
+
+        /** 工作/停歇默认档（2026-10-27：10 分钟 → 1 分钟，快循环便于联调）。 */
+        const val DEFAULT_WORK_REST_MS = 60_000L
+
+        /** 拟人节奏区间上限（10 分钟）：超出的持久化值读回时按上限夹紧。 */
+        const val PACE_CEILING_MS = 10 * 60_000L
+
+        /**
+         * 拟人节奏档位（发送前随机延迟区间，毫秒；设置页与调试广播共用）：
+         * 快速=联调档（1~3s，只为压缩测试反馈环）、标准（3~10s）、
+         * 拟人=默认（8~90s，方案 §8.2 原口径）、从容（30~180s，高风控场景）。
+         * 单挑选定；非法值回退 [PACE_HUMAN]。
+         */
+        val PACE_FAST = 1_000L to 3_000L
+        val PACE_STANDARD = 3_000L to 10_000L
+        val PACE_HUMAN = HumanPace.MIN_DELAY_MS to HumanPace.MAX_DELAY_MS
+        val PACE_PATIENT = 30_000L to 180_000L
+        val PACE_OPTIONS = listOf(PACE_FAST, PACE_STANDARD, PACE_HUMAN, PACE_PATIENT)
 
         /** 静止降频允许的倍数档。 */
         val BACKOFF_OPTIONS = setOf(1, 2, 4)

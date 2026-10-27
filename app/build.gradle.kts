@@ -151,6 +151,19 @@ android {
         buildConfig = true
     }
 
+    // vendor/RPA：独立 RPA 源码目录（模型 / 存储 / 解释器 / 示例）。
+    // 按 AGENTS §4.3 不新增 Gradle 模块，以 sourceSets 编入 :app；
+    // vendor/RPA/README.md 记录该模块的边界与数据结构。
+    sourceSets {
+        getByName("main") {
+            // 同时挂到 java/kotlin 两个 source root：AGP 的 java.srcDir 只保证
+            // KSP / Java 能看见，Kotlin 编译器的 source set 需显式 kotlin.srcDir。
+            val rpaSources = rootProject.file("vendor/RPA/src/main/java")
+            java.srcDir(rpaSources)
+            kotlin.srcDir(rpaSources)
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

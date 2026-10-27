@@ -39,17 +39,30 @@ class PostSendVerifierTest {
     }
 
     @Test
-    fun clipOf_longLine_cappedAt12() {
+    fun clipOf_longLine_cappedAt8() {
         val clip = PostSendVerifier.clipOf("一二三四五六七八九十一二三四五六七八九")
-        assertEquals(12, clip.length)
-        assertEquals("一二三四五六七八九十一二", clip)
+        assertEquals(8, clip.length)
+        assertEquals("一二三四五六七八", clip)
+    }
+
+    @Test
+    fun clipsOf_addsShorterFallback() {
+        // 主片段 8 字含 IME 空格/易错尾巴时，6 字备选去掉尾部降低 OCR 误判。
+        val clips = PostSendVerifier.clipsOf("吴总，自动炒股 v1 我这两天")
+        assertEquals(listOf("吴总，自动炒股", "吴总，自动炒"), clips)
+    }
+
+    @Test
+    fun clipsOf_shortLine_dedupes() {
+        assertEquals(listOf("好啊"), PostSendVerifier.clipsOf("好啊"))
+        assertTrue(PostSendVerifier.clipsOf("  \n \n").isEmpty())
     }
 
     @Test
     fun clipOf_extractedDraft_takesPrefix() {
         // 派发侧传入的是抽取后的纯回复（无标记），回读片段即其前缀。
         val clip = PostSendVerifier.clipOf("好啊，那就这么定，周末见！")
-        assertEquals("好啊，那就这么定，周末见", clip)
+        assertEquals("好啊，那就这么定", clip)
     }
 
     @Test
@@ -98,5 +111,31 @@ class PostSendVerifierTest {
         val finder = CountingFinder(misses = 5)
         assertTrue(PostSendVerifier.verify(finder, "", delayMs = 0, retryMs = 0))
         assertEquals(0, finder.queried)
+    }
+
+    /** 只对指定片段命中的证据源（模拟 OCR 对主片段识别失败、备选命中）。 */
+    private class TextFinder(private val hit: String) : SendEvidenceFinder {
+        var queried = 0
+            private set
+        override suspend fun contains(text: String): Boolean {
+            queried++
+            return text == hit
+        }
+    }
+
+    @Test
+    fun verifyList_fallsBackToShorterClip() = runBlocking {
+        val finder = TextFinder(hit = "吴总，自动炒")
+        val clips = PostSendVerifier.clipsOf("吴总，自动炒股 v1 我这两天")
+        assertTrue(PostSendVerifier.verify(finder, clips, delayMs = 0, retryMs = 0))
+        assertEquals(2, finder.queried)
+    }
+
+    @Test
+    fun verifyList_missesTwicePerRound_fails() = runBlocking {
+        val finder = TextFinder(hit = "完全不存在的片段")
+        val clips = PostSendVerifier.clipsOf("吴总，自动炒股 v1 我这两天")
+        assertFalse(PostSendVerifier.verify(finder, clips, delayMs = 0, retryMs = 0))
+        assertEquals(4, finder.queried)
     }
 }

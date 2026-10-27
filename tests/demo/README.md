@@ -119,3 +119,41 @@ debug 包已允许明文 HTTP（`app/src/debug/res/xml/network_security_config.x
 - 服务端角色复核：`role_tenant=100099`、`role_key=tenant_admin`、菜单 95 项；`getRouters` 返回 200 且包含 `/market/ai-usage`。
 - 2026-10-26 晚（联系人修正 `吴瑞曦topwayricky` + 企微 `吴瑞曦`）复验：存活画像 5 条、`proactive_policies.contactId=6`、旧档 `chat_channels`/政策行已清空、自动范围仅 `吴瑞曦topwayricky`；RPA 冒烟 **a11y 与无 a11y 两种通道 × 微信/企微 均 result 0**（微信 `ChattingUI`、企微 `MessageListActivity`，⑧ `entered/nameHit=true`）。
 - 无 a11y 企微首轮失败（`im_nav_launch_timeout`）已修复：视觉模式按 IM 判别主列表/搜索页/会话页（企微 `WwMainActivity`/`GlobalSearchActivityV2`/`MessageListActivity`），back 不再盲退越过 App，结果条目改用 OCR 命中行中心点击。
+
+## 7. 自动档复测（2026-10-27）
+
+前置：debug 包、已跑 `seed-client.ps1`、微信已登录、Shizuku/无障碍按当前通道就绪。
+`--ez auto` 走与主页「自动」键相同的 `ACTION_AUTO_FROM_MAIN`；`AutoSelectionStore` 的选择集来自 demo 数据（吴瑞曦topwayricky × 微信）。
+
+```powershell
+# 快速档启动：工作 1 分钟 / 停歇 1 分钟 / 发送前等 1~3 秒
+adb shell am broadcast -a com.verlintas.baic2.DEBUG_DEMO_SEED `
+  -n com.verlintas.baic2/.floatball.demo.DemoSeedReceiver `
+  --es pace "1-3" --es executor auto --ei work 60 --ei rest 60 `
+  --ez auto true
+
+# 模拟一条来信（走正式后台回合管线；结果码 0 仅表示已受理）
+adb shell am broadcast -a com.verlintas.baic2.DEBUG_DEMO_SEED `
+  -n com.verlintas.baic2/.floatball.demo.DemoSeedReceiver `
+  --es say "吴总：自动炒股 v1 的回测数据发我看看" `
+  --es sayContact 吴瑞曦topwayricky
+
+# 停止
+adb shell am broadcast -a com.verlintas.baic2.DEBUG_DEMO_SEED `
+  -n com.verlintas.baic2/.floatball.demo.DemoSeedReceiver --ez stopAuto true
+
+# 分段耗时/发送出口
+adb logcat -d -s AutoTiming:* | Select-String "auto_timing:"
+adb logcat -d | Select-String "out_sent|out_degraded|send_button_not_found|wrong_conversation"
+```
+
+参数口径：
+
+- `--es pace "min-max"`：秒；快速 `1-3`、标准 `3-10`、拟人 `8-90`、从容 `30-180`（默认拟人）。
+- `--ei work / --ei rest`：秒；合法档 0/60/300/600/900/1200，`rest=0` 不停歇，默认 60/60。
+- `--es executor a11y|shizuku|auto`：发送通道偏好，默认 `auto`。
+- `--es say` 会写入 USER 消息并触发 LLM 分析/成稿；回合可能十几秒，操作后看台账与 logcat，不看广播返回。
+
+启动/稳定性验收：三入口 2s 内红球+脉冲、30s 内进入 AUTO、失败有状态/日志；完整矩阵见
+`docs/2026-10-27-自动档稳定性与回复节奏诊断方案.md` §7。
+

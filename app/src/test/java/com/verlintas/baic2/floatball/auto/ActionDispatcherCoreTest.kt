@@ -145,16 +145,21 @@ class ActionDispatcherCoreTest {
     @Test
     fun injectFailsTwice_givesUp() = runBlocking {
         val bridge = FakeBridge(injectResults = listOf(fail(), fail()))
-        assertEquals(SendSequence.REASON_INPUT_FAILED, run(bridge))
+        // 2026-10-27 起失败原因带异常明细（`input_inject_failed:类型_消息`），只断前缀。
+        assertTrue(run(bridge)!!.startsWith(SendSequence.REASON_INPUT_FAILED))
         assertEquals(2, bridge.injected.size)
         assertTrue("注入失败绝不点击发送", bridge.taps.isEmpty())
     }
 
     @Test
-    fun sendButtonNotFound_givesUpAfterRetry() = runBlocking {
-        val bridge = FakeBridge(sendNodes = emptyList())
+    fun sendButtonNotFound_clearsAndRetriesOnceThenGivesUp() = runBlocking {
+        val bridge = FakeBridge(
+            sendNodes = emptyList(),
+            injectResults = List(4) { Result.success(Unit) },
+        )
         assertEquals(SendSequence.REASON_SEND_NOT_FOUND, run(bridge))
-        assertEquals(listOf(DRAFT), bridge.injected)
+        // 2026-10-27 恢复一轮：注入 → 定位失败 → 清空 → 重新注入 → 仍失败 → 最终清空。
+        assertEquals(listOf(DRAFT, "", DRAFT, ""), bridge.injected)
         assertTrue("找不到按钮绝不盲点", bridge.taps.isEmpty())
     }
 

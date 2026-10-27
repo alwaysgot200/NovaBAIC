@@ -67,8 +67,30 @@ internal object SceneGate {
             return Scene.Uncertain
         }
         if (foregroundPackage !in NotificationGate.LISTENED_PACKAGES) return Scene.NonChat
+        // IM 主列表/通讯录页不是会话页（2026-10-27 真机 12:17：通讯录页被差分
+        // 当成聊天屏，成稿「当前屏幕仍是通讯录/好友列表…」并尝试发送失败）。
+        // 负向标记先行，宁可少一次自动回复，也不在通讯录页对着列表说话。
+        if (looksLikeContactList(screenBody)) return Scene.NonChat
         return if (hasChatStructure(screenBody)) Scene.Chat else Scene.Uncertain
     }
+
+    /**
+     * IM 主列表/通讯录页判别（纯函数，JVM 可测）：整屏命中 ≥2 个主列表专属
+     * 入口词即判非会话页。聊天正文里偶发一个词不触发；通讯录页的
+     * 「新的朋友/标签与权限/群聊/企业微信联系人/公众号」天然多命中。
+     */
+    fun looksLikeContactList(screenBody: String?): Boolean {
+        if (screenBody.isNullOrBlank()) return false
+        val hits = CONTACT_LIST_MARKERS.count { it in screenBody }
+        return hits >= CONTACT_LIST_MIN_HITS
+    }
+
+    private val CONTACT_LIST_MARKERS = listOf(
+        "新的朋友", "标签与权限", "企业微信联系人", "通讯录管理", "通讯录",
+        "群聊", "公众号", "朋友圈", "视频号", "发起群聊", "添加朋友",
+    )
+
+    private const val CONTACT_LIST_MIN_HITS = 2
 
     /** 聊天结构判定：复用 IncomingCue 的来信候选（时间分割/结构占位/界面词强标记）。 */
     private fun hasChatStructure(screenBody: String?): Boolean =

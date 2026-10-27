@@ -84,6 +84,32 @@ class SceneGateTest {
         assertEquals(SceneGate.Scene.Uncertain, SceneGate.classify(null, ""))
     }
 
+    @Test
+    fun contactListPageClassifiesNonChat() {
+        // 2026-10-27 真机 12:17：通讯录页被差分当聊天屏，成稿「屏幕仍是通讯录」。
+        val contacts = listOf(
+            "通讯录",
+            "新的朋友",
+            "标签与权限",
+            "群聊",
+            "企业微信联系人",
+            "公众号",
+        ).joinToString("\n")
+        assertEquals(SceneGate.Scene.NonChat, SceneGate.classify("com.tencent.mm", contacts))
+        assertTrue(SceneGate.looksLikeContactList(contacts))
+    }
+
+    @Test
+    fun singleContactListWordInChat_doesNotTrigger() {
+        // 聊天正文偶发一个入口词（群聊/公众号）不构成主列表页。
+        val chat = listOf(
+            "昨天 14:30",
+            "公众号那篇文章我看过了，晚点回你",
+            "发送",
+        ).joinToString("\n")
+        assertEquals(false, SceneGate.looksLikeContactList(chat))
+    }
+
     // ── F10：UNCERTAIN 轻 LLM 一问的提示词与解析（UncertainPrompts 纯函数） ──
 
     @Test

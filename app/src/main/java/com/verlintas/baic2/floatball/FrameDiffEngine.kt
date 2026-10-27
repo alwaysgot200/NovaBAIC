@@ -23,7 +23,9 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.verlintas.baic2.device.api.AccessibilityBridge
 import com.verlintas.baic2.device.api.OcrProvider
+import com.verlintas.baic2.floatball.auto.AutoTiming
 import com.verlintas.baic2.floatball.auto.ScreenCapture
+import com.verlintas.baic2.floatball.auto.ShizukuInjector
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -63,6 +65,7 @@ class FrameDiffEngine @Inject constructor(
     private val prefs: AdvisorPrefs,
     private val geometryProvider: ScreenGeometryProvider,
     private val noiseRules: NoiseRules,
+    private val imeProbe: ShizukuInjector,
 ) {
 
     sealed interface Signal {
@@ -146,7 +149,12 @@ class FrameDiffEngine @Inject constructor(
 
             while (true) {
                 val baseInterval = prefs.state.value.pollIntervalMs
+                // 每拍分段计时（2026-10-27 归因）：wait=节流等待，frame=取帧+灰度+差分，
+                // ocr=掩膜+ML Kit+去噪。OCR 那一拍落一条日志，定位「感知慢在哪」。
+                val tickStartNanos = System.nanoTime()
                 delay(intervalMs)
+                val waitMs = (System.nanoTime() - tickStartNanos) / 1_000_000
+                val frameStartNanos = System.nanoTime()
                 if (paused) continue
 
                 val maxSession = prefs.state.value.maxSessionMs
@@ -232,11 +240,18 @@ class FrameDiffEngine @Inject constructor(
                 candidate = null // 触发后重新蓄水
                 // 第 1 层：自身浮窗矩形 + 底部系统带一次位图掩膜；
                 // 第 2 层：OCR 后几何分流（状态栏/标题带）+ 行级正则（§12.2/§12.3）。
+                val frameMs = (System.nanoTime() - frameStartNanos) / 1_000_000
+                val ocrStartNanos = System.nanoTime()
                 val text = withContext(Dispatchers.Default) {
                     recognizeCleanBody(current.bitmap, maskProvider())
                 }
+                val ocrMs = (System.nanoTime() - ocrStartNanos) / 1_000_000
+                val pass = AutoTiming.render(
+                    listOf("wait" to waitMs, "frame" to frameMs, "ocr" to ocrMs),
+                )
                 if (text.isNullOrEmpty()) {
                     // OCR 空结果（纯图页）：推进灰度基线，免得每 tick 重 OCR。
+                    android.util.Log.d(TAG, "ocr empty, $pass")
                     lastOcrGray = frame
                     continue
                 }
@@ -244,13 +259,13 @@ class FrameDiffEngine @Inject constructor(
                 if (last != null &&
                     FrameQuality.textSimilarity(last, text) >= prefs.state.value.ocrDedupSimilarity
                 ) {
-                    android.util.Log.d(TAG, "ocr dedup hit, len=${text.length}")
+                    android.util.Log.d(TAG, "ocr dedup hit, len=${text.length} $pass")
                     lastOcrGray = frame
                     continue
                 }
                 lastOcrText = text
                 lastOcrGray = current.gray
-                android.util.Log.d(TAG, "dispatching turn, len=${text.length}")
+                android.util.Log.i(TAG, "dispatching turn, len=${text.length} $pass")
                 // 帧生产与 LLM 消费解耦：CONFLATED 通道忙时只留最新帧，
                 // 不阻塞抓帧循环；回合串行性由消费者保证。
                 channel.trySend(text)
@@ -289,8 +304,15 @@ class FrameDiffEngine @Inject constructor(
      * 正文过行级正则库；掩膜失败退回整页文本，保证不错杀。
      */
     private suspend fun recognizeCleanBody(bitmap: Bitmap, overlayRects: List<Rect>): String? {
-        val imeOpen = runCatching {
+        val a11yImeOpen = runCatching {
             accessibility.connected.value && accessibility.editableFocused()
+        }.getOrDefault(false)
+        // a11y 关闭时 editableFocused 恒 false，整块 Sogou 键盘/候选条会漏进
+        // OCR，被当成「对方来信」（2026-10-27 真机消息 id=115/119）。用 Shizuku
+        // dumpsys 探针兜底（~115ms，仅 OCR 那一拍执行）；探针异常一律按「未展开」
+        // 处理，不因探针故障卡住感知。
+        val imeOpen = a11yImeOpen || runCatching {
+            imeProbe.available && imeProbe.imeShown()
         }.getOrDefault(false)
         val geometry = geometryProvider.compute(bitmap.width, bitmap.height, imeOpen)
         val mask = overlayRects.toMutableList()
@@ -305,7 +327,16 @@ class FrameDiffEngine @Inject constructor(
         val lines = ocrProvider.recognize(masked).getOrNull()
             ?: return ocrProvider.recognizeText(masked).getOrNull()?.trim()
         val partition = OcrNoiseFilter.partition(lines, geometry)
-        return OcrNoiseFilter.clean(partition.bodyLines, noiseRules.get(), emptyList())
+        val cleaned = OcrNoiseFilter.clean(partition.bodyLines, noiseRules.get(), emptyList())
+        // 我方气泡剔除（2026-10-27 真机加固）：差分只有文字、分不清气泡归属，
+        // 自己的绿色气泡上屏后会被当成「对方来信」再回复一次（自问自答）。
+        // 按气泡底色定位我方行并丢弃——对方新消息到达前正文不变，OCR 去重
+        // 也会因此命中，避免发完一条就自触发下一回合。
+        // 传原始帧：maskBitmap 产出的是 JPEG 字节（掩膜只服务 OCR），气泡绿区
+        // 位于正文带、不受浮窗/底部掩膜影响。
+        val ownBoxes = withContext(Dispatchers.Default) { OwnBubbleLocator.boxes(bitmap) }
+        return cleaned
+            .filterNot { OwnBubbleLocator.isOwn(ownBoxes, it) }
             .joinToString("\n") { it.text.trim() }
             .takeIf { it.isNotBlank() }
     }

@@ -121,6 +121,12 @@ class ImChatNavigator @Inject constructor(
         /** 结果节点最低 top：排除顶部搜索输入框自身（其 text 即关键词）。 */
         private const val RESULT_MIN_TOP_RATIO = 6f
 
+        /**
+         * a11y 黑洞探针的节点预算（2026-10-27）：只用于判断「整页有没有文本」，
+         * 取够最小样本即停，避免为一次探测走完整棵树。
+         */
+        private const val BLACKHOLE_PROBE_NODES = 64
+
         /** 微信 8.x 主列表右上角搜索图标（纯图标无文本节点）的屏幕比例位置。 */
         private const val SEARCH_ICON_X_RATIO = 0.825f
         private const val SEARCH_ICON_Y_RATIO = 0.074f
@@ -165,6 +171,15 @@ class ImChatNavigator @Inject constructor(
 
         /** 模式 2 ⑦-0 搜索结果渲染轮询次数（paste 上屏→FTS 联想刷新为异步）。 */
         private const val RESULT_RENDER_POLLS = 6
+
+        /** 主列表底部 Tab 条判定带（[MAIN_LIST_TAB_ZONE_RATIO] 以上不计）。 */
+        private const val MAIN_LIST_TAB_ZONE_RATIO = 0.90f
+
+        /** 底部带内命中 ≥ 该数量个 Tab 词即判「已在主列表」（单命中容错不足）。 */
+        private const val MAIN_LIST_TAB_MIN_HITS = 2
+
+        /** 主列表底部 Tab 词（聊天页输入栏/搜索页键盘区不含这组词）。 */
+        private val MAIN_LIST_TAB_TOKENS = listOf("微信", "通讯录", "发现")
     }
 
     /**
@@ -202,11 +217,30 @@ class ImChatNavigator @Inject constructor(
     /**
      * 打开 [imPackage] 中与 [contactName] 的聊天页。主线程之外执行（IO），
      * a11y 手势/tap 由 [AssistsA11yBridge] 内部调度到主线程。
+     *
+     * 2026-10-27 启动段记账：全流程分段耗时以 `auto_timing:nav=…,probe=…` 落
+     * logcat（TAG=[AutoTiming.TAG]，与回合/执行账单同前缀同 TAG）——「点开始
+     * 托管到首帧 28s」的归因不再靠人工比对时间戳。
      */
     suspend fun openChat(imPackage: String, contactName: String): NavResult =
         withContext(Dispatchers.IO) {
             val name = contactName.trim()
             if (name.isEmpty()) return@withContext NavResult.Fail(REASON_CONTACT_NOT_FOUND)
+            val trace = TimingTrace()
+            val startedAtNanos = System.nanoTime()
+            var markNanos = startedAtNanos
+            fun mark(stage: String) {
+                val now = System.nanoTime()
+                trace.add(stage, (now - markNanos) / 1_000_000)
+                markNanos = now
+            }
+            // 统一出口：补当前段与总耗时，落一行账单（每个 return 都经此，无漏账）。
+            fun done(stage: String, result: NavResult): NavResult {
+                mark(stage)
+                trace.add("total", (System.nanoTime() - startedAtNanos) / 1_000_000)
+                Log.i(AutoTiming.TAG, "${trace.render()} pkg=$imPackage name=$name result=$result")
+                return result
+            }
             Log.i(TAG, "openChat pkg=$imPackage name=$name a11y=${bridge.connected.value}")
 
             // ① 双模门面（§4.5 执行面双模铁律）：a11y 关不是失败，而是切换到
@@ -215,18 +249,18 @@ class ImChatNavigator @Inject constructor(
             // 联系人），绝不静默无动作。
             if (!bridge.connected.value) {
                 if (shizuku.available) {
-                    return@withContext openChatByVision(imPackage, name)
+                    return@withContext done("mode2", openChatByVision(imPackage, name))
                 }
                 Log.w(TAG, "① a11y off & shizuku unavailable (${shizuku.unavailableReason})")
                 launchBestEffort(imPackage)
-                return@withContext NavResult.Fail(REASON_SHIZUKU_OFF)
+                return@withContext done("gate", NavResult.Fail(REASON_SHIZUKU_OFF))
             }
 
             // ② 已在该联系人的聊天页？标题即联系人名，直接成功（重复点击场景）。
             val titleNow = bridge.windowTitle()
             Log.i(TAG, "② fg=${bridge.foregroundPackage()} title=$titleNow")
             if (bridge.foregroundPackage() == imPackage && titleMatches(titleNow, name)) {
-                return@withContext NavResult.Ok
+                return@withContext done("probe", NavResult.Ok)
             }
 
             // ②½ 提前把联系人名写进系统剪贴板：此刻自家仍是焦点应用（IM 尚未
@@ -250,17 +284,17 @@ class ImChatNavigator @Inject constructor(
                     context.packageManager.getLaunchIntentForPackage(imPackage)
                 }.getOrNull() ?: run {
                     Log.w(TAG, "③ launch intent null (app missing)")
-                    return@withContext NavResult.Fail(REASON_APP_MISSING)
+                    return@withContext done("launch", NavResult.Fail(REASON_APP_MISSING))
                 }
                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 runCatching { context.startActivity(launch) }
                     .onFailure {
                         Log.w(TAG, "③ startActivity failed", it)
-                        return@withContext NavResult.Fail(REASON_APP_MISSING)
+                        return@withContext done("launch", NavResult.Fail(REASON_APP_MISSING))
                     }
                 if (!awaitForeground(imPackage)) {
                     Log.w(TAG, "③ awaitForeground timeout fg=${bridge.foregroundPackage()}")
-                    return@withContext NavResult.Fail(REASON_LAUNCH_TIMEOUT)
+                    return@withContext done("launch", NavResult.Fail(REASON_LAUNCH_TIMEOUT))
                 }
             }
 
@@ -271,6 +305,23 @@ class ImChatNavigator @Inject constructor(
                 return@withContext NavResult.Ok
             }
 
+            // ④¾ a11y 黑洞视觉直达（2026-10-27 启动慢归因修复）：微信页面节点树
+            // 对无障碍客户端零暴露——真机 10:19 实测 ②④ 标题恒为 null/「微信」，
+            // ④½ findText 恒空，旧流程只能「back 归位 → 搜索全链」，从点击「开始
+            // 自动托管」到首帧耗时 28s（10:19:09→10:19:37）。而「陪伴会话重启时
+            // 已停在目标聊天页」恰是最常见场景：用不依赖 a11y 的 activity 类名门
+            // + 顶部条 OCR（[chatPageVisibleByVision]，含搜索页「取消」排除）当场
+            // 确认，命中即成功（~1s vs 28s）。Shizuku 不可用时该函数返回 false，
+            // 自动回落旧路径（无阻塞、无新增失败面）。
+            val imPages = pagesOf(imPackage)
+            if (bridge.foregroundPackage() == imPackage &&
+                chatPageVisibleByVision(name, imPages)
+            ) {
+                Log.i(TAG, "④¾ vision: already on target chat page, skip search")
+                return@withContext done("probe", NavResult.Ok)
+            }
+            mark("probe")
+
             // ④½ 快捷路径：主列表里直接点该联系人的会话条目（「刚聊过」最常见
             // 场景，跳过搜索全流程）。条目节点 text 即联系人名（findText 包含匹配）。
             val listHit = awaitNode(name)
@@ -279,7 +330,7 @@ class ImChatNavigator @Inject constructor(
                 val titleFast = bridge.windowTitle()
                 Log.i(TAG, "④½ list hit (${listHit.centerX},${listHit.centerY}) title=$titleFast")
                 if (titleMatches(titleFast, name)) {
-                    return@withContext NavResult.Ok
+                    return@withContext done("list", NavResult.Ok)
                 }
                 // 点了没进聊天页（可能是列表项误报）：退回主列表再走搜索。
                 runCatching { bridge.pressKey("back") }
@@ -287,9 +338,8 @@ class ImChatNavigator @Inject constructor(
             }
 
             // ⑤ 进搜索页：微信拉起后恢复上次停留页（主列表/聊天页/搜索页三态，
-            // 2026-10-21 真机实测）。搜索页输入框自动聚焦（键盘弹起）——
-            // inputFocused 即已就绪直接输入；否则 back 回主列表（聊天页→主列表；
-            // 主列表→「再按退出」不真退；搜索页等独立 task 页→微信退后台需重拉起）。
+            // 2026-10-21 真机实测）。归位策略 2026-10-27 收紧：每轮先做状态预检
+            // （搜索页/输入框聚焦/视觉主列表锚），确认该 back 才 back；不再盲退。
             // 循环后仍未就绪 → 点搜索入口（节点优先 + 坐标兜底，主列表 a11y 树
             // 对无障碍客户端不可见，坐标兜底是实际主路径）。
             var searchReady = false
@@ -298,11 +348,27 @@ class ImChatNavigator @Inject constructor(
                     Log.i(TAG, "⑤ im backgrounded, relaunch…")
                     if (!relaunch(imPackage)) {
                         Log.w(TAG, "⑤ relaunch timeout")
-                        return@withContext NavResult.Fail(REASON_LAUNCH_TIMEOUT)
+                        return@withContext done("rounds", NavResult.Fail(REASON_LAUNCH_TIMEOUT))
                     }
+                }
+                // ⑤-0 状态预检（2026-10-27 稳定性修复）：back 只为「退出非主列表
+                // 页」，绝不在已经是主列表/搜索页时按——真机 10:19 实测微信主列表
+                // 再按一次 back 直接退出到系统桌面，重拉起 + 搜索全链白白多花 20s。
+                // ① activity 通道（不依赖 a11y 节点树）：已在搜索页 = 输入框就绪；
+                // ② a11y 焦点通道（企微等节点树可读的 IM）：输入框已聚焦即就绪；
+                // ③ 视觉主列表锚：底部 Tab 条（聊天页/搜索页都没有），确认在主列表
+                //    就不再 back，直接进下方「点搜索图标」。
+                if (isSearchActivity(imPages)) {
+                    Log.i(TAG, "⑤ already on search page (activity), input ready")
+                    searchReady = true
+                    break
                 }
                 if (awaitInputFocused()) {
                     searchReady = true
+                    break
+                }
+                if (looksLikeMainListByOcr()) {
+                    Log.i(TAG, "⑤ already on main list (vision), skip back")
                     break
                 }
                 runCatching { bridge.pressKey("back") }
@@ -322,13 +388,14 @@ class ImChatNavigator @Inject constructor(
                         val t5 = bridge.windowTitle()
                         Log.i(TAG, "⑤½ list hit (${listHit.centerX},${listHit.centerY}) title=$t5")
                         if (titleMatches(t5, name)) {
-                            return@withContext NavResult.Ok
+                            return@withContext done("list", NavResult.Ok)
                         }
                         runCatching { bridge.pressKey("back") }
                         delay(POST_TAP_DELAY_MS)
                     }
                 }
             }
+            mark("rounds")
             if (!searchReady) {
                 // 循环耗尽仍未就绪：back 可能把 IM 退到了后台（独立 task 页场景），
                 // 先确保 IM 前台——relaunch 恢复的若是搜索页，输入框聚焦即就绪。
@@ -336,7 +403,7 @@ class ImChatNavigator @Inject constructor(
                     Log.i(TAG, "⑤ post-rounds relaunch…")
                     if (!relaunch(imPackage)) {
                         Log.w(TAG, "⑤ post-rounds relaunch timeout")
-                        return@withContext NavResult.Fail(REASON_LAUNCH_TIMEOUT)
+                        return@withContext done("rounds", NavResult.Fail(REASON_LAUNCH_TIMEOUT))
                     }
                     if (awaitInputFocused()) searchReady = true
                 }
@@ -351,7 +418,7 @@ class ImChatNavigator @Inject constructor(
                     val size = bridge.screenSize()
                     if (size == null) {
                         Log.w(TAG, "⑤ screenSize null, abort")
-                        return@withContext NavResult.Fail(REASON_SEARCH_BUTTON_NOT_FOUND)
+                        return@withContext done("search", NavResult.Fail(REASON_SEARCH_BUTTON_NOT_FOUND))
                     }
                     val sx = (size.first * SEARCH_ICON_X_RATIO).toInt()
                     val sy = (size.second * SEARCH_ICON_Y_RATIO).toInt()
@@ -360,10 +427,11 @@ class ImChatNavigator @Inject constructor(
                 }
                 if (!searchTapped) {
                     Log.w(TAG, "⑤ tap search FAILED")
-                    return@withContext NavResult.Fail(REASON_TAP_FAILED)
+                    return@withContext done("search", NavResult.Fail(REASON_TAP_FAILED))
                 }
                 delay(POST_TAP_DELAY_MS)
             }
+            mark("search")
 
             // ⑥ 输入联系人名（三档通道）：
             // ⑥-1 Shizuku KEYCODE_PASTE（首选）：shell `input keyevent 279` 派发
@@ -376,7 +444,7 @@ class ImChatNavigator @Inject constructor(
             // 未察觉，注入会落进自家 App 的输入框改用户数据（实测教训）。
             if (bridge.foregroundPackage() != imPackage) {
                 Log.w(TAG, "⑥ not in IM foreground, abort")
-                return@withContext NavResult.Fail(REASON_LAUNCH_TIMEOUT)
+                return@withContext done("input", NavResult.Fail(REASON_LAUNCH_TIMEOUT))
             }
             // ⑥-0 坐标 tap 搜索输入框：微信 FTS 输入框对 a11y 不暴露（findFocus
             // 返回 className/text 全空、bounds 零面积的幽灵节点，全树无
@@ -431,6 +499,7 @@ class ImChatNavigator @Inject constructor(
                 Log.i(TAG, "⑥ all attempts failed, fall through to ⑦ IME-candidate path")
             }
             delay(POST_INPUT_DELAY_MS)
+            mark("input")
 
             // ⑦ 结果定位双通道：a11y 节点优先（结果树可见的 IM），全黑洞时
             // 坐标兜底——微信 FTS 整页对 a11y 服务零暴露（findText=0 且
@@ -468,8 +537,10 @@ class ImChatNavigator @Inject constructor(
                 if (entered) break
             }
             Log.i(TAG, "⑧ entered=$entered title=${bridge.windowTitle()}")
-            if (entered) NavResult.Ok
-            else NavResult.Fail(REASON_CONTACT_NOT_FOUND)
+            return@withContext done(
+                "verify",
+                if (entered) NavResult.Ok else NavResult.Fail(REASON_CONTACT_NOT_FOUND),
+            )
         }
 
     // ========================= 模式 2：视觉通道（a11y 关） =========================
@@ -493,8 +564,11 @@ class ImChatNavigator @Inject constructor(
      * 对齐（③拉起→⑤搜索→⑥输入→⑦结果→⑧验证）；跳过 ②④④½⑤½ 快捷路径
      * （依赖 a11y 窗口标题/节点树，a11y 关时无从谈起，每次都走搜索全链是
      * 预期行为）。每步失败即报因返回（REASON_*），绝不静默。
+     *
+     * 可见性 2026-10-27：供 RPA 解释器在「无 a11y」线显式调用——即便本机
+     * a11y 处于开启状态，也必须走这条纯视觉线，满足 RPA 三模式的分流语义。
      */
-    private suspend fun openChatByVision(imPackage: String, name: String): NavResult {
+    suspend fun openChatByVision(imPackage: String, name: String): NavResult {
         Log.i(TAG, "[v2] openChat pkg=$imPackage name=$name (vision mode)")
         val pages = pagesOf(imPackage)
         // ①-2 感知面：Shizuku screencap 主源（原生分辨率清晰帧——HyperOS
@@ -880,11 +954,19 @@ class ImChatNavigator @Inject constructor(
      *  真机实测 dump 会给出滚出屏/隐藏节点（如 (-734,2045)），点了必失败。
      *  多命中时取最靠上者：IM 主列表按最近会话排序，首条即「排序最前的对话」。 */
     private suspend fun awaitNode(query: String): TextNode? {
-        repeat(NODE_POLLS) {
+        repeat(NODE_POLLS) { poll ->
             findTextFuzzy(query)
                 .filter(::inScreen)
                 .minByOrNull { it.top }
                 ?.let { return it }
+            // a11y 黑洞早退（2026-10-27 启动慢归因）：整页读不到任何文本时，
+            // 再多轮询也变不出节点（微信部分页面对无障碍零暴露），留一拍给
+            // 转场渲染后即返回 null，把等待让给调用方的 OCR/坐标兜底，
+            // 单处省 NODE_POLLS-1 拍 ≈ 1.5s。
+            if (poll > 0 && screenTextBlank()) {
+                Log.i(TAG, "awaitNode a11y black hole, hand off to fallback: $query")
+                return null
+            }
             delay(POLL_INTERVAL_MS)
         }
         return null
@@ -896,16 +978,28 @@ class ImChatNavigator @Inject constructor(
      * （键盘区 y 大），两类目标都可能是 ⑦ 的合法 tap 对象。
      */
     private suspend fun awaitContactResult(name: String): TextNode? {
-        repeat(RESULT_POLLS) {
+        repeat(RESULT_POLLS) { poll ->
             val minTop = (bridge.screenSize()?.second ?: 0) / RESULT_MIN_TOP_RATIO
             val hit = findTextFuzzy(name)
                 .filter { it.top > minTop && inScreen(it) }
                 .minByOrNull { it.top }
             if (hit != null) return hit
+            // a11y 黑洞早退（2026-10-27 回复慢归因）：微信 FTS 整页对无障碍零暴露
+            // （findText=0 且 screenText=''），这里原来固定空等 12 拍 ≈ 6.2s 才轮到
+            // ⑦ 的比例兜底坐标。整页连一个文本节点都读不到时，继续轮询不可能出现
+            // 新结果——留一拍给转场渲染，之后就交棒给兜底通道。
+            if (poll > 0 && screenTextBlank()) {
+                Log.i(TAG, "⑦-0 a11y black hole, hand off to ratio fallback")
+                return null
+            }
             delay(POLL_INTERVAL_MS)
         }
         return null
     }
+
+    /** 当前前台窗口是否读不到任何文本（a11y 黑洞指纹）；探针自身失败按「非黑洞」处理。 */
+    private fun screenTextBlank(): Boolean =
+        runCatching { bridge.screenText(BLACKHOLE_PROBE_NODES) }.getOrNull().isNullOrBlank()
 
     /** 节点中心是否在屏幕内（screenSize 不可用时放行，交由 tap 自身防护）。 */
     private fun inScreen(node: TextNode): Boolean {
@@ -988,6 +1082,67 @@ class ImChatNavigator @Inject constructor(
         var i = 0
         while (i < a.length && i < b.length && a[i] == b[i]) i++
         return i
+    }
+
+    /**
+     * 视觉主列表锚（2026-10-27 稳定性修复，a11y 黑洞场景）：底部 Tab 条
+     * （[MAIN_LIST_TAB_ZONE_RATIO] 以下）出现 ≥ [MAIN_LIST_TAB_MIN_HITS] 个
+     * 主列表专属词即判定「已在 IM 主列表」——聊天页底部是输入栏、搜索页底部
+     * 是键盘/空白，均无此组词。用于 ⑤ 归位时决定「不需要 back」。
+     *
+     * Shizuku 不可用/取帧失败一律返回 false（回落旧 back 逻辑），不新增失败面。
+     */
+    private suspend fun looksLikeMainListByOcr(): Boolean {
+        val frame = runCatching { frameSource.grabFrame().getOrNull() }.getOrNull() ?: return false
+        val lines = runCatching { ocr.recognize(bitmapToPng(frame)).getOrNull() }.getOrNull()
+            ?: return false
+        val zoneTop = (frame.height * MAIN_LIST_TAB_ZONE_RATIO).toInt()
+        val hits = lines.count { line ->
+            line.centerY >= zoneTop &&
+                MAIN_LIST_TAB_TOKENS.any { line.text.contains(it) }
+        }
+        val hit = hits >= MAIN_LIST_TAB_MIN_HITS
+        Log.i(TAG, "⑤ vision main-list check hits=$hits hit=$hit lines=${lines.size}")
+        return hit
+    }
+
+    /**
+     * 发送前会话页守卫（2026-10-27 真机 12:16/12:17 `send_button_not_found`
+     * 根因）：导航自称 Ok 后页面可能已漂移到主列表/通讯录页（微信主列表与
+     * 聊天页同为 LauncherUI），发送链只校验前台包名 → 在非会话页注入、
+     * locate 必败，还在输入框留下草稿。
+     *
+     * 判定口径与 ⑧ 视觉验证一致：activity ∈ [ImPages.chatMarkers] + 顶部条
+     * OCR 命中联系人名且无「取消」（排除 FTS 搜索页）。
+     *
+     * @return true=当前页就是目标会话；false=明确不是（主列表/通讯录/搜索页）；
+     *   null=无法判定（取帧/OCR 不可用），调用方**不得**据此拦截发送。
+     */
+    suspend fun chatPageTitleMatches(imPackage: String, contactName: String): Boolean? =
+        withContext(Dispatchers.IO) {
+            val name = contactName.trim()
+            if (name.isEmpty()) return@withContext null
+            val activity = runCatching { shizuku.foregroundActivity() }.getOrNull()
+                ?: return@withContext null
+            if (pagesOf(imPackage).chatMarkers.none { activity.contains(it) }) {
+                Log.w(TAG, "guard activity=$activity not a chat host")
+                return@withContext false
+            }
+            val frame = runCatching { frameSource.grabFrame().getOrNull() }.getOrNull()
+                ?: return@withContext null
+            headerNameVerdict(name, frame)
+        }
+
+    /** 顶部条 OCR 名字判定：null=OCR 无输出（不可判定）；false=名字未命中或命中「取消」。 */
+    private suspend fun headerNameVerdict(name: String, frame: Bitmap): Boolean? {
+        val lines = ocr.recognize(bitmapToPng(frame)).getOrNull() ?: return null
+        if (lines.isEmpty()) return null
+        val stripBottom = (frame.height * HEADER_STRIP_RATIO).toInt()
+        val strip = lines.filter { it.centerY < stripBottom }
+        val nameHit = nameInOcrLines(strip, name)
+        val cancelHit = strip.any { it.text.contains("取消") }
+        Log.i(TAG, "guard-ocr nameHit=$nameHit cancelHit=$cancelHit lines=${strip.size}")
+        return if (cancelHit) false else nameHit
     }
 
     /** 投影帧 → PNG bytes（OCR 接口口径；OcrSendLocator 同款压缩）。 */

@@ -68,8 +68,59 @@ class ShizukuInjector @Inject constructor(
     override suspend fun tap(x: Int, y: Int): Result<Unit> =
         exec("input tap $x $y")
 
+    /** RPA 长按：`input swipe` 同点持续按压（长按菜单 / 拖拽手柄）。 */
+    suspend fun longPress(x: Int, y: Int): Result<Unit> =
+        exec("input swipe $x $y $x $y $LONG_PRESS_MS")
+
+    /** RPA 滑动（滚动 / 翻页）：Shizuku shell 注入，无需 a11y 手势。 */
+    suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int): Result<Unit> =
+        exec("input swipe $x1 $y1 $x2 $y2 ${durationMs.coerceAtLeast(50)}")
+
+    /** RPA 系统按键：back|home|recents|notifications|enter（keycode 注入）。 */
+    suspend fun pressKey(key: String): Result<Unit> {
+        val code = when (key.lowercase()) {
+            "back" -> KEYCODE_BACK
+            "home" -> KEYCODE_HOME
+            "recents", "recent" -> KEYCODE_RECENTS
+            "notifications", "shade" -> KEYCODE_NOTIFICATIONS
+            "enter" -> KEYCODE_ENTER
+            else -> return Result.failure(
+                IllegalArgumentException("unknown_key: use back|home|recents|notifications|enter"),
+            )
+        }
+        return exec("input keyevent $code")
+    }
+
     /** 系统返回键（KEYCODE_BACK=4）：页面回退（如聊天页→IM 主列表）。 */
     suspend fun back(): Result<Unit> = exec("input keyevent $KEYCODE_BACK")
+
+    /**
+     * 输入法是否已展开（dumpsys input_method 的 mInputShown 口径，单次 shell
+     * 调用 ~115ms 真机实测）。2026-10-27 回复慢归因新增：IME 已弹起 ⇒ 聊天页
+     * 输入框已持有焦点 ⇒ 注入前聚焦步（取帧+OCR+坐标 tap，实测 2.2~2.5s）
+     * 整段可省。见 [OcrSendLocator.focusInput]。
+     */
+    suspend fun imeShown(): Boolean {
+        val result = shell.exec(
+            "dumpsys input_method | grep -m1 mInputShown=",
+            timeoutMs = SHELL_TIMEOUT_MS,
+            maxOutputChars = 200,
+        )
+        return (result as? ShellResult.Output)
+            ?.stdout
+            ?.contains("mInputShown=true") == true
+    }
+
+    /**
+     * 发送成功后收起输入法（best effort）：键盘/Sogou「随写」面板会把工具条
+     * 与候选文字一并送进下一帧 OCR，既污染正文也会诱发自回声回合（2026-10-27
+     * 真机：发完一条后键盘仍展开）。先查 dumpsys 确认 IME 确实展开再发 BACK，
+     * 否则 BACK 会把聊天页退回消息列表。
+     */
+    suspend fun hideImeIfShown(): Boolean {
+        if (!imeShown()) return false
+        return back().isSuccess
+    }
 
     override suspend fun type(text: String): Result<Unit> {
         if (viaInputText(text)) return exec("input text ${shellQuote(text)}")
@@ -192,6 +243,13 @@ class ShizukuInjector @Inject constructor(
 
         // input/keyevent 关键码（仅此处使用，不引 android.view.KeyEvent 常量歧义）。
         private const val KEYCODE_BACK = 4
+        private const val KEYCODE_HOME = 3
+        private const val KEYCODE_RECENTS = 187
+        private const val KEYCODE_NOTIFICATIONS = 83
+        private const val KEYCODE_ENTER = 66
+
+        /** 长按按压时长（系统长按阈值 ~500ms，留余量）。 */
+        private const val LONG_PRESS_MS = 800
 
         /** screencap 临时文件目录（真机实测：/sdcard FUSE 拒 App 读 shell 写文件，此目录 chmod 666 后可读）。 */
         private const val SCREENCAP_DIR = "/data/local/tmp"

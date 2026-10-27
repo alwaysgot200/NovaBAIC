@@ -51,6 +51,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.verlintas.baic2.R
 import com.verlintas.baic2.floatball.advisor.data.ChatChannelEntity
+import com.verlintas.baic2.floatball.rpa.RpaActivity
 import kotlinx.coroutines.launch
 
 /**
@@ -146,6 +147,15 @@ internal fun ChatChannelsTab(
                             }
                         }) {
                             Text(stringResource(R.string.float_channels_open))
+                        }
+                        // 联系对话 → RPA：只预填该会话的 IM 包名，用户新建脚本时
+                        // 少填一项；发行版不再据此生成任何 Demo 脚本。
+                        TextButton(onClick = {
+                            activity.startActivity(
+                                RpaActivity.intent(activity, channel.imPackage),
+                            )
+                        }) {
+                            Text(stringResource(R.string.float_rpa_channels_button))
                         }
                         IconButton(
                             onClick = { deleting = channel },

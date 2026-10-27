@@ -169,6 +169,13 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:label="@string/float_playbook_title" />
 
+        <!-- RPA 自动化：脚本库 / 可拖拽编排 / 布局分析器 / 以图找图（vendor/RPA 独立模块） -->
+        <activity
+            android:name=".floatball.rpa.RpaActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:label="@string/float_rpa_title" />
+
         <!-- VA-2 U1：全局我方人设标签库（floatball 自有页面，入口在画像页「我的人设」屏顶部） -->
         <activity
             android:name=".floatball.SelfPersonaLibraryActivity"

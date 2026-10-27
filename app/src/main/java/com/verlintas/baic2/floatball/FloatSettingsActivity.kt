@@ -86,6 +86,7 @@ import com.verlintas.baic2.floatball.auto.InjectorSelector
 import com.verlintas.baic2.floatball.auto.ReadinessGate
 import com.verlintas.baic2.floatball.auto.ReadinessReport
 import com.verlintas.baic2.floatball.auto.ScreenCapture
+import com.verlintas.baic2.floatball.rpa.RpaActivity
 import com.verlintas.baic2.floatball.update.AppUpdateManager
 import com.verlintas.baic2.floatball.update.CheckOutcome
 import com.verlintas.baic2.floatball.update.UpdateOptionalOverlay
@@ -673,6 +674,34 @@ private fun AdvisorSettingsScreen(
                     }
                 }
 
+                // RPA 自动化（vendor/RPA 独立模块）：
+                // 可拖拽动作编排 + a11y/视觉双线路定位；入口与话术库同级。
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = scheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable {
+                            context.startActivity(
+                                RpaActivity.intent(context)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
+                        Text(
+                            text = stringResource(R.string.float_rpa_settings_entry),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            text = stringResource(R.string.float_rpa_settings_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 SectionLabel(stringResource(R.string.float_settings_session))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(onClick = {
@@ -949,6 +978,23 @@ private fun AutoAdvisorSection(
                 },
             )
         }
+    }
+
+    Text(
+        text = stringResource(R.string.float_settings_pace_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = scheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 12.dp),
+    )
+    // 节奏档：只影响「派发前随机延迟」，不改变感知轮询与 LLM 耗时；
+    // 未命中档位（历史遗留自定义值）在 UI 上表现为均未选中，仍按存储区间生效。
+    // 标签带区间说明较宽，每行 2 枚防挤出屏幕。
+    PACE_CHOICE_OPTIONS.chunked(2).forEach { chunk ->
+        ChoiceRow(
+            options = chunk,
+            selected = settings.autoPaceMinMs to settings.autoPaceMaxMs,
+            label = { res -> stringResource(res) },
+        ) { prefs.setAutoPace(it.first, it.second) }
     }
 
     var whitelistDialog by remember { mutableStateOf(false) }
@@ -1393,8 +1439,12 @@ private val SESSION_OPTIONS = listOf(
     LabeledOption(0L, R.string.float_settings_session_unlimited),
 )
 
-/** 无人值守 RPA 休憩循环：工作段档（停歇=0 时该档不生效）。 */
+/**
+ * 无人值守 RPA 休憩循环：工作段档（停歇=0 时该档不生效）。
+ * 2026-10-27：新增 1 分钟档（真机快速复测用，原最小 5 分钟反馈太慢）。
+ */
 private val WORK_SEGMENT_OPTIONS = listOf(
+    LabeledOption(60_000L, R.string.float_settings_work_1),
     LabeledOption(5 * 60_000L, R.string.float_settings_work_5),
     LabeledOption(10 * 60_000L, R.string.float_settings_work_10),
     LabeledOption(15 * 60_000L, R.string.float_settings_work_15),
@@ -1402,9 +1452,21 @@ private val WORK_SEGMENT_OPTIONS = listOf(
 
 private val REST_SEGMENT_OPTIONS = listOf(
     LabeledOption(0L, R.string.float_settings_rest_off),
+    LabeledOption(60_000L, R.string.float_settings_rest_1),
     LabeledOption(5 * 60_000L, R.string.float_settings_rest_5),
     LabeledOption(10 * 60_000L, R.string.float_settings_rest_10),
     LabeledOption(20 * 60_000L, R.string.float_settings_rest_20),
+)
+
+/**
+ * 自动档「回复节奏」档（2026-10-27）：派发前的拟人随机延迟区间（方案 §8.2），
+ * 快速档专供真机联调压缩等待，默认仍为拟人档。
+ */
+private val PACE_CHOICE_OPTIONS = listOf(
+    LabeledOption(AdvisorPrefs.PACE_FAST, R.string.float_settings_pace_fast),
+    LabeledOption(AdvisorPrefs.PACE_STANDARD, R.string.float_settings_pace_standard),
+    LabeledOption(AdvisorPrefs.PACE_HUMAN, R.string.float_settings_pace_human),
+    LabeledOption(AdvisorPrefs.PACE_PATIENT, R.string.float_settings_pace_patient),
 )
 
 private val BACKOFF_OPTIONS = listOf(

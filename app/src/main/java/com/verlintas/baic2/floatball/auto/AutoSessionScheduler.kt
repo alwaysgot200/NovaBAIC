@@ -21,9 +21,13 @@ package com.verlintas.baic2.floatball.auto
 
 import android.content.Context
 import android.util.Log
+import com.verlintas.baic2.core.model.ChatRole
+import com.verlintas.baic2.floatball.AdvisorPrefs
 import com.verlintas.baic2.floatball.ScreenAdvisor
 import com.verlintas.baic2.floatball.advisor.ContactRepository
+import com.verlintas.baic2.floatball.contact.ContactHistoryGateway
 import com.verlintas.baic2.floatball.contact.ContactRef
+import com.verlintas.baic2.floatball.director.Gatekeeper
 import com.verlintas.baic2.floatball.home.AdvisorRunState
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -57,6 +61,10 @@ class AutoSessionScheduler @Inject constructor(
     private val contacts: ContactRepository,
     private val navigator: ImChatNavigator,
     private val dispatcher: ActionDispatcher,
+    private val gatekeeper: Gatekeeper,
+    private val replyResolver: ReplyResolver,
+    private val historyGateway: ContactHistoryGateway,
+    private val prefs: AdvisorPrefs,
     private val runState: AdvisorRunState,
     @ApplicationContext private val context: Context,
 ) {
@@ -224,9 +232,8 @@ class AutoSessionScheduler @Inject constructor(
             updateStatus(key, Status.DONE)
             return
         }
-        val draft = result.draft
         val conversationId = result.conversationId
-        if (draft.isNullOrBlank() || conversationId == null || conversationId <= 0L) {
+        if (conversationId == null || conversationId <= 0L) {
             updateStatus(key, Status.DONE)
             return
         }
@@ -235,16 +242,56 @@ class AutoSessionScheduler @Inject constructor(
             return
         }
 
-        updateStatus(key, Status.NAVIGATING)
-        publish()
-        val nav = navigator.openChat(pending.imPackage, pending.channelName)
+        // v8：自动档唯一回复出口。落库全文只是分析素材；发送正文必须由
+        // ReplyResolver 产出（标记抽取 → 代言者修复调用 → 失败跳过），
+        // 绝不再把 ASSISTANT 全文直接塞进发送通道。
+        val targetChars = prefs.state.value.answerTargetChars
+        val recentMessages = runCatching {
+            historyGateway.recentMessages(conversationId, DRAFT_LOOKBACK)
+        }.getOrNull().orEmpty()
+        val priorReplies = recentMessages
+            .filter { it.role == ChatRole.ASSISTANT && it.content != result.draft }
+            .takeLast(GATE_REPEAT_WINDOW)
+            .mapNotNull { SendableDraftExtractor.extract(it.content, targetChars)?.text }
+        val sendable = replyResolver.resolve(
+            full = result.draft,
+            answerTargetChars = targetChars,
+            incoming = pending.body,
+            recentSent = priorReplies,
+        )
+        if (sendable == null) {
+            dispatcher.logNoSendable(contact.contactId, conversationId, REASON_NO_REPLY)
+            updateStatus(key, Status.DONE, REASON_NO_REPLY)
+            return
+        }
         val request = AutoSendRequest(
             contactId = contact.contactId,
             contactName = contact.displayName,
             conversationId = conversationId,
             imPackage = pending.imPackage,
-            draft = draft,
+            draft = sendable.text,
+            draftSource = sendable.source,
         )
+        // 审查官必须在线：多会话调度此前绕过了 Gatekeeper，这是 v8 修复的
+        // 第二个「代理没真正扮演角色」缺口。硬审拒绝只跳过/降级，绝不发送。
+        val maxChars = (targetChars * 2).coerceAtLeast(MIN_GATE_CHARS)
+        val rejection = gatekeeper.deterministicReview(
+            sendable.text,
+            priorReplies,
+            maxChars,
+            auto = true,
+            tactics = advisor.tacticRulingFor(contact.contactId),
+            emotion = advisor.emotionRouteFor(contact.contactId),
+        ) ?: gatekeeper.llmReview(sendable.text, priorReplies)
+        if (rejection != null) {
+            dispatcher.logGateBlocked(request, rejection.reason)
+            updateStatus(key, Status.DONE, "gate_blocked:${rejection.reason}")
+            return
+        }
+
+        updateStatus(key, Status.NAVIGATING)
+        publish()
+        val nav = navigator.openChat(pending.imPackage, pending.channelName)
         if (nav is ImChatNavigator.NavResult.Fail) {
             dispatcher.degradeToDraft(request, nav.reason)
             recordFailure(key)
@@ -343,7 +390,7 @@ class AutoSessionScheduler @Inject constructor(
         }.getOrDefault(imPackage)
     }
 
-    private companion object {
+    internal companion object {
         const val TAG = "AutoSessionScheduler"
 
         /** 同一目标通知去抖（方案 §5.4.3）。 */
@@ -359,5 +406,17 @@ class AutoSessionScheduler @Inject constructor(
         const val MAX_SENDS_PER_TARGET_HOUR = 20
         const val MAX_SENDS_GLOBAL_HOUR = 60
         const val HOUR_MS = 60 * 60 * 1000L
+
+        /** 回复抽取/防复读的回读窗口（最新一条 + 近几条）。 */
+        private const val DRAFT_LOOKBACK = 6
+
+        /** 送审时附带的近期纯回复条数。 */
+        private const val GATE_REPEAT_WINDOW = 3
+
+        /** 硬审超长判定下限（与陪伴窗口同口径）。 */
+        private const val MIN_GATE_CHARS = 240
+
+        /** v8：抽取与修复调用都拿不到可发送回复时的台账原因码。 */
+        const val REASON_NO_REPLY = "no_sendable_reply"
     }
 }

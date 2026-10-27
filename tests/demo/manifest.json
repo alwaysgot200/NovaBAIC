@@ -20,28 +20,68 @@
   "client": {
     "selfPersona": {
       "tag": "demo-me",
-      "note": "业务骨干/产品经理，长期目标=升职加薪，表达稳重"
+      "note": "程序员，独立开发「自动炒股」软件并已发布 v1；务实、稳重、细节控，表达先结论后细节"
     },
+    "selfFields": {
+      "my_occupation": "程序员",
+      "my_position": "客户端/后端开发（独立负责「自动炒股」软件）",
+      "my_product": "「自动炒股」软件（已发布 v1）：行情接入、策略回测、模拟下单三条主链路跑通，有少量种子用户",
+      "my_hardSkills": "Kotlin,Android,量化策略,自动化测试",
+      "my_personality": "务实,稳重,细节控,有目标感",
+      "my_aspiration": "professional,ambitious",
+      "my_style": "先结论后细节，短句口语，不邀功，不空泛表态",
+      "my_taboo": "不夸大成果、不承诺收益、不替领导做决定、不在深夜追问私事",
+      "my_defaultGoal": "让领导了解「自动炒股」v1 的真实进展与质量意识，赢得认可与鼓励，争取本季度晋升与加薪"
+    },
+    "materials": [
+      { "content": "「自动炒股」v1 已发布：行情接入、策略回测、模拟下单三条主链路跑通，编译与回归脚本齐全" },
+      { "content": "v1 拉了 10 个种子用户试用，收到 3 条有效反馈，已修掉 2 个崩溃，其余整理进 v1.1 清单" },
+      { "content": "给 v1 补了回测对账：同一策略连续跑三遍结果一致，每笔模拟单都能查到日志" },
+      { "content": "部署脚本从 6 步手工操作压到 1 条命令，回归时间从 40 分钟降到 8 分钟" },
+      { "content": "每周五做一次质量复盘：列本周 bug、根因、下周预防动作，控制在半页" },
+      { "content": "正在把策略参数改成可配置，先小步灰度，避免一次改太多导致回测不可复现" }
+    ],
     "proactive": {
       "enabled": true,
       "dailyCap": 3,
       "minGapHours": 0,
-      "quietStart": "23:00",
-      "quietEnd": "07:00",
+      "quietStart": "00:00",
+      "quietEnd": "00:00",
       "preferSmalltalk": true
     },
     "contacts": [
       {
         "title": "吴瑞曦topwayricky",
         "imPackage": "com.tencent.mm",
-        "goal": "我的领导。工作要求严格，喜欢半夜发工作指令；长期目标：升职加薪",
-        "stageIntent": "争取本季度晋升",
+        "goal": "我的直属领导。工作要求严格、是工作狂、对细节和程序要求很高。当下目标：让他了解我在「自动炒股」软件上的工作成果，赢得好感与鼓励；长期目标：升职加薪",
+        "stageIntent": "本季度用可验证的 v1 成果与质量复盘争取晋升/加薪",
         "engagement": "proactive",
         "privacy": "handoff",
         "identity": "领导",
         "chatStyle": "严肃",
         "autoTarget": true,
-        "group": false
+        "group": false,
+        "fields": {
+          "occupation": "技术管理者",
+          "position": "我的直属领导",
+          "company": "同一家公司",
+          "industry": "软件/量化工具",
+          "seniority": "director",
+          "personality": "严格,工作狂,细节控,结果导向",
+          "commStyle": "direct",
+          "formality": "formal",
+          "humorStyle": "serious",
+          "relationType": "superior",
+          "relationStage": "上下级：信任建立中，看重交付质量与过程透明",
+          "needs": "要可验证的进展、清晰的风险与下一步；对细节、质量、进度要求高",
+          "painPoints": "最反感空泛汇报、只抛问题不给方案、夸大成果",
+          "taboos": "空泛汇报、越级汇报、夸大成果、半夜追问私事、只抛问题不给方案、临时改口径",
+          "preferredTime": "工作时段 09:30-19:00；他常深夜发指令，但不要求即时回复",
+          "interests": "量化交易,工程效率,团队管理",
+          "recentTopics": "v1 交付质量,回测一致性,风险控制",
+          "loveLanguage": "practical_help,praise",
+          "hardSkills": "技术管理,架构评审,质量把关"
+        }
       },
       {
         "title": "吴瑞曦",
@@ -52,7 +92,15 @@
         "identity": "领导",
         "chatStyle": "严肃",
         "autoTarget": false,
-        "group": false
+        "group": false,
+        "fields": {
+          "position": "我的直属领导",
+          "personality": "严格,工作狂,细节控,结果导向",
+          "commStyle": "direct",
+          "formality": "formal",
+          "humorStyle": "serious",
+          "relationType": "superior"
+        }
       },
       {
         "title": "张敏",
@@ -63,7 +111,14 @@
         "identity": "同事",
         "chatStyle": "随和",
         "autoTarget": false,
-        "group": false
+        "group": false,
+        "fields": {
+          "occupation": "HRBP",
+          "position": "晋升评审接口人",
+          "personality": "随和,流程导向",
+          "commStyle": "polite",
+          "relationType": "colleague"
+        }
       },
       {
         "title": "demo 项目群",
@@ -72,7 +127,12 @@
         "engagement": "mute",
         "privacy": "handoff",
         "autoTarget": false,
-        "group": true
+        "group": true,
+        "fields": {
+          "groupType": "work",
+          "groupAtmosphere": "formal",
+          "groupTaboos": "不在群里公开吐槽领导、不发与项目无关的广告"
+        }
       },
       {
         "title": "陌生客户",
@@ -81,7 +141,12 @@
         "engagement": "reactive",
         "privacy": "handoff",
         "autoTarget": false,
-        "group": false
+        "group": false,
+        "fields": {
+          "occupation": "外部合作方",
+          "personality": "谨慎",
+          "relationType": "partner"
+        }
       }
     ]
   }

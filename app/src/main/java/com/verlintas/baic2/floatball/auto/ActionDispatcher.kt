@@ -34,6 +34,7 @@ import com.verlintas.baic2.floatball.AdvisorPrefs
 import com.verlintas.baic2.floatball.FloatBallService
 import com.verlintas.baic2.floatball.advisor.data.AdvisorDatabase
 import com.verlintas.baic2.floatball.advisor.data.DirectorLogEntity
+import com.verlintas.baic2.floatball.advisor.data.ROUTE_NOOP
 import com.verlintas.baic2.floatball.advisor.data.ROUTE_REPLY
 import com.verlintas.baic2.floatball.advisor.data.TRIGGER_AUTO
 import com.verlintas.baic2.floatball.director.AdvisorNotificationListener
@@ -141,9 +142,58 @@ internal object SendSequence {
     const val REASON_SEND_NOT_FOUND = "send_button_not_found"
     const val REASON_SEND_TAP_FAILED = "send_tap_failed"
 
+    /** 发送前页面守卫判定「当前不是目标会话页」（2026-10-27 通讯录页误发事故）。 */
+    const val REASON_WRONG_CONVERSATION = "wrong_conversation"
+
+    /** 点击后既看不到发送按钮、文本回读也未命中：证据不足，按失败降级（不重试防重发）。 */
+    const val REASON_SEND_NOT_VERIFIED = "send_not_verified"
+
+    /**
+     * 失败原因是否「确定未发出」（2026-10-27 通道降级链闸）：只有确定没发出去的
+     * 失败才允许换通道再来一遍。`send_not_verified` 是**不确定**（可能已经发出），
+     * 宁可降级起草档，绝不赌第二枪造成重发。
+     */
+    fun safeToRetryElsewhere(reason: String?): Boolean {
+        val code = reason?.substringBefore(':') ?: return false
+        return code in RETRYABLE_ON_OTHER_CHANNEL
+    }
+
+    private val RETRYABLE_ON_OTHER_CHANNEL = setOf(
+        REASON_A11Y_DISCONNECTED,
+        REASON_WRONG_FOREGROUND,
+        REASON_INPUT_FAILED,
+        REASON_SEND_NOT_FOUND,
+        REASON_SEND_TAP_FAILED,
+    )
+
+    /** 明细规范化：台账 reason 以 `:` 分段，明细内不再出现冒号/空白/中文标点。 */
+    fun detail(raw: String): String = raw.trim()
+        .map { if (it.isLetterOrDigit() || it == '_' || it == '.' || it == '-') it else '_' }
+        .joinToString("")
+        .take(DETAIL_MAX_CHARS)
+        .ifEmpty { "unknown" }
+
+    /** 追加失败明细（无明细时原样返回原因码）。 */
+    private fun withDetail(reason: String, detail: String?): String =
+        if (detail.isNullOrBlank()) reason else "$reason:$detail"
+
+    /** 异常 → 明细素材（类型名 + 消息，已规范化）。 */
+    private fun detailOf(result: Result<Unit>): String? {
+        if (result.isSuccess) return null
+        val error = result.exceptionOrNull()
+        val raw = listOfNotNull(error?.javaClass?.simpleName, error?.message)
+            .joinToString("_")
+            .ifBlank { "unknown" }
+        return detail(raw)
+    }
+
     /** 执行完整序列（解耦形态）：返回 null = 发送成功，否则为失败原因码。
      *  [evidence] 提供时发送后回读上屏（§四.A.3），失败按 SEND_TAP_FAILED 处理；
-     *  [focusStep] 为注入前聚焦步（§四.A.4，best-effort，失败不阻断注入）。 */
+     *  [proofFinder] 提供时改用三态像素证据（按钮仍在=未发出，可重定位再点一次；
+     *  证据不足=失败但不重点，防重复发送）；
+     *  [focusStep] 为注入前聚焦步（§四.A.4，best-effort，失败不阻断注入）；
+     *  [trace] 提供时逐段记账（focus/inject/locate/tap/proof），回答「RPA 动作
+     *  慢在哪一步」——2026-10-27 真机取证一次落同一行台账。 */
     suspend fun run(
         injector: InputInjector,
         locator: SendLocator,
@@ -151,31 +201,110 @@ internal object SendSequence {
         imPackage: String,
         draft: String,
         evidence: SendEvidenceFinder? = null,
+        proofFinder: SendProofFinder? = null,
         focusStep: (suspend () -> Boolean)? = null,
+        trace: TimingTrace? = null,
     ): String? {
         if (!injector.available) return injector.unavailableReason
         // 前台包名校验：不在目标 IM 的会话界面绝不注入（防错发到别的 App）。
         if (foregroundPackage != imPackage) return REASON_WRONG_FOREGROUND
         // 聚焦步（best-effort）：失败不阻断——SET_TEXT/节点注入可自选目标。
-        runCatching { focusStep?.invoke() }
+        val focusBlock: suspend () -> Unit = { runCatching { focusStep?.invoke() }; Unit }
+        if (trace != null) trace.stageSuspend("focus") { focusBlock() } else focusBlock()
         // 第 1 步：注入文本（实现方自决 SET_TEXT / input text / 剪贴板+粘贴）；
-        // 失败重试一次（界面可能尚未就绪）。
-        if (!injectWithRetry(injector, draft)) return REASON_INPUT_FAILED
+        // 失败重试一次（界面可能尚未就绪）。失败明细随原因码返回（真机排障要
+        // 区分「无焦点可编辑节点」/「shell 拒绝」/「剪贴板失败」，2026-10-27）。
+        val injectFailure = if (trace != null) {
+            trace.stageSuspend("inject") { injectWithRetry(injector, draft) }
+        } else {
+            injectWithRetry(injector, draft)
+        }
+        injectFailure?.let { return withDetail(REASON_INPUT_FAILED, it) }
         // 第 2 步：定位发送按钮（实际存在才继续）。
-        val target = locateRetry(locator) ?: return REASON_SEND_NOT_FOUND
+        var target = if (trace != null) {
+            trace.stageSuspend("locate") { locateRetry(locator) }
+        } else {
+            locateRetry(locator)
+        }
+        if (target == null) {
+            // 2026-10-27 真机稳定性修复（12:16/12:17 send_button_not_found）：
+            // 定位失败时草稿已注入，旧逻辑直接放弃且**不清空输入框**——残留
+            // 草稿会与下一次 PASTE 叠加（12:26 单气泡文本重复两遍的嫌疑路径）。
+            // 先清空，再重走一轮聚焦→注入→定位（页面漂移/键盘形态变化多半
+            // 能自愈）；仍失败才清空降级，绝不把半成品留在输入框里。
+            runCatching { injector.clearInput() }
+            if (trace != null) trace.stageSuspend("focus2") { focusBlock() } else focusBlock()
+            val reinjected = if (trace != null) {
+                trace.stageSuspend("inject2") { injectWithRetry(injector, draft) }
+            } else {
+                injectWithRetry(injector, draft)
+            }
+            if (reinjected != null) {
+                runCatching { injector.clearInput() }
+                return withDetail(REASON_INPUT_FAILED, reinjected)
+            }
+            target = if (trace != null) {
+                trace.stageSuspend("locate2") { locateRetry(locator) }
+            } else {
+                locateRetry(locator)
+            } ?: run {
+                runCatching { injector.clearInput() }
+                return REASON_SEND_NOT_FOUND
+            }
+        }
+        val sendTarget = target ?: return REASON_SEND_NOT_FOUND
         // 第 3 步：点击发送；点击未生效则重定位一次再点，仍失败降级。
-        if (!tap(injector, target)) {
+        var tappedTarget = sendTarget
+        val tapped = if (trace != null) trace.stageSuspend("tap") { tap(injector, sendTarget) }
+        else tap(injector, sendTarget)
+        if (!tapped) {
             val relocated = locator.locate()
             if (relocated == null || !tap(injector, relocated)) {
                 // best effort 清空输入框残留，避免降级后人肉档面对半成品。
                 runCatching { injector.clearInput() }
                 return REASON_SEND_TAP_FAILED
             }
+            tappedTarget = relocated
         }
-        // 第 4 步：发送后上屏回读（§四.A.3）——宁降级不假成功。
-        if (evidence != null) {
-            val clip = PostSendVerifier.clipOf(draft)
-            if (!PostSendVerifier.verify(evidence, clip)) {
+        // 第 4 步：发送后证据（§四.A.3）——宁降级不假成功。
+        // 模式 B 优先用三态像素证据：发送按钮仍在原位说明草稿还在输入框，
+        // 文本回读即使命中也是输入框内容（2026-10-27 真机 auto_sent 假成功根因）。
+        val clips = PostSendVerifier.clipsOf(draft)
+        if (proofFinder != null) {
+            var proof = if (trace != null) {
+                trace.stageSuspend("proof") { proofFinder.proof(clips, tappedTarget) }
+            } else {
+                proofFinder.proof(clips, tappedTarget)
+            }
+            if (proof == SendProof.NOT_SENT) {
+                // 强证据「未发出」：重定位再点一次，然后重新取证。
+                val relocated = locator.locate()
+                if (relocated != null && tap(injector, relocated)) {
+                    tappedTarget = relocated
+                    proof = if (trace != null) {
+                        trace.stageSuspend("proof2") { proofFinder.proof(clips, relocated) }
+                    } else {
+                        proofFinder.proof(clips, relocated)
+                    }
+                }
+            }
+            if (proof != SendProof.SENT) {
+                runCatching { injector.clearInput() }
+                return if (proof == SendProof.NOT_SENT) {
+                    // 强证据「按钮还在原位」：自己也确认没发出去，换通道重试是安全的。
+                    withDetail(REASON_SEND_TAP_FAILED, "proof_not_sent")
+                } else {
+                    REASON_SEND_NOT_VERIFIED
+                }
+            }
+        } else if (evidence != null) {
+            // 多前缀回退（8 字主片段 + 6 字备选）降低 OCR 跨行/易错字符假阴性。
+            val verified = if (trace != null) {
+                trace.stageSuspend("verify") { PostSendVerifier.verify(evidence, clips) }
+            } else {
+                PostSendVerifier.verify(evidence, clips)
+            }
+            if (!verified) {
                 runCatching { injector.clearInput() }
                 return REASON_SEND_TAP_FAILED
             }
@@ -192,10 +321,15 @@ internal object SendSequence {
         draft = draft,
     )
 
-    private suspend fun injectWithRetry(injector: InputInjector, draft: String): Boolean {
-        if (injector.type(draft).isSuccess) return true
+    /** 注入重试一次；返回 null = 成功，否则为最后一次失败的明细（台账可读）。 */
+    private suspend fun injectWithRetry(injector: InputInjector, draft: String): String? {
+        val first = injector.type(draft)
+        if (first.isSuccess) return null
         delay(INJECT_RETRY_DELAY_MS)
-        return injector.type(draft).isSuccess
+        val second = injector.type(draft)
+        if (second.isSuccess) return null
+        // 两次都失败：优先报第二次（更接近放弃时刻的真实状态）。
+        return detailOf(second) ?: detailOf(first) ?: "unknown"
     }
 
     private suspend fun locateRetry(locator: SendLocator): SendTarget? {
@@ -212,6 +346,9 @@ internal object SendSequence {
     private const val INJECT_RETRY_DELAY_MS = 600L
     private const val FIND_RETRY_DELAY_MS = 900L
     private const val TAP_DELAY_MS = 400L
+
+    /** 失败明细最长字符数（台账 reason 一行的可读上限）。 */
+    private const val DETAIL_MAX_CHARS = 48
 }
 
 /**
@@ -232,6 +369,7 @@ class ActionDispatcher @Inject constructor(
     private val shizukuInjector: ShizukuInjector,
     private val ocrSendLocator: OcrSendLocator,
     private val imNavigator: ImNavigator,
+    private val imChatNavigator: ImChatNavigator,
     private val prefs: AdvisorPrefs,
     private val db: AdvisorDatabase,
     @ApplicationContext private val context: Context,
@@ -242,6 +380,11 @@ class ActionDispatcher @Inject constructor(
     /**
      * 执行一次自动发送：总闸+白名单前置闸 → 三步状态机 → 指纹入账 →
      * director_logs 落库 → 失败降级起草通知。全程不抛异常（降级矩阵纪律）。
+     *
+     * 2026-10-27 真机修复：执行面改为**按序降级链**（[InjectorSelector.plan]）。
+     * auto 档下模式 A 失败且「确定未发出」时自动回落模式 B（Shizuku + OCR 定位）
+     * 再走一遍完整三步；证据不足（`send_not_verified`）绝不换道重试，防重发。
+     * 通道链与分段耗时同时落台账（`ch=`/`auto_timing:`）与 logcat，供回放定位。
      */
     suspend fun dispatch(request: AutoSendRequest): AutoSendResult {
         val settings = prefs.state.value
@@ -253,67 +396,22 @@ class ActionDispatcher @Inject constructor(
         if (veto != null) return AutoSendResult.Rejected(veto)
 
         val fingerprint = SendFingerprint.of(request.draft)
-        val failure = withContext(Dispatchers.Default) {
-            val channel = InjectorSelector.select(
+        val trace = TimingTrace()
+        val attempt = withContext(Dispatchers.Default) {
+            val plan = InjectorSelector.plan(
                 configured = settings.autoExecutorChannel,
                 a11yReady = bridge.connected.value,
                 shizukuReady = shizukuInjector.available,
             )
-            // 发送后上屏回读证据源（§四.A.3）：A=a11y 节点树；B=当前帧 OCR。
-            val evidence: SendEvidenceFinder? = when (channel) {
-                InjectorChannel.A11y -> SendEvidenceFinder { clip -> bridge.findText(clip).isNotEmpty() }
-                InjectorChannel.Shizuku -> SendEvidenceFinder { clip -> ocrSendLocator.frameContains(clip) }
-                InjectorChannel.DraftFallback -> null
-            }
-            // 聚焦步（§四.A.4）：A 期仅模式 A 接（无真实焦点先 tap 首个可编辑
-            // 节点）；模式 B 的输入框坐标定位随 B 期找图落地，A 期 no-op。
-            val focusStep: (suspend () -> Boolean)? = if (channel == InjectorChannel.A11y) {
-                { assists.focusFirstEditable() }
-            } else {
-                null
-            }
-            // 会话导航（§四.A.2）：前台不在目标 IM → 通知 contentIntent 拉起 +
-            // 双确认；失败按 REASON_NAV_FAILED 系降级起草（人肉档现状不变）。
-            val foregroundPackage = probeForeground(channel)
-            val effectiveForeground = if (foregroundPackage == request.imPackage) {
-                foregroundPackage
-            } else {
-                val nav = imNavigator.navigate(
-                    imPackage = request.imPackage,
-                    contactId = request.contactId,
-                    rawTitleHint = request.contactName,
-                )
-                if (nav.outcome != ImNavigator.NavOutcome.NAVIGATED) {
-                    return@withContext "${ImNavigator.REASON_NAV_FAILED}:${nav.outcome.name.lowercase()}"
-                }
-                probeForeground(channel)
-            }
-            runCatching {
-                when (channel) {
-                    InjectorChannel.A11y -> SendSequence.run(
-                        injector = a11yInjector,
-                        locator = A11ySendLocator(bridge),
-                        foregroundPackage = effectiveForeground,
-                        imPackage = request.imPackage,
-                        draft = request.draft,
-                        evidence = evidence,
-                        focusStep = focusStep,
-                    )
-                    InjectorChannel.Shizuku -> SendSequence.run(
-                        injector = shizukuInjector,
-                        locator = ocrSendLocator,
-                        foregroundPackage = effectiveForeground,
-                        imPackage = request.imPackage,
-                        draft = request.draft,
-                        evidence = evidence,
-                        focusStep = focusStep,
-                    )
-                    // C（起草档）不算「托管」：无可用注入通道，直接挂起草通知。
-                    InjectorChannel.DraftFallback -> REASON_NO_EXECUTOR
-                }
-            }.getOrElse { REASON_DISPATCH_ERROR }
+            executeChain(plan, request, trace)
         }
-        val base = if (failure == null) "auto_sent:$fingerprint" else "$REASON_DISPATCH_FAILED:$failure:$fingerprint"
+        Log.i(AutoTiming.TAG, "${trace.render()} fingerprint=$fingerprint")
+        val failure = attempt.failure
+        val base = if (failure == null) {
+            "auto_sent:$fingerprint:ch=${attempt.chain()}"
+        } else {
+            "$REASON_DISPATCH_FAILED:$failure:$fingerprint:ch=${attempt.chain()}"
+        }
         logSend(request, withDraftSource(base, request.draftSource))
         ledger.record(request.contactId, fingerprint, base, System.currentTimeMillis())
         return if (failure == null) {
@@ -324,6 +422,182 @@ class ActionDispatcher @Inject constructor(
         }
     }
 
+    /** 一次派发的通道链结果：[failure]=null 表示成功；[chain] 记录实际走过的通道。 */
+    private data class ChainAttempt(
+        val failure: String?,
+        val channels: List<InjectorChannel>,
+        val used: InjectorChannel?,
+    ) {
+        /** 通道链文本（`A11y>Shizuku`；成功时附加 `=>Shizuku` 标明生效通道）。 */
+        fun chain(): String {
+            val walk = channels.joinToString(">") { it.name }
+            return when {
+                used != null && channels.size > 1 -> "$walk=>${used.name}"
+                else -> walk
+            }
+        }
+    }
+
+    /**
+     * 按 [plan] 顺序尝试发送（每个通道跑完整三步序列 + 各自的前台探针/证据源）。
+     * 换道条件见 [SendSequence.safeToRetryElsewhere]；计划为空 = 无可用执行通道，
+     * 直接按 C 档降级起草。
+     */
+    private suspend fun executeChain(
+        plan: List<InjectorChannel>,
+        request: AutoSendRequest,
+        trace: TimingTrace,
+    ): ChainAttempt {
+        if (plan.isEmpty()) {
+            trace.add("no_executor", 0L)
+            return ChainAttempt(REASON_NO_EXECUTOR, listOf(InjectorChannel.DraftFallback), null)
+        }
+        val walked = ArrayList<InjectorChannel>()
+        var failure: String? = null
+        for ((index, channel) in plan.withIndex()) {
+            walked += channel
+            val reason = trace.stageSuspend("send_${channel.name.lowercase()}") {
+                attemptOn(channel, request, trace)
+            }
+            if (reason == null) {
+                return ChainAttempt(null, walked.toList(), channel)
+            }
+            failure = reason
+            val last = index == plan.lastIndex
+            // 确定未发出才换下一条通道（A 的病灶多半是节点树不可用，B 走 Shizuku/OCR）；
+            // 证据不足/最后一条都在此收口，交调用方降级起草。
+            if (last || !SendSequence.safeToRetryElsewhere(reason)) break
+            Log.w(TAG, "channel ${channel.name} failed($reason), falling back to ${plan[index + 1].name}")
+        }
+        return ChainAttempt(failure, walked.toList(), null)
+    }
+
+    /**
+     * 单通道完整尝试：前台探针 → 必要时会话导航（一次） → 三步发送 + 三态证据。
+     * 返回 null = 该通道发送成功（或有证据的已发出），否则为失败原因码（可带明细）。
+     */
+    private suspend fun attemptOn(
+        channel: InjectorChannel,
+        request: AutoSendRequest,
+        trace: TimingTrace,
+    ): String? {
+        // 发送后上屏回读证据源（§四.A.3）：A=a11y 节点树；B=当前帧 OCR。
+        val evidence: SendEvidenceFinder? = when (channel) {
+            InjectorChannel.A11y -> SendEvidenceFinder { clip -> bridge.findText(clip).isNotEmpty() }
+            InjectorChannel.Shizuku -> SendEvidenceFinder { clip -> ocrSendLocator.frameContains(clip) }
+            InjectorChannel.DraftFallback -> null
+        }
+        // 模式 B 三态证据（2026-10-27 真机假成功修复）：像素可见发送按钮时，
+        // 「按钮仍在原位」是「未发出」的强证据，优先于纯文本回读。
+        val proofFinder: SendProofFinder? = when (channel) {
+            InjectorChannel.Shizuku -> SendProofFinder { clips, tapped ->
+                ocrSendLocator.sendProof(clips, tapped)
+            }
+            else -> null
+        }
+        // 聚焦步（§四.A.4）：模式 A 先 tap 首个可编辑节点；模式 B 无节点树，
+        // 按当前帧 OCR 判定输入栏形态（语音条先切键盘）再点输入框，并清空
+        // 聚焦时可能误触的字符——否则剪贴板 PASTE 无焦点会静默丢失。
+        // 2026-10-27 快通道：IME 已弹起（dumpsys，~115ms）即输入框已聚焦，
+        // 跳过取帧/OCR/tap 整段（真机实测 2.2~2.5s → ~0.15s，回复慢归因优化）。
+        val focusStep: (suspend () -> Boolean)? = when (channel) {
+            InjectorChannel.A11y -> { { assists.focusFirstEditable() } }
+            InjectorChannel.Shizuku -> {
+                {
+                    val focused = ocrSendLocator.focusInput(shizukuInjector) { shizukuInjector.imeShown() }
+                    // 无论聚焦判定成功与否都清一次输入框：PASTE 是「插入」语义，
+                    // 残留草稿会让同一条回复叠加两份（2026-10-27 真机 12:26 单
+                    // 气泡文本重复两遍；旧逻辑只在 focused=true 时清空）。
+                    runCatching { shizukuInjector.clearInput() }
+                    focused
+                }
+            }
+            InjectorChannel.DraftFallback -> null
+        }
+        // 会话导航（§四.A.2）：前台不在目标 IM → 通知 contentIntent 拉起 +
+        // 双确认；失败按 REASON_NAV_FAILED 系降级起草（人肉档现状不变）。
+        // 导航成功后再探一次：后续三步用导航后的真实前台。
+        val foregroundPackage = trace.stageSuspend("fg_${channel.name.lowercase()}") {
+            probeForeground(channel)
+        }
+        val effectiveForeground = if (foregroundPackage == request.imPackage) {
+            foregroundPackage
+        } else {
+            val nav = trace.stageSuspend("nav") {
+                imNavigator.navigate(
+                    imPackage = request.imPackage,
+                    contactId = request.contactId,
+                    rawTitleHint = request.contactName,
+                )
+            }
+            if (nav.outcome != ImNavigator.NavOutcome.NAVIGATED) {
+                return "${ImNavigator.REASON_NAV_FAILED}:${nav.outcome.name.lowercase()}"
+            }
+            probeForeground(channel)
+        }
+        // 发送前会话页守卫（2026-10-27 真机 12:16/12:17）：导航自称 Ok 后
+        // 页面可能已漂到主列表/通讯录页（微信主列表与聊天页同为 LauncherUI），
+        // 旧链路只校验前台包名 → 在非会话页注入、locate 必败并留下草稿。
+        // 仅 Shizuku 通道做视觉守卫（无 a11y 节点树可查）；判定 null=无法判定，
+        // 一律放行，绝不因 OCR 抖动拦住正常发送。
+        if (channel == InjectorChannel.Shizuku) {
+            val verdict = trace.stageSuspend("guard") {
+                imChatNavigator.chatPageTitleMatches(request.imPackage, request.contactName)
+            }
+            if (verdict == false) {
+                Log.w(TAG, "guard: not on '${request.contactName}' chat page, re-navigating")
+                val nav = trace.stageSuspend("nav_guard") {
+                    imChatNavigator.openChat(request.imPackage, request.contactName)
+                }
+                if (nav !is ImChatNavigator.NavResult.Ok) {
+                    val why = (nav as? ImChatNavigator.NavResult.Fail)?.reason ?: "nav_fail"
+                    return "${SendSequence.REASON_WRONG_CONVERSATION}:$why"
+                }
+                val recheck = trace.stageSuspend("guard2") {
+                    imChatNavigator.chatPageTitleMatches(request.imPackage, request.contactName)
+                }
+                if (recheck == false) {
+                    return "${SendSequence.REASON_WRONG_CONVERSATION}:header_mismatch"
+                }
+            }
+        }
+        return runCatching {
+            when (channel) {
+                InjectorChannel.A11y -> SendSequence.run(
+                    injector = a11yInjector,
+                    locator = A11ySendLocator(bridge),
+                    foregroundPackage = effectiveForeground,
+                    imPackage = request.imPackage,
+                    draft = request.draft,
+                    evidence = evidence,
+                    focusStep = focusStep,
+                    trace = trace,
+                )
+                InjectorChannel.Shizuku -> {
+                    val result = SendSequence.run(
+                        injector = shizukuInjector,
+                        locator = ocrSendLocator,
+                        foregroundPackage = effectiveForeground,
+                        imPackage = request.imPackage,
+                        draft = request.draft,
+                        evidence = evidence,
+                        proofFinder = proofFinder,
+                        focusStep = focusStep,
+                        trace = trace,
+                    )
+                    if (result == null) {
+                        // 发送成功即收起键盘：Sogou 工具条/候选条会被下一帧
+                        // OCR 当成来信，诱发自问自答回合（2026-10-27 真机）。
+                        runCatching { shizukuInjector.hideImeIfShown() }
+                    }
+                    result
+                }
+                // C（起草档）不算「托管」：无可用注入通道，直接挂起草通知。
+                InjectorChannel.DraftFallback -> REASON_NO_EXECUTOR
+            }
+        }.getOrElse { REASON_DISPATCH_ERROR }
+    }
+
     /** Gatekeeper 硬审拒绝的台账记录（调用方审稿后调用；只落库绝不发送）。 */
     suspend fun logGateBlocked(request: AutoSendRequest, gateReason: String) {
         val fingerprint = SendFingerprint.of(request.draft)
@@ -332,6 +606,48 @@ class ActionDispatcher @Inject constructor(
             withDraftSource("$REASON_GATE_BLOCKED:$gateReason:$fingerprint", request.draftSource),
         )
         ledger.record(request.contactId, fingerprint, REASON_GATE_BLOCKED, System.currentTimeMillis())
+    }
+
+    /**
+     * v8：抽取与「代言者修复调用」都没拿到可发送回复（绝不回落到分析稿）。
+     * 只落台账供回放，不触碰 IM、不发通知。
+     */
+    suspend fun logNoSendable(contactId: Long, conversationId: Long, reason: String) {
+        runCatching {
+            db.directorLogDao().insert(
+                DirectorLogEntity(
+                    contactId = contactId,
+                    conversationId = conversationId,
+                    trigger = TRIGGER_AUTO,
+                    route = ROUTE_NOOP,
+                    reason = "$REASON_NO_SENDABLE:$reason",
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+            db.directorLogDao().trimFor(contactId)
+        }.onFailure { Log.d(TAG, "no-sendable log failed", it) }
+    }
+
+    /**
+     * 自动档分段耗时落台账（2026-10-27 真机「回复慢」归因）：
+     * 一行 `auto_timing:...`（[AutoTiming.PREFIX]）只用于回放定位瓶颈段，
+     * 不参与任何决策、不触碰 IM、不发通知。
+     */
+    suspend fun logTiming(contactId: Long, conversationId: Long, summary: String) {
+        if (summary.isBlank()) return
+        runCatching {
+            db.directorLogDao().insert(
+                DirectorLogEntity(
+                    contactId = contactId,
+                    conversationId = conversationId,
+                    trigger = TRIGGER_AUTO,
+                    route = ROUTE_NOOP,
+                    reason = summary,
+                    createdAt = System.currentTimeMillis(),
+                ),
+            )
+            db.directorLogDao().trimFor(contactId)
+        }.onFailure { Log.d(TAG, "timing log failed", it) }
     }
 
     /**
@@ -437,6 +753,9 @@ class ActionDispatcher @Inject constructor(
         private const val REASON_DISPATCH_FAILED = "auto_dispatch_failed"
         private const val REASON_GATE_BLOCKED = "auto_gate_blocked"
         private const val REASON_DEGRADED = "auto_degraded"
+
+        /** v8：无任何可发送回复（抽取/修复调用均失败），只落台账。 */
+        private const val REASON_NO_SENDABLE = "auto_no_sendable"
 
         /** 通道选择落到 C（A/B 均不可用或显式配置通道不可用）：无注入通道，挂起草。 */
         private const val REASON_NO_EXECUTOR = "no_executor_channel"

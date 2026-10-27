@@ -40,6 +40,8 @@ import com.verlintas.baic2.core.model.Note
 import com.verlintas.baic2.core.model.NoteKind
 import com.verlintas.baic2.core.model.ProviderConfig
 import com.verlintas.baic2.device.api.OcrProvider
+import com.verlintas.baic2.floatball.auto.AutoTiming
+import com.verlintas.baic2.floatball.auto.TimingTrace
 import com.verlintas.baic2.floatball.ScreenPerceiver.Perception
 import com.verlintas.baic2.floatball.advisor.AdvisorResponder
 import com.verlintas.baic2.floatball.advisor.ChatBriefBuilder
@@ -85,6 +87,7 @@ import com.verlintas.baic2.floatball.contact.ContactMemoryReader
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.floatball.contact.DealFact
 import com.verlintas.baic2.floatball.contact.SessionReuse
+import com.verlintas.baic2.floatball.director.AutoKickoffPrompt
 import com.verlintas.baic2.floatball.director.Director
 import com.verlintas.baic2.floatball.director.DirectorInput
 import com.verlintas.baic2.floatball.director.DirectorTrigger
@@ -347,8 +350,42 @@ class ScreenAdvisor @Inject constructor(
             .getOrDefault(emptyList())
             .map { QuickContact(it.id, it.displayName) }
 
-    private val _turnCompletions = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
-    val turnCompletions: SharedFlow<Unit> = _turnCompletions.asSharedFlow()
+    /**
+     * 回合完成事件载荷：**哪个会话完成了**（2026-10-27 自动档稳定性修复）。
+     * 以前只发 Unit，自动档控制器只能读「当前 transcript 会话」推断归属——
+     * 屏幕差分回合插队后，真实来信的完成事件被记到新会话上（真机 12:01
+     * conv=21 回合完成却记成 conv=22，判 `no_active_contact` 后整条回复丢失）。
+     * 会话 id 随回合写入，消费方不再依赖可变的当前状态。
+     */
+    data class TurnCompletion(val conversationId: Long)
+
+    private val _turnCompletions = MutableSharedFlow<TurnCompletion>(extraBufferCapacity = 16)
+    val turnCompletions: SharedFlow<TurnCompletion> = _turnCompletions.asSharedFlow()
+
+    /**
+     * 最近一回合的 LLM 段计时（2026-10-27 真机「回复慢」归因）：回合完成前写入，
+     * 自动档（CompanionWindowController）取走一次即清，并入自己的治理/执行段账单
+     * 落 `auto_timing:` 台账行。按会话键隔离，不同联系人不串号。
+     */
+    private val lastTurnTimings = ConcurrentHashMap<Long, String>()
+
+    /**
+     * 取出并清除指定会话最近一次回合的 LLM 段计时（`auto_timing:` 一行）：
+     * 一次性消费——同一回合若被两个消费点读到会重复记账，故取走即删。
+     */
+    fun consumeTurnTiming(conversationId: Long): String? =
+        lastTurnTimings.remove(conversationId)?.takeIf { it.isNotBlank() }
+
+    /**
+     * 回合完成收口：先落本回合 LLM 段计时（若启用归因），再发完成信号——
+     * 顺序不可颠倒，否则自动档取计时会与本次回合错位（取到上一回合的账）。
+     */
+    private fun completeTurn(conversationId: Long, trace: TimingTrace?) {
+        if (trace != null && !trace.isEmpty) {
+            lastTurnTimings[conversationId] = trace.render()
+        }
+        _turnCompletions.tryEmit(TurnCompletion(conversationId))
+    }
 
     /**
      * 连续模式 token 预算耗尽：后台回合完成后若本次会话用量达到设置上限，
@@ -560,17 +597,19 @@ class ScreenAdvisor @Inject constructor(
         contact: ContactRef?,
         turnMessageId: Long,
         smalltalk: TopicEngine.TopicPick? = null,
+        autoKickoff: AutoKickoffPrompt.Kickoff? = null,
     ) {
         val planRaw = filter?.plan()
         val plan = planRaw?.let { raw ->
             runCatching { Tactician.parsePlan(raw) }.getOrNull()
         }
-        if (smalltalk != null) {
-            // 保温回合台账（M1，D4）：mission 带 warm_chat| 前缀供话题指纹去重
-            // 解码，result 恒为 informational——计入台账但永不 pending，Judge 豁免
-            // settle；话题为空（选题耗尽的自由轻聊）时无指纹可记。分屏不出任务令
-            // 条，草稿本身就是本轮产出。
-            if (smalltalk.topic.isNotBlank()) {
+        if (smalltalk != null || autoKickoff != null) {
+            // 保温/主动开场回合台账（M1，D4）：mission 带 warm_chat| 前缀供话题
+            // 指纹去重解码，result 恒为 informational——计入台账但永不 pending，
+            // Judge 豁免 settle；话题为空时无指纹可记。分屏不出任务令条，草稿
+            // 本身就是本轮产出。
+            val topic = smalltalk?.topic ?: autoKickoff?.pick?.topic.orEmpty()
+            if (topic.isNotBlank()) {
                 runCatching {
                     goalRepository.insertMission(
                         TalkMissionEntity(
@@ -579,9 +618,9 @@ class ScreenAdvisor @Inject constructor(
                             turnMessageId = turnMessageId,
                             stageCode = snapshot?.context?.stage?.stageCode,
                             mission = TopicEngine.encodeWarmChatMission(
-                                topic = smalltalk.topic,
+                                topic = topic,
                                 mission = plan?.mission?.takeIf { it.isNotBlank() }
-                                    ?: context.getString(R.string.float_smalltalk_default_mission, smalltalk.topic),
+                                    ?: context.getString(R.string.float_smalltalk_default_mission, topic),
                             ),
                             planBlockJson = planRaw,
                             result = MISSION_INFORMATIONAL,
@@ -652,6 +691,27 @@ class ScreenAdvisor @Inject constructor(
      */
     private val _activeContact = MutableStateFlow<ContactRef?>(null)
     val activeContact: StateFlow<ContactRef?> = _activeContact.asStateFlow()
+
+    /** 自动陪伴窗口钉住联系人/APP（不可变绑定，整体替换）。 */
+    private data class CompanionBinding(val contact: ContactRef, val imPackage: String?)
+
+    @Volatile
+    private var companionBinding: CompanionBinding? = null
+
+    /**
+     * 钉住自动窗口联系人（2026-10-27 真机修复）：无 a11y 时
+     * `perceiver.foregroundPackage()` 为 null，[resolveContact] 的聊天窗校验
+     * 直接失败 → 屏幕差分回合把 `activeContact` 置空 →
+     * [com.verlintas.baic2.floatball.auto.CompanionWindowController] 的
+     * `onTurnCompleted` 判定「不是窗口联系人」而放弃回复，自动链在第一条
+     * 屏幕回合后中断。窗口由用户显式选择联系人/APP 开启，Chat 场景解析失败
+     * 时用该绑定兜底；窗口结束/服务销毁时传 null 解除。
+     */
+    fun bindCompanionContact(contact: ContactRef?, imPackage: String? = null) {
+        companionBinding = contact?.let {
+            CompanionBinding(it, imPackage?.takeIf { pkg -> pkg.isNotBlank() })
+        }
+    }
 
     /**
      * 即时「方向」状态（分屏顶栏 chip 渲染用）。[key] 随当前会话切换：
@@ -1163,6 +1223,42 @@ class ScreenAdvisor @Inject constructor(
             backgroundTurn = true,
             smalltalk = pick,
             skipDirectorRoute = true,
+            turnMessageId = turnMessageId,
+        )
+        val draft = historyGateway.recentMessages(conversationId, DRAFT_LOOKBACK_MESSAGES)
+            .lastOrNull { it.role == ChatRole.ASSISTANT }?.content
+        return ProactiveTurnResult(conversationId, draft, turnMessageId)
+    }
+
+    /**
+     * 自动托管「主动开场」入口（自动档启动后由 [CompanionWindowController.kickoffAuto]
+     * 调用）：与保温回合同一条后台管线，但提示词换成 [AutoKickoffPrompt]——本轮
+     * 不等对方来信，主动发一条能推进关系目标的消息。路由/台账同保温回合
+     * （skipDirectorRoute=true，决策由调用方持有），任务令落 informational 防
+     * Judge 误 settle。
+     */
+    suspend fun runAutoKickoff(contact: ContactRef): ProactiveTurnResult {
+        val pick = runCatching { topicEngineStore.selectFor(contact) }.getOrNull()
+        val kickoff = AutoKickoffPrompt.Kickoff(pick = pick, goal = contact.goal)
+        val question = AutoKickoffPrompt.question(kickoff)
+        _activeContact.value = contact
+        switchDirection("c:${contact.contactId}")
+        val conversationId = resolveConversation(contact, question)
+        val turnMessageId = conversationRepository.append(
+            ChatMessage(
+                conversationId = conversationId,
+                role = ChatRole.USER,
+                content = question,
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
+        executePrepared(
+            conversationId,
+            contact,
+            backgroundTurn = true,
+            autoKickoff = kickoff,
+            skipDirectorRoute = true,
+            turnMessageId = turnMessageId,
         )
         val draft = historyGateway.recentMessages(conversationId, DRAFT_LOOKBACK_MESSAGES)
             .lastOrNull { it.role == ChatRole.ASSISTANT }?.content
@@ -1199,22 +1295,50 @@ class ScreenAdvisor @Inject constructor(
         val isScreenTurn = content.startsWith(screenLabel)
         val screenBody = if (isScreenTurn) stripScreenLabel(content) else null
         var nonChat = false
+        val pinned = companionBinding
+        // 通讯录/主列表页不是会话页：钉住联系人的自动窗口直接跳过本回合
+        // （2026-10-27 真机 12:17 导航假 Ok 落到通讯录页，LLM 白跑一回合且成稿
+        // 「屏幕仍是通讯录/好友列表」；随后发送必败）。非钉住模式交给 SceneGate
+        // 判 NonChat（孤立会话无联系人绑定，派发端自然不发送）。
+        if (isScreenTurn && pinned != null && SceneGate.looksLikeContactList(screenBody)) {
+            android.util.Log.i(
+                "ScreenAdvisor",
+                "screen looks like IM contact list, skip auto turn " +
+                    "(contact=${pinned.contact.displayName})",
+            )
+            _transcript.updateStatus(Status.Idle)
+            return PreparedTurn.Unchanged
+        }
         val contact = if (isScreenTurn) {
-            when (SceneGate.classify(perceiver.foregroundPackage(), screenBody)) {
-                SceneGate.Scene.Chat -> resolveContact(titleFallback, screenBody)
-                SceneGate.Scene.NonChat -> {
-                    nonChat = true
-                    null
-                }
-                SceneGate.Scene.Uncertain -> {
-                    // F10（V-A-2 兜底）：IM 白名单命中但结构识别失败时补一次轻 LLM
-                    // 判定（≤100tok、8s 严格限时、失败立即保守降级不停等），明确
-                    // yes 才进联系人管线；no/超时/畸形一律 NON_CHAT 保守。
-                    if (confirmUncertainChat(screenBody)) {
-                        resolveContact(titleFallback, screenBody)
-                    } else {
+            // 无 a11y 时前台包名为 null；自动窗口已钉住 APP 时用绑定包名参与
+            // 场景分类（2026-10-27 真机修复，见 [bindCompanionContact]）。
+            val scenePackage = perceiver.foregroundPackage() ?: pinned?.imPackage
+            // 窗口钉住的「联系人+APP」优先于场景门（2026-10-27 真机 12:01 事故）：
+            // 短来信（「先不动，稳住体验」）没有对话结构 → 场景门判 UNCERTAIN →
+            // 轻 LLM 判 no → 联系人置空；真实来信被写进共享会话，控制器以
+            // no_contact_binding 丢弃，对方的问题没人回。自动窗口本来就是用户
+            // 显式锁定的单会话托管，包名仍是钉住 APP 时直接认这个联系人。
+            // 切到别的 APP（包名不同）时照旧走场景门，零行为漂移。
+            if (pinned != null && (pinned.imPackage == null || pinned.imPackage == scenePackage)) {
+                pinned.contact
+            } else {
+                when (SceneGate.classify(scenePackage, screenBody)) {
+                    SceneGate.Scene.Chat -> resolveContact(titleFallback, screenBody)
+                        ?: pinned?.contact
+                    SceneGate.Scene.NonChat -> {
                         nonChat = true
                         null
+                    }
+                    SceneGate.Scene.Uncertain -> {
+                        // F10（V-A-2 兜底）：IM 白名单命中但结构识别失败时补一次轻 LLM
+                        // 判定（≤100tok、8s 严格限时、失败立即保守降级不停等），明确
+                        // yes 才进联系人管线；no/超时/畸形一律 NON_CHAT 保守。
+                        if (confirmUncertainChat(screenBody)) {
+                            resolveContact(titleFallback, screenBody) ?: pinned?.contact
+                        } else {
+                            nonChat = true
+                            null
+                        }
                     }
                 }
             }
@@ -1291,7 +1415,7 @@ class ScreenAdvisor @Inject constructor(
         titleFallback: String? = null,
         screenBody: String? = null,
     ): ContactRef? {
-        val pkg = perceiver.foregroundPackage()
+        val pkg = perceiver.foregroundPackage() ?: companionBinding?.imPackage
         val l1 = perceiver.windowTitle()?.takeUnless { isShellTitle(pkg, it) }
         val l2 = titleFallback?.takeUnless { it.isBlank() || isShellTitle(pkg, it) }
         // 候选记录先行（pkg 可空）：无 a11y 感知降级（投影路径）拿不到前台包名，
@@ -1513,6 +1637,7 @@ class ScreenAdvisor @Inject constructor(
         contact: ContactRef?,
         backgroundTurn: Boolean,
         smalltalk: TopicEngine.TopicPick? = null,
+        autoKickoff: AutoKickoffPrompt.Kickoff? = null,
         skipDirectorRoute: Boolean = false,
         turnMessageId: Long? = null,
     ) {
@@ -1574,6 +1699,8 @@ class ScreenAdvisor @Inject constructor(
                 handoffAvoid,
                 escalationOutcome.privacyDomain,
                 escalationOutcome.emotion,
+                autoKickoff = autoKickoff,
+                questionMessageId = turnMessageId,
             )
         }
     }
@@ -1783,11 +1910,29 @@ class ScreenAdvisor @Inject constructor(
         if (!content.startsWith(screenLabel)) return false
         // LIMIT 1 有界查询，不随会话长度增长装载整表。
         val last = historyGateway.latestScreenBody(conversationId, screenLabel) ?: return false
-        return FrameQuality.textSimilarity(
-            stripScreenLabel(content),
-            stripScreenLabel(last),
-        ) >= prefs.state.value.screenDedupSimilarity
+        val currentBody = stripScreenLabel(content)
+        val lastBody = stripScreenLabel(last)
+        if (FrameQuality.textSimilarity(currentBody, lastBody) >= prefs.state.value.screenDedupSimilarity) {
+            return true
+        }
+        // 同一来信去重（2026-10-27 真机：键盘噪声/滚动露出差异拉低整屏相似度，
+        // 同一句「很好…加油」被连续回复两次）。来信候选归一后相同即视为同一屏，
+        // 避免对同一条消息重复成稿；归一失败（非聊天屏）不启用该兜底。
+        val currentIncoming = IncomingCue.latestIncoming(currentBody) ?: return false
+        val lastIncoming = IncomingCue.latestIncoming(lastBody) ?: return false
+        val same = normalizeIncoming(currentIncoming) == normalizeIncoming(lastIncoming)
+        if (same) {
+            android.util.Log.i(
+                "ScreenAdvisor",
+                "duplicate incoming, skip turn: ${currentIncoming.take(40)}",
+            )
+        }
+        return same
     }
+
+    /** 来信归一（去空白/标点、小写）：容忍 OCR 在两次抓帧间的标点/空格抖动。 */
+    private fun normalizeIncoming(text: String): String =
+        text.lowercase().filter { it.isLetterOrDigit() }
 
     private fun stripScreenLabel(content: String): String =
         content.removePrefix(screenLabel).removePrefix("\n").trim()
@@ -1833,8 +1978,14 @@ class ScreenAdvisor @Inject constructor(
         handoffAvoidSection: String? = null,
         privacyDomain: PrivacyDomain? = null,
         emotionVerdict: EmotionJudge.EmotionVerdict? = null,
+        autoKickoff: AutoKickoffPrompt.Kickoff? = null,
+        questionMessageId: Long? = null,
     ) {
         activeConversationId = conversationId
+        // 回合耗时账单（2026-10-27 归因）：prep = 进入本方法到发起 LLM 调用之间的
+        // 全部本地工作（历史/记忆/策略/提示词组装）；llm/first_token 由 collect* 记。
+        val trace = TimingTrace()
+        val prepStartNanos = System.nanoTime()
         val settings = prefs.state.value
         val config: ProviderConfig = runCatching { agentRepository.resolveConfig(null) }.getOrNull()
             ?: run {
@@ -1854,13 +2005,21 @@ class ScreenAdvisor @Inject constructor(
         // 不整表加载随会话变长的全部消息。问题文本是后续全部取数的唯一输入，
         // 必须先于 T1 并行块拿到。
         val allMessages = historyGateway.recentMessages(conversationId, HISTORY_LOAD_MESSAGES)
-        val question = allMessages.lastOrNull { it.role == ChatRole.USER } ?: return
-        val screenBody = stripScreenLabel(question.content)
+        // 指定 id 优先（自动主动开场的指令消息与并发屏幕回合可能同批落库，
+        // 不能只取「最后一条 USER」）；缺省仍取最后一条，行为与现状一致。
+        val question = questionMessageId
+            ?.let { id -> allMessages.lastOrNull { it.id == id } }
+            ?: allMessages.lastOrNull { it.role == ChatRole.USER }
+            ?: return
+        val isKickoff = autoKickoff != null
+        // 主动开场没有对方来信：screenBody 留空，避免把内部指令当成屏幕正文
+        // 送进红线扫描/召回 query（话题与目标已由 Kickoff 段单独注入）。
+        val screenBody = if (isKickoff) "" else stripScreenLabel(question.content)
         val goal = contact?.goal?.takeIf { it.isNotBlank() }
 
         // 召回 query 收窄（v4 §8.2）：聊天界面用「对方最后一条来信」，
         // 非聊天界面/提取失败回退整屏；绑定联系人追加业务目标关键词。
-        val incoming = IncomingCue.latestIncoming(screenBody)
+        val incoming = if (isKickoff) null else IncomingCue.latestIncoming(screenBody)
         val recallCue = IncomingCue.recallQuery(screenBody, goal, RECALL_QUERY_CHARS)
 
         // P3 §12.2：来信指纹确已变化（非 OCR 抖动的同屏重复）才写来信时间戳，
@@ -1938,8 +2097,9 @@ class ScreenAdvisor @Inject constructor(
                                 .take(GoalRepository.CAP_L1)
                         }.getOrDefault(emptyList())
                         // 保温回合不触发对旧 pending 的裁决（D4：informational 回合
-                        // 不参与裁决链，「对方来信」语义对闲聊草稿不成立）。
-                        val outcome = if (smalltalk == null) {
+                        // 不参与裁决链，「对方来信」语义对闲聊草稿不成立）；自动主动
+                        // 开场同样没有对方来信，一并豁免。
+                        val outcome = if (smalltalk == null && autoKickoff == null) {
                             runCatching {
                                 missionJudge.judgePending(
                                     contactId = c.contactId,
@@ -2109,9 +2269,18 @@ class ScreenAdvisor @Inject constructor(
             }.getOrNull()
         }
         // 长度档：人设尾句动态生成，软约束（提示词）+ 硬约束（maxTokens）双保险。
-        val styleWithLength = ADVISOR_STYLE_BASE +
-            "请用简体中文给出简洁、可直接参考的分析，回答控制在 ${settings.answerTargetChars} 字以内，" +
+        // v8：自动档切换成「代言者」骨架——首要交付物是唯一可发送回复，
+        // 不再要求「概括立场 + 建议回应要点」的分析稿（那会与 <reply> 契约打架）。
+        val autoActive = autoModeActive()
+        val styleWithLength = if (autoActive) {
+            ADVISOR_STYLE_AUTO +
+                "先给不超过一句的判断，然后必须用 <reply> 块给出一条可直接发送的回复，" +
+                "回复控制在 ${settings.answerTargetChars} 字以内，不写第二版候选。"
+        } else {
+            ADVISOR_STYLE_BASE +
+                "请用简体中文给出简洁、可直接参考的分析，回答控制在 ${settings.answerTargetChars} 字以内，" +
                 "不啰嗦、不复述原文。"
+        }
         // 即时方向（顶栏「方向」chip）：仅次于总纲的高优先级段落，置于长期
         // 目标/人设 brief 之前；未设置时整段省略，行为与现状一致。
         val directionSection = _direction.value.selected
@@ -2267,6 +2436,12 @@ class ScreenAdvisor @Inject constructor(
             sources.brief?.section,
             contactSection,
             outputProtocolSection,
+            // 自动托管主动开场段放在协议段之后：本轮最高优先级任务（先发一条
+            // 推进目标的短消息），但仍以 <reply> 协议收口。
+            autoKickoff?.let { AutoKickoffPrompt.section(it, contact?.displayName) },
+            // v8：契约尾段必须是整条系统提示词的最后一节（recency），否则模型
+            // 容易被更早的分析/策略指令带偏、漏掉标记。
+            if (autoActive) GateRules.replyContractTail() else null,
         )
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
@@ -2296,6 +2471,10 @@ class ScreenAdvisor @Inject constructor(
             while (true) {
                 turnInput = 0L
                 turnOutput = 0L
+                // 提示词组装到此结束（含 T1 并行取数/策略快照）；每次重试只记一次。
+                if (attempt == 0) {
+                    trace.add("prep", (System.nanoTime() - prepStartNanos) / 1_000_000)
+                }
                 val outcome = if (lean) {
                     collectLeanOnce(
                         config = boundedConfig,
@@ -2308,6 +2487,7 @@ class ScreenAdvisor @Inject constructor(
                         onUsage = usageSink,
                         planFilter = planFilter,
                         planningStartAt = planningStartAt,
+                        trace = trace,
                     )
                 } else {
                     collectAdvisorOnce(
@@ -2321,6 +2501,7 @@ class ScreenAdvisor @Inject constructor(
                         onUsage = usageSink,
                         planFilter = planFilter,
                         planningStartAt = planningStartAt,
+                        trace = trace,
                     )
                 }
                 when (outcome) {
@@ -2368,13 +2549,15 @@ class ScreenAdvisor @Inject constructor(
                             contact = contact,
                             turnMessageId = question.id,
                             smalltalk = smalltalk,
+                            autoKickoff = autoKickoff,
                         )
                         // M1-C Gatekeeper 事前审（方案 §10/§13.2 矛盾#4）：连续模式
-                        // 回合（tightRetry=INCOMING）与保温闲聊回合（smalltalk≠null，
-                        // §12 以 Gatekeeper AI 腔检测为保温闲聊对策之一）成稿后过审；
-                        // 单次手动参谋/追问不挂（M2 随起草档迁移）。拦截走「降级不丢
-                        // 弃」：分屏渲染副本换上替换/截断版本与原因，落库原文不动。
-                        if (tightRetry || smalltalk != null) {
+                        // 回合（tightRetry=INCOMING）、保温闲聊回合（smalltalk≠null，
+                        // §12 以 Gatekeeper AI 腔检测为保温闲聊对策之一）与自动主动
+                        // 开场（autoKickoff≠null）成稿后过审；单次手动参谋/追问不挂
+                        // （M2 随起草档迁移）。拦截走「降级不丢弃」：分屏渲染副本换上
+                        // 替换/截断版本与原因，落库原文不动。
+                        if (tightRetry || smalltalk != null || autoKickoff != null) {
                             gateTurn(
                                 conversationId = conversationId,
                                 assistantMessageId = outcome.assistantMessageId,
@@ -2466,6 +2649,9 @@ class ScreenAdvisor @Inject constructor(
             }
         } finally {
             _transcript.update { it.copy(streaming = null) }
+            // 回合耗时账单收口（logcat 常量级可查；自动档由窗口控制器并入台账）。
+            trace.add("turn", (System.nanoTime() - prepStartNanos) / 1_000_000)
+            Log.i(AutoTiming.TAG, "conv=$conversationId ${trace.render()}")
         }
     }
 
@@ -2666,7 +2852,10 @@ class ScreenAdvisor @Inject constructor(
         onUsage: (Long, Long) -> Unit,
         planFilter: PlanStreamFilter? = null,
         planningStartAt: Long? = null,
+        trace: TimingTrace? = null,
     ): TurnOutcome = kotlinx.coroutines.coroutineScope {
+        val llmStartNanos = System.nanoTime()
+        var firstTextAtNanos = 0L
         val chunks = responder.stream(
             config = config,
             systemPrompt = systemPrompt,
@@ -2698,6 +2887,7 @@ class ScreenAdvisor @Inject constructor(
             when (chunk) {
                 is AdvisorResponder.Chunk.Delta -> {
                     sawText = true
+                    if (firstTextAtNanos == 0L) firstTextAtNanos = System.nanoTime()
                     val visible = planFilter?.feed(chunk.text) ?: chunk.text
                     if (visible.isNotEmpty()) {
                         live.append(visible)
@@ -2784,7 +2974,12 @@ class ScreenAdvisor @Inject constructor(
             ),
         )
         _transcript.update { it.copy(streaming = null, status = Status.Idle) }
-        _turnCompletions.tryEmit(Unit)
+        // LLM 段记账（首字 + 整段），随回合账单进 logcat/台账（2026-10-27 归因）。
+        trace?.let { t ->
+            if (firstTextAtNanos > 0L) t.add("llm_first", (firstTextAtNanos - llmStartNanos) / 1_000_000)
+            t.add("llm_lean", (System.nanoTime() - llmStartNanos) / 1_000_000)
+        }
+        completeTurn(conversationId, trace)
         TurnOutcome.Done(assistantMessageId)
     }
 
@@ -2804,7 +2999,10 @@ class ScreenAdvisor @Inject constructor(
         onUsage: (Long, Long) -> Unit,
         planFilter: PlanStreamFilter? = null,
         planningStartAt: Long? = null,
+        trace: TimingTrace? = null,
     ): TurnOutcome = kotlinx.coroutines.coroutineScope {
+        val llmStartNanos = System.nanoTime()
+        var firstTextAtNanos = 0L
         val events: ReceiveChannel<AgentEvent> = agentLoop.run(
             config = config,
             mode = AppMode.CHAT,
@@ -2839,6 +3037,7 @@ class ScreenAdvisor @Inject constructor(
             when (event) {
                 is AgentEvent.TextDelta -> {
                     sawText = true
+                    if (firstTextAtNanos == 0L) firstTextAtNanos = System.nanoTime()
                     val visible = planFilter?.feed(event.text) ?: event.text
                     if (visible.isNotEmpty()) {
                         live.append(visible)
@@ -2847,8 +3046,12 @@ class ScreenAdvisor @Inject constructor(
                     }
                 }
                 // 推理模型的思考过程也算「活信号」：思考超过首字超时不应误重试。
-                is AgentEvent.ThinkingDelta -> sawText = true
+                is AgentEvent.ThinkingDelta -> {
+                    if (firstTextAtNanos == 0L) firstTextAtNanos = System.nanoTime()
+                    sawText = true
+                }
                 is AgentEvent.AssistantMessage -> {
+                    if (firstTextAtNanos == 0L) firstTextAtNanos = System.nanoTime()
                     sawText = true
                     // 上游最终消息是完整文本：用一次性剥离去掉 <plan> 块（增量剥离可能跨 chunk）。
                     val visibleContent = if (planFilter != null) {
@@ -2867,7 +3070,7 @@ class ScreenAdvisor @Inject constructor(
                         )
                         live.setLength(0)
                         _transcript.update { it.copy(streaming = null, status = Status.Idle) }
-                        _turnCompletions.tryEmit(Unit)
+                        completeTurn(conversationId, trace)
                     } else if (live.isNotBlank()) {
                         // 末条消息为空但已有流式文本：以累积文本为准落库，
                         // 不写空气泡、不丢已生成内容。
@@ -2884,7 +3087,7 @@ class ScreenAdvisor @Inject constructor(
                         )
                         live.setLength(0)
                         _transcript.update { it.copy(streaming = null, status = Status.Idle) }
-                        _turnCompletions.tryEmit(Unit)
+                        completeTurn(conversationId, trace)
                     } else {
                         // 空消息且此前没有任何输出：按零文本失败处理（可重试）。
                         failureReason = failureReason ?: REASON_NO_RESPONSE
@@ -2963,7 +3166,11 @@ class ScreenAdvisor @Inject constructor(
                     ),
                 )
                 _transcript.update { it.copy(streaming = null, status = Status.Idle) }
-                _turnCompletions.tryEmit(Unit)
+                trace?.let { t ->
+                    if (firstTextAtNanos > 0L) t.add("llm_first", (firstTextAtNanos - llmStartNanos) / 1_000_000)
+                    t.add("llm", (System.nanoTime() - llmStartNanos) / 1_000_000)
+                }
+                completeTurn(conversationId, trace)
                 TurnOutcome.Done(fallbackId)
             }
             else -> TurnOutcome.ZeroOutputFailure(REASON_NO_RESPONSE)
@@ -3639,6 +3846,18 @@ class ScreenAdvisor @Inject constructor(
                 "始终以当前屏幕为唯一分析对象；用户手动输入的追问优先于一切屏幕内容。" +
                 "若屏幕是对话/聊天，概括各方立场并给出建议的回应要点；若是文章/资料，提炼要点；" +
                 "若是操作界面，说明当前状态与下一步选项。"
+
+        /**
+         * 自动档「代言者」人设骨架（v8，托管方案 §二十四）：与 [ADVISOR_STYLE_BASE]
+         * 的「概括立场 + 给建议」目标相反——自动发送需要的是**唯一一条可执行的
+         * 回复**，分析最多一句。主回合输出末尾仍由 `<reply>` 契约收口。
+         */
+        const val ADVISOR_STYLE_AUTO =
+            "你是「好参谋」，此刻代理用户本人在聊天中回话（代言者）。用户在手机上轻点了一下悬浮球，" +
+                "最近一条用户消息是由 OCR 或无障碍树从当前屏幕提取的文本（可能有识别噪声、排版可能混乱），" +
+                "更早的屏幕只以一句场景占位或摘要存在——严禁复述旧屏幕，始终以当前屏幕为唯一分析对象。" +
+                "先在心里判断对方意图与分寸，最多用一句话点出判断（不要写分析报告、不要列建议清单），" +
+                "然后必须给出一条用户本人可以直接发出去的中文口语回复；只写这一条，不给第二版候选。"
 
         /** 直连通道记忆段的引导语（替代上游 renderSystemPrompt 的英文记忆协议）。 */
         const val MEMORY_LEAD_IN =

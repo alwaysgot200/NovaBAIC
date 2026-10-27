@@ -23,6 +23,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
@@ -80,6 +81,8 @@ class AssistsA11yBridge @Inject constructor(
     ): Result<Unit> = legacy.swipe(x1, y1, x2, y2, durationMs)
 
     override suspend fun captureScreen(): Result<ByteArray> = legacy.captureScreen()
+
+    override suspend fun captureScreenBitmap(): Result<Bitmap> = legacy.captureScreenBitmap()
 
     override suspend fun typeText(text: String): Result<Unit> = withContext(Dispatchers.Main) {
         val service = AssistsService.getOrNull() ?: return@withContext notEnabled()

@@ -253,6 +253,10 @@ interface PersonaFieldDao {
     @Query("SELECT * FROM persona_fields")
     suspend fun listAll(): List<PersonaFieldEntity>
 
+    /** demo/导入清理：只删指定来源的字段行，不碰用户手填与 LLM 草稿。 */
+    @Query("DELETE FROM persona_fields WHERE source = :source")
+    suspend fun deleteBySource(source: String)
+
     /** 合并时给被舍弃的冲突旧值留痕（方案 §4.3 字段择优冲突）。 */
     @Query("UPDATE persona_fields SET evidence = :note, updatedAt = :now WHERE contactId = :contactId AND field = :field")
     suspend fun annotateConflict(contactId: Long, field: String, note: String, now: Long)
@@ -844,6 +848,10 @@ interface PersonalMaterialDao {
     /** 素材被保温选题采用后标记（防短期重选）。 */
     @Query("UPDATE personal_materials SET lastUsedAt = :atMs WHERE fingerprint = :fingerprint")
     suspend fun markUsedByFingerprint(fingerprint: String, atMs: Long)
+
+    /** demo/导入清理：按分类标签整批删除（重灌幂等，不碰用户素材）。 */
+    @Query("DELETE FROM personal_materials WHERE tag = :tag")
+    suspend fun deleteByTag(tag: String)
 }
 
 // ─────────────────────── v10：双方人设 + 场景归属（UltraAdvisor v2.2 方案 §2.4/§4.4） ───────────────────────
