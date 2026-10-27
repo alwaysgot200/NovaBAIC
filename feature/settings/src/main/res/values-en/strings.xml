@@ -133,7 +133,8 @@
     <string name="settings_perm_shizuku_title">Device shell (Shizuku)</string>
     <string name="settings_perm_shizuku_ready">Ready — the AI can run ADB-level commands</string>
     <string name="settings_perm_shizuku_denied">Installed but not granted, tap to request</string>
-    <string name="settings_perm_shizuku_unavailable">Not installed or service not running</string>
+    <string name="settings_perm_shizuku_unavailable">Not installed or service not running — tap to install/start</string>
+    <string name="settings_perm_shizuku_setup">Install / start</string>
     <string name="settings_perm_files_title">Files access</string>
     <string name="settings_perm_files_desc">Read files in Downloads/Documents (Android 13+ needs "All files access")</string>
     <string name="settings_about_requirements_title">System requirements</string>

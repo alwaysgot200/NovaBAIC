@@ -139,7 +139,8 @@
     <string name="settings_perm_shizuku_title">设备 Shell（Shizuku）</string>
     <string name="settings_perm_shizuku_ready">已就绪，AI 可执行 ADB 级命令</string>
     <string name="settings_perm_shizuku_denied">已安装但未授权，点此申请</string>
-    <string name="settings_perm_shizuku_unavailable">未安装或服务未启动</string>
+    <string name="settings_perm_shizuku_unavailable">未安装或服务未启动，点此安装/启动</string>
+    <string name="settings_perm_shizuku_setup">去安装/启动</string>
     <string name="settings_perm_files_title">文件访问</string>
     <string name="settings_perm_files_desc">读取 Downloads/Documents 中的文件（Android 13+ 需"所有文件访问"）</string>
     <string name="settings_about_requirements_title">系统要求</string>

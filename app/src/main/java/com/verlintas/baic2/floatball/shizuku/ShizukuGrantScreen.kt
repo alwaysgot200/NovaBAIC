@@ -77,8 +77,9 @@ internal fun ShizukuGrantScreen(
     val scope = rememberCoroutineScope()
 
     val shellState by gate.shellState.collectAsStateWithLifecycle()
-    var installed by remember { mutableStateOf(true) }
-    var installedVersion by remember { mutableStateOf<ShizukuVersion?>(null) }
+    // 初值同步一次安装态：Shizuku 被卸载后首帧就显示「安装」而不是误显示「去启动」。
+    var installed by remember { mutableStateOf(gate.isManagerInstalled()) }
+    var installedVersion by remember { mutableStateOf(gate.installedVersion()) }
     var bundledVersion by remember { mutableStateOf<ShizukuVersion?>(null) }
     var installing by remember { mutableStateOf(false) }
     var installNote by remember { mutableStateOf<InstallNote?>(null) }

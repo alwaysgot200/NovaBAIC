@@ -93,9 +93,6 @@ class ReadinessGate @Inject constructor(
         )
     }
 
-    /** Shizuku 授权入口（红行点击：拉起 Shizuku manager 授权弹窗）。 */
-    fun requestShizukuPermission() = shell.requestPermission()
-
     private suspend fun checkShizuku(): ReadinessItem {
         if (shell.state.value != ShellState.Ready) {
             return ReadinessItem(ID_SHIZUKU, false, "shizuku_not_ready")

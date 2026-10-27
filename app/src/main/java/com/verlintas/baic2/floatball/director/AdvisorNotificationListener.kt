@@ -92,6 +92,49 @@ class AdvisorNotificationListener : NotificationListenerService() {
     /** 单飞：同一时刻只跑一个通知回合（turnMutex 已串行，这里防排队堆积）。 */
     private val inFlight = AtomicBoolean(false)
 
+    /**
+     * 监听服务接入（2026-10-27 启动导航修复）：把**已在通知栏的存量通知**的
+     * contentIntent 一次性补进 [ImNavigator] 缓存。此前只有「监听期间新到的
+     * 通知」才会入缓存——进程重启/服务重连后缓存全空，自动档启动时无键可用
+     * 只能回落 FTS 搜索链（微信 a11y 黑洞 + 无 Shizuku 时必败，真机
+     * 14:15 实测 32.6s 失败）。
+     */
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        instance = this
+        val seeded = seedActiveIntents()
+        Log.i(TAG, "listener connected, seeded intents=$seeded")
+    }
+
+    override fun onListenerDisconnected() {
+        if (instance === this) instance = null
+        super.onListenerDisconnected()
+    }
+
+    /**
+     * 扫描当前活跃通知，解析联系人并缓存 contentIntent（数量上限即通知栏上限）。
+     * 只走 [NotificationGate] 既有准入（包名白名单 + 联系人/正文可解析），
+     * 文本即取即用不落盘不进日志（同既有隐私红线）。
+     */
+    private fun seedActiveIntents(): Int {
+        val active = runCatching { activeNotifications }.getOrNull() ?: return 0
+        var seeded = 0
+        for (sbn in active) {
+            if (sbn == null) continue
+            val pkg = sbn.packageName ?: continue
+            if (!gate.isListenedPackage(pkg)) continue
+            val extras = sbn.notification?.extras ?: continue
+            val title = extras.getCharSequence(Notification.EXTRA_TITLE)
+            val body = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
+                ?: extras.getCharSequence(Notification.EXTRA_TEXT)
+            val parsed = gate.parse(pkg, title, body) ?: continue
+            val contentIntent = sbn.notification?.contentIntent ?: continue
+            imNavigator.remember(pkg, parsed.contactTitle, contentIntent)
+            seeded++
+        }
+        return seeded
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val notification = sbn ?: return
         // 主开关默认关（隐私优先，须在设置页显式开启 + 授予通知读取权限）；
@@ -282,6 +325,19 @@ class AdvisorNotificationListener : NotificationListenerService() {
 
     companion object {
         private const val TAG = "AdvisorNotifListener"
+
+        /**
+         * 当前已连接的监听实例（自动档启动导航前置用）。
+         * 只有系统能实例化 [NotificationListenerService]，静态弱口是唯一可取处。
+         */
+        @Volatile
+        private var instance: AdvisorNotificationListener? = null
+
+        /**
+         * 启动导航前置（2026-10-27）：重扫活跃通知刷新 contentIntent 缓存，
+         * 返回本次补入条数；监听未连接返回 0（调用方回落其他导航通道）。
+         */
+        fun refreshIntentCache(): Int = instance?.seedActiveIntents() ?: 0
         private const val CHANNEL_ID = "floatball_draft"
         private const val NOTIFICATION_ID = 2001
         private const val REQUEST_CODE = 2001

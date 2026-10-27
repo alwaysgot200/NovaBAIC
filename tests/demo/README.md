@@ -149,10 +149,24 @@ adb logcat -d | Select-String "out_sent|out_degraded|send_button_not_found|wrong
 
 参数口径：
 
-- `--es pace "min-max"`：秒；快速 `1-3`、标准 `3-10`、拟人 `8-90`、从容 `30-180`（默认拟人）。
+- `--es pace "min-max"`：秒；快速 `1-3`、标准 `3-10`、拟人 `8-90`、从容 `30-180`。
+  **未设置时默认标准 3-10 秒**（2026-10-27 由拟人 8~90s 改；拟人档仍可在设置页选用）。
 - `--ei work / --ei rest`：秒；合法档 0/60/300/600/900/1200，`rest=0` 不停歇，默认 60/60。
 - `--es executor a11y|shizuku|auto`：发送通道偏好，默认 `auto`。
 - `--es say` 会写入 USER 消息并触发 LLM 分析/成稿；回合可能十几秒，操作后看台账与 logcat，不看广播返回。
+
+启动可见性与失败排查（2026-10-27 新增）：
+
+```powershell
+# 启动链一行账：source/targets/result/elapsed/note（STARTED、FAILED、BUSY）
+adb logcat -d -s FloatBallService:* | Select-String "auto_start:"
+# 主动首轮被跳过的原因 / 开场完成
+adb logcat -d -s CompanionWindow:* | Select-String "kickoff"
+```
+
+- 启动即红球 + 脉冲红点，主页状态签按 `AutoPhase` 显示「启动中 / 正在打开微信… / 等待首帧 / 自动托管中」；
+- 30 秒还没进入托管 → 自动判失败：红球复位 + 状态签「启动失败」+ 一条低优先级通知；
+- 多会话/联系人级托管缺通知使用权时**不启动**，直接提示并跳系统设置页。
 
 启动/稳定性验收：三入口 2s 内红球+脉冲、30s 内进入 AUTO、失败有状态/日志；完整矩阵见
 `docs/2026-10-27-自动档稳定性与回复节奏诊断方案.md` §7。

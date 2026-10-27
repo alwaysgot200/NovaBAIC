@@ -178,8 +178,34 @@ class ImChatNavigator @Inject constructor(
         /** 底部带内命中 ≥ 该数量个 Tab 词即判「已在主列表」（单命中容错不足）。 */
         private const val MAIN_LIST_TAB_MIN_HITS = 2
 
+        /**
+         * 主列表视觉直达的翻页上限（2026-10-27）：每页一帧 OCR，未命中就上滑
+         * 一屏再找。真机实测目标会话常在首屏之后（置顶/新消息把列表推下去，
+         * 实测账号 47 条置顶 + 50 未读），4 页时未命中→提到 6 页
+         * （≈10s 上限；通知直达命中时这一段根本不跑）。单页耗时 ≈1.7s
+         *（a11y 截图 + OCR），超上限即判失败回落搜索链，不无界拖长启动。
+         */
+        private const val LIST_SCAN_PAGES = 6
+
+        /**
+         * 主列表名字行的最小 y 比例：排除顶部标题带。真机 1080×2460 实测首条
+         * 会话名字 y≈320（比例 0.13），比标题「微信(N)」低一档，取 0.055h 兜底。
+         */
+        private const val LIST_NAME_MIN_TOP_RATIO = 0.055f
+
+        /** 主列表翻页上滑（起点/终点 y 比例与时长）：滑动而非 fling，列表不甩飞。 */
+        private const val LIST_SWIPE_FROM_Y_RATIO = 0.72f
+        private const val LIST_SWIPE_TO_Y_RATIO = 0.28f
+        private const val LIST_SWIPE_MS = 320
+
         /** 主列表底部 Tab 词（聊天页输入栏/搜索页键盘区不含这组词）。 */
         private val MAIN_LIST_TAB_TOKENS = listOf("微信", "通讯录", "发现")
+
+        /**
+         * 置顶折叠行文本（微信主列表）：出现这一行即置顶区处于折叠态，
+         * 点击即展开。目标联系人若被置顶，普通列表里根本不存在其行。
+         */
+        private const val PINNED_COLLAPSED_TOKEN = "折叠置顶聊天"
     }
 
     /**
@@ -320,11 +346,25 @@ class ImChatNavigator @Inject constructor(
                 Log.i(TAG, "④¾ vision: already on target chat page, skip search")
                 return@withContext done("probe", NavResult.Ok)
             }
-            mark("probe")
+
+            // ④¾-a 视觉「已在目标会话」预检（不依赖 Shizuku，2026-10-27 补）：
+            // ④¾ 走 dumpsys activity，Shizuku 关时恒 false——而本机正是「a11y 开、
+            // Shizuku 关」，重启自动档时若已停在目标会话页，旧逻辑会走 20s 搜索
+            // 全链再失败。这里用 a11y 截图 + OCR 做等价判定：顶部条名字命中、
+            // 无「取消」（排除搜索页）、底部无主列表 Tab 锚（排除主列表）。
+            if (bridge.foregroundPackage() == imPackage && chatPageVisibleByOcr(name)) {
+                Log.i(TAG, "④¾-a vision(a11y): already on target chat page, skip search")
+                return@withContext done("probe", NavResult.Ok)
+            }
 
             // ④½ 快捷路径：主列表里直接点该联系人的会话条目（「刚聊过」最常见
             // 场景，跳过搜索全流程）。条目节点 text 即联系人名（findText 包含匹配）。
-            val listHit = awaitNode(name)
+            // 黑页指纹先行（节点树零暴露的 IM 不空等 [NODE_POLLS]）。
+            val listHit = if (bridge.foregroundPackage() == imPackage && !screenTextBlank()) {
+                awaitNode(name)
+            } else {
+                null
+            }
             if (listHit != null && bridge.tap(listHit.centerX, listHit.centerY).isSuccess) {
                 delay(POST_TAP_DELAY_MS)
                 val titleFast = bridge.windowTitle()
@@ -336,6 +376,20 @@ class ImChatNavigator @Inject constructor(
                 runCatching { bridge.pressKey("back") }
                 delay(POST_TAP_DELAY_MS)
             }
+
+            // ④½-b 主列表视觉直达（2026-10-27 新增，微信等 a11y 黑洞的主路径）：
+            // 节点通道恒空时，用「截图 + OCR 找会话行 → tap」进会话，不依赖
+            // 节点树/注入通道。命中即成功（~2s），未命中才继续搜索全链。
+            // 扫描记号：⑤ 分支若同一状态再扫一遍（真机 14:15 实测白花 7s，
+            // 同一列表同一方向，结果必然相同）只认第一次的结论。
+            var listScanned = false
+            if (bridge.foregroundPackage() == imPackage) {
+                listScanned = true
+                if (tapMainListContact(name)) {
+                    return@withContext done("list", NavResult.Ok)
+                }
+            }
+            mark("probe")
 
             // ⑤ 进搜索页：微信拉起后恢复上次停留页（主列表/聊天页/搜索页三态，
             // 2026-10-21 真机实测）。归位策略 2026-10-27 收紧：每轮先做状态预检
@@ -369,6 +423,13 @@ class ImChatNavigator @Inject constructor(
                 }
                 if (looksLikeMainListByOcr()) {
                     Log.i(TAG, "⑤ already on main list (vision), skip back")
+                    // 主列表视觉直达（2026-10-27）：已在主列表且目标会话在列表里
+                    // 就当场点进去，不走搜索（微信 FTS 输入框对 a11y 与 Shizuku
+                    // 双通道都可能吞字，搜索链在本机是必败路径）。④½-b 已扫过
+                    // （listScanned）时不重复扫描——同列表同方向结果必然相同。
+                    if (!listScanned && tapMainListContact(name)) {
+                        return@withContext done("list", NavResult.Ok)
+                    }
                     break
                 }
                 runCatching { bridge.pressKey("back") }
@@ -1065,6 +1126,12 @@ class ImChatNavigator @Inject constructor(
         val strip = lines.filter { it.centerY < stripBottom }
         val nameHit = nameInOcrLines(strip, name)
         val cancelHit = strip.any { it.text.contains("取消") }
+        // 主列表排除（2026-10-27）：微信主列表首条会话名字的 y 可落在顶部条内
+        // （1080×2460 实测名字行 y≈320，顶部条高 295，紧邻），仅凭「顶部条有
+        // 名字」会把主列表误判成会话页 → 导航早退「成功」而实际没进会话。
+        // 底部 Tab 锚是主列表独有指纹（会话页底部是输入栏、搜索页是键盘）。
+        val tabHits = mainListTabHits(lines, height)
+        val stillMainList = tabHits >= MAIN_LIST_TAB_MIN_HITS
         if (lines.isEmpty()) {
             // 诊断（黑帧/尺寸异常线索）：帧到手但一个字都没识别到。
             Log.w(
@@ -1073,8 +1140,11 @@ class ImChatNavigator @Inject constructor(
                     (visionFrame?.let { "${it.width}x${it.height}" } ?: "a11y-capture"),
             )
         }
-        Log.i(TAG, "⑧-ocr nameHit=$nameHit cancelHit=$cancelHit lines=${strip.size}")
-        return nameHit && !cancelHit
+        Log.i(
+            TAG,
+            "⑧-ocr nameHit=$nameHit cancelHit=$cancelHit tabHits=$tabHits lines=${strip.size}",
+        )
+        return nameHit && !cancelHit && !stillMainList
     }
 
     /** [a]/[b] 公共前缀长度（大小写不敏感由调用方保证）。 */
@@ -1096,14 +1166,121 @@ class ImChatNavigator @Inject constructor(
         val frame = runCatching { frameSource.grabFrame().getOrNull() }.getOrNull() ?: return false
         val lines = runCatching { ocr.recognize(bitmapToPng(frame)).getOrNull() }.getOrNull()
             ?: return false
-        val zoneTop = (frame.height * MAIN_LIST_TAB_ZONE_RATIO).toInt()
-        val hits = lines.count { line ->
-            line.centerY >= zoneTop &&
-                MAIN_LIST_TAB_TOKENS.any { line.text.contains(it) }
-        }
+        val hits = mainListTabHits(lines, frame.height)
         val hit = hits >= MAIN_LIST_TAB_MIN_HITS
         Log.i(TAG, "⑤ vision main-list check hits=$hits hit=$hit lines=${lines.size}")
         return hit
+    }
+
+    /**
+     * 主列表底部 Tab 锚命中数（纯函数）：底部 [MAIN_LIST_TAB_ZONE_RATIO] 带内
+     * 命中主列表专属 Tab 词的行数。⑤ 归位判定、视觉直达、⑧ 进页确认三处共用
+     * 同一口径——「还在主列表」在三处含义完全一致，任何一处口径漂移都会造成
+     * 误判（④/⑧ 把主列表当会话页，或 ⑤ 把会话页当主列表反复 back）。
+     */
+    private fun mainListTabHits(lines: List<OcrLine>, frameHeight: Int): Int {
+        val zoneTop = (frameHeight * MAIN_LIST_TAB_ZONE_RATIO).toInt()
+        return lines.count { line ->
+            line.centerY >= zoneTop && MAIN_LIST_TAB_TOKENS.any { line.text.contains(it) }
+        }
+    }
+
+    /**
+     * 主列表视觉直达（2026-10-27 真机 `im_nav_contact_not_found` 根因修复，
+     * 自动档启动 19.8s 失败 → ~2s 成功的那条路）：
+     *
+     * 微信主列表整页 a11y 黑洞（findText 恒空、screenText=''），④½/⑤½ 的节点
+     * 直达天然失效；而「最近聊过的人就在列表里」是最常见场景——OCR 一帧找
+     * 联系人名所在行，点行中心即进会话，**全程不依赖任何注入通道**（Shizuku
+     * 关、FTS 输入框吞字也照样能用），绕过「搜索 → 输入 → 结果」三跳。
+     *
+     * 每页一次「取帧 → OCR」：底部 Tab 锚确认在主列表（否则立即返回 false，
+     * 不误点）；名字行须在标题带以下、Tab 带以上；取最靠上者（列表按最近
+     * 会话排序，首条即最靠前）。命中即 tap → 进页确认（标题节点或视觉判定），
+     * 确认失败 back 回列表继续找——绝不把「点了没进」当成成功。
+     *
+     * 未命中/未进页则上滑一屏再找，最多 [LIST_SCAN_PAGES] 页（目标常被置顶与
+     * 新消息推到首屏之后；真机复测目标会话在置顶折叠区时首屏根本看不到）。
+     */
+    private suspend fun tapMainListContact(name: String): Boolean {
+        var pinnedExpanded = false
+        repeat(LIST_SCAN_PAGES) { page ->
+            val frame = runCatching { frameSource.grabFrame().getOrNull() }.getOrNull()
+            if (frame == null) {
+                Log.w(TAG, "list-scan page=$page frame unavailable")
+                return false
+            }
+            val lines = runCatching { ocr.recognize(bitmapToPng(frame)).getOrNull() }.getOrNull()
+            if (lines == null) {
+                Log.w(TAG, "list-scan page=$page ocr unavailable")
+                return false
+            }
+            val tabHits = mainListTabHits(lines, frame.height)
+            if (tabHits < MAIN_LIST_TAB_MIN_HITS) {
+                Log.i(TAG, "list-scan page=$page not main list (tabHits=$tabHits), abort")
+                return false
+            }
+            val minTop = (frame.height * LIST_NAME_MIN_TOP_RATIO).toInt()
+            val maxBottom = (frame.height * MAIN_LIST_TAB_ZONE_RATIO).toInt()
+            val hit = lines.asSequence()
+                .filter { it.centerY in minTop..maxBottom && lineMatches(it.text, name) }
+                .minByOrNull { it.centerY }
+            Log.i(
+                TAG,
+                "list-scan page=$page lines=${lines.size} hit='${hit?.text}' " +
+                    "cy=${hit?.centerY}",
+            )
+            if (hit != null && bridge.tap(hit.centerX, hit.centerY).isSuccess) {
+                delay(POST_TAP_DELAY_MS)
+                if (confirmEnteredChat(name)) return true
+                Log.w(TAG, "list-scan tap not entered chat, back to list")
+                runCatching { bridge.pressKey("back") }
+                delay(POST_TAP_DELAY_MS)
+            }
+            // 置顶折叠区展开（2026-10-27 真机根因之一）：目标会话被置顶时**不在
+            // 普通列表里**（真机 47 个置顶、目标恰在其中），首屏与翻页都找不到。
+            // 「折叠置顶聊天」行只在折叠态存在，点它是纯展开（不会把已展开的
+            // 置顶区折起来），故只做一次、失败即继续走原流程。
+            if (hit == null && !pinnedExpanded) {
+                val header = lines.firstOrNull {
+                    it.text.contains(PINNED_COLLAPSED_TOKEN) &&
+                        it.centerY in minTop..maxBottom
+                }
+                if (header != null) {
+                    Log.i(TAG, "list-scan expand pinned group (${header.centerX},${header.centerY})")
+                    bridge.tap(header.centerX, header.centerY)
+                    delay(POST_TAP_DELAY_MS)
+                    pinnedExpanded = true
+                    return@repeat
+                }
+            }
+            if (page < LIST_SCAN_PAGES - 1) {
+                val size = bridge.screenSize() ?: return false
+                val x = size.first / 2
+                bridge.swipe(
+                    x,
+                    (size.second * LIST_SWIPE_FROM_Y_RATIO).toInt(),
+                    x,
+                    (size.second * LIST_SWIPE_TO_Y_RATIO).toInt(),
+                    LIST_SWIPE_MS,
+                )
+                delay(POST_TAP_DELAY_MS)
+            }
+        }
+        return false
+    }
+
+    /**
+     * 进页确认（视觉直达专用）：窗口标题通道（企微等节点树可读的 IM）或
+     * 视觉通道（顶部条名字 + 非主列表 + 非搜索页）。两者都不可判定即 false
+     * ——宁可继续搜索也不把「点了但没进会话」当成功。
+     */
+    private suspend fun confirmEnteredChat(name: String): Boolean {
+        if (titleMatches(bridge.windowTitle(), name)) {
+            Log.i(TAG, "list-scan entered via window title")
+            return true
+        }
+        return chatPageVisibleByOcr(name)
     }
 
     /**

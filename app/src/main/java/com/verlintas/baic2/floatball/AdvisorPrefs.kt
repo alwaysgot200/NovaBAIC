@@ -139,10 +139,11 @@ class AdvisorPrefs @Inject constructor(
         /**
          * 拟人节奏下限/上限（毫秒，闭区间均匀采样，方案 §8.2）：自动档派发前的
          * 随机延迟区间。真机联调抱怨「回复太慢」，根因之一即默认 8~90 秒
-         * （均值 ~49s）；档位见 [PACE_OPTIONS]，取值必须整对命中档位。
+         * （均值 ~49s）；2026-10-27 默认改为 [PACE_DEFAULT]（标准 3~10s），
+         * 档位见 [PACE_OPTIONS]，取值必须整对命中档位。
          */
-        val autoPaceMinMs: Long = HumanPace.MIN_DELAY_MS,
-        val autoPaceMaxMs: Long = HumanPace.MAX_DELAY_MS,
+        val autoPaceMinMs: Long = PACE_DEFAULT.first,
+        val autoPaceMaxMs: Long = PACE_DEFAULT.second,
         /**
          * 接管/达成通报总闸（2026-10-20 通报方案 §十）：H 接管型与 G 达成型命中
          * 后铃声通知主人。默认开启——通报只是旁路提醒，不改变任何发送决策。
@@ -288,9 +289,9 @@ class AdvisorPrefs @Inject constructor(
                 .coerceIn(0f, 1f),
             autoExecutorChannel = prefs.getString(KEY_AUTO_EXECUTOR, InjectorSelector.CONFIG_AUTO)
                 ?.takeIf { it in InjectorSelector.CONFIG_OPTIONS } ?: InjectorSelector.CONFIG_AUTO,
-            autoPaceMinMs = prefs.getLong(KEY_PACE_MIN, HumanPace.MIN_DELAY_MS)
+            autoPaceMinMs = prefs.getLong(KEY_PACE_MIN, PACE_DEFAULT.first)
                 .coerceIn(0L, PACE_CEILING_MS),
-            autoPaceMaxMs = prefs.getLong(KEY_PACE_MAX, HumanPace.MAX_DELAY_MS)
+            autoPaceMaxMs = prefs.getLong(KEY_PACE_MAX, PACE_DEFAULT.second)
                 .coerceIn(0L, PACE_CEILING_MS),
             escalationEnabled = prefs.getBoolean(KEY_ESCALATION_ENABLED, true),
             escalationStrict = prefs.getBoolean(KEY_ESCALATION_STRICT, false),
@@ -321,15 +322,17 @@ class AdvisorPrefs @Inject constructor(
         _state.update { it.copy(maxSessionMs = ms) }
     }
 
-    /** 工作段/停歇档（毫秒）：0 仅对停歇合法（=不停歇）；运行中改下轮循环生效。 */
+    /** 工作段/停歇档（毫秒）：0 仅对停歇合法（=不停歇）；运行中改下轮循环生效。
+     *  非法值回退 [DEFAULT_WORK_REST_MS]（1 分钟，与 loadSettings 同口径；
+     *  2026-10-27 前是 10 分钟，回退档必须与默认档一致，否则广播调参失败会静默变慢）。 */
     fun setWorkMs(ms: Long) {
-        val value = ms.takeIf { it in WORK_REST_OPTIONS } ?: 10 * 60_000L
+        val value = ms.takeIf { it in WORK_REST_OPTIONS } ?: DEFAULT_WORK_REST_MS
         prefs.edit().putLong(KEY_WORK_MS, value).apply()
         _state.update { it.copy(workMs = value) }
     }
 
     fun setRestMs(ms: Long) {
-        val value = ms.takeIf { it in WORK_REST_OPTIONS } ?: 10 * 60_000L
+        val value = ms.takeIf { it in WORK_REST_OPTIONS } ?: DEFAULT_WORK_REST_MS
         prefs.edit().putLong(KEY_REST_MS, value).apply()
         _state.update { it.copy(restMs = value) }
     }
@@ -707,15 +710,22 @@ class AdvisorPrefs @Inject constructor(
 
         /**
          * 拟人节奏档位（发送前随机延迟区间，毫秒；设置页与调试广播共用）：
-         * 快速=联调档（1~3s，只为压缩测试反馈环）、标准（3~10s）、
-         * 拟人=默认（8~90s，方案 §8.2 原口径）、从容（30~180s，高风控场景）。
-         * 单挑选定；非法值回退 [PACE_HUMAN]。
+         * 快速=联调档（1~3s，只为压缩测试反馈环）、标准=默认（3~10s）、
+         * 拟人（8~90s，方案 §8.2 原口径）、从容（30~180s，高风控场景）。
+         *
+         * 2026-10-27 默认由「拟人 8~90s」改为「标准 3~10s」：真机复测确认
+         * 首条消息 1~2 分钟的观感主因就是这段随机等待（均值 ~49s），
+         * 它压在所有真实耗时（3~7s）之上，把「自动档在干活」掩盖成「没反应」。
+         * 需要更像真人时可在设置页切拟人/从容。
          */
         val PACE_FAST = 1_000L to 3_000L
         val PACE_STANDARD = 3_000L to 10_000L
         val PACE_HUMAN = HumanPace.MIN_DELAY_MS to HumanPace.MAX_DELAY_MS
         val PACE_PATIENT = 30_000L to 180_000L
         val PACE_OPTIONS = listOf(PACE_FAST, PACE_STANDARD, PACE_HUMAN, PACE_PATIENT)
+
+        /** 未设置时采用的默认节奏档（见 [PACE_OPTIONS] 说明）。 */
+        val PACE_DEFAULT = PACE_STANDARD
 
         /** 静止降频允许的倍数档。 */
         val BACKOFF_OPTIONS = setOf(1, 2, 4)

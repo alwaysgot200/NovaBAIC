@@ -46,6 +46,7 @@ import com.verlintas.baic2.floatball.director.GateReasons
 import com.verlintas.baic2.floatball.director.GateRejection
 import com.verlintas.baic2.floatball.director.Gatekeeper
 import com.verlintas.baic2.floatball.director.ProactivePolicyRepository
+import com.verlintas.baic2.floatball.home.AdvisorRunState
 import com.verlintas.baic2.floatball.notify.EscalationNotifier
 import com.verlintas.baic2.floatball.notify.NotifyGate
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -337,6 +338,7 @@ class CompanionWindowController @Inject constructor(
     private val escalationNotifier: EscalationNotifier,
     private val prefs: AdvisorPrefs,
     private val db: AdvisorDatabase,
+    private val runState: AdvisorRunState,
     @ApplicationContext private val context: Context,
 ) {
 
@@ -764,7 +766,14 @@ class CompanionWindowController @Inject constructor(
                     // 执行段账单（拟人延迟 + 派发实耗 + 结局）：与治理段分行落台账，
                     // 回答「慢在等时机、慢在导航点击，还是慢在模型」。
                     val sendTrace = TimingTrace().add("pace", paceMs)
+                    // 等待期把「已在拟人节奏里等 N 秒」写进状态签（方案 §5.2 S5）：
+                    // 用户看到的是「正在等待发送」，而不是「卡住了」。
+                    runState.setAutoPhase(
+                        AdvisorRunState.AutoPhase.READY,
+                        context.getString(R.string.float_auto_phase_pace, paceMs / 1000L),
+                    )
                     delay(paceMs)
+                    runState.setAutoPhase(AdvisorRunState.AutoPhase.READY)
                     // sleep 后复查：窗口仍是对同一联系人在途，且未滑入静默时段。
                     val still = _activeWindow.value ?: return@launch
                     if (still.contactId != snapshot.contactId) return@launch
@@ -772,6 +781,10 @@ class CompanionWindowController @Inject constructor(
                         degrade(finalRequest, REASON_QUIET_HOURS)
                         return@launch
                     }
+                    runState.setAutoPhase(
+                        AdvisorRunState.AutoPhase.READY,
+                        context.getString(R.string.float_auto_phase_sending),
+                    )
                     val outcome = sendTrace.stageSuspend("send") { dispatcher.dispatch(finalRequest) }
                     when (outcome) {
                         is AutoSendResult.Sent -> {
@@ -788,6 +801,7 @@ class CompanionWindowController @Inject constructor(
                     val row = sendTrace.render()
                     Log.i(AutoTiming.TAG, "exec conv=$conversationId $row")
                     runCatching { dispatcher.logTiming(snapshot.contactId, conversationId, row) }
+                    runState.setAutoPhase(AdvisorRunState.AutoPhase.READY)
                 }
             }
             busy
@@ -867,12 +881,22 @@ class CompanionWindowController @Inject constructor(
      */
     fun kickoffAuto(contact: ContactRef) {
         windowScope.launch {
+            // 等待期在状态签上留痕（方案 §5.2 S5）：不是「没反应」，是在等首帧。
+            runState.setAutoPhase(
+                AdvisorRunState.AutoPhase.WAITING,
+                context.getString(R.string.float_auto_phase_kickoff),
+            )
             delay(KICKOFF_DELAY_MS)
             val window = _activeWindow.value ?: return@launch
             if (window.contactId != contact.contactId) return@launch
             if (!prefs.state.value.autoModeEnabled) return@launch
             if (inQuietNow()) {
                 Log.i(TAG, "auto kickoff skipped: quiet_hours")
+                // 静默时段不主动开场，但状态签要告诉用户「在监控，只是不抢发」。
+                runState.setAutoPhase(
+                    AdvisorRunState.AutoPhase.READY,
+                    context.getString(R.string.float_auto_phase_quiet),
+                )
                 return@launch
             }
             // 已有来信回合进入治理 → 放弃主动开场（2026-10-27 真机 12:01 事故）：
@@ -883,6 +907,10 @@ class CompanionWindowController @Inject constructor(
             val inFlight = screenAdvisor.transcript.value.status == ScreenAdvisor.Status.Thinking
             if (handled > 0 || inFlight) {
                 Log.i(TAG, "auto kickoff skipped: drafts=$handled inFlight=$inFlight")
+                runState.setAutoPhase(
+                    AdvisorRunState.AutoPhase.READY,
+                    context.getString(R.string.float_auto_phase_reply_priority),
+                )
                 return@launch
             }
             runCatching { screenAdvisor.runAutoKickoff(contact) }
@@ -978,8 +1006,13 @@ class CompanionWindowController @Inject constructor(
          * 2026-10-27 由 2.5s 放宽到 12s：给差分引擎足够时间把屏上「对方未回复
          * 的来信」先变成回合，开场检查据此让位于来信回复（真机 12:01 开场与
          * 来信回复抢跑的教训）。
+         *
+         * 2026-10-27 二次修订（方案 §5.2 S5）：12s 在真机观感上就是「点了自动
+         * 一分多钟没反应」的第一段，收敛到 3s——首帧稳定（差分 2 拍 ≈1.6s）已够，
+         * 「有来信就让位」的判定不看等待时长、只看 `drafts/inFlight`，缩短不改变
+         * 优先级语义，只是让开场更快。
          */
-        const val KICKOFF_DELAY_MS = 12_000L
+        const val KICKOFF_DELAY_MS = 3_000L
 
         /** 硬审免判下限：Gatekeeper 重复判定的最短稿长口径之外的兜底长度。 */
         const val MIN_GATE_CHARS = 160

@@ -33,12 +33,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.verlintas.baic2.designsystem.Baic2Mono
@@ -112,10 +116,6 @@ class PermissionsViewModel @Inject constructor(
         refreshTick.update { it + 1 }
     }
 
-    fun requestShizukuPermission() {
-        shellBridge.requestPermission()
-    }
-
     private fun filesAccessEnabled(): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.os.Environment.isExternalStorageManager()
@@ -176,6 +176,15 @@ fun PermissionsPage(
     }
 
     LaunchedEffect(Unit) { viewModel.refresh() }
+    // 从系统设置/Shizuku 引导页返回时重查：安装或启动 Shizuku 后条目状态立即更新。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refresh()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     SettingsPage(
         title = stringResource(R.string.settings_permissions_title),
@@ -226,22 +235,15 @@ fun PermissionsPage(
                     ShellState.PermissionRequired -> stringResource(R.string.settings_perm_shizuku_denied)
                     ShellState.Unavailable -> stringResource(R.string.settings_perm_shizuku_unavailable)
                 },
-                onClick = when (state.shizuku) {
-                    ShellState.PermissionRequired -> {
-                        { viewModel.requestShizukuPermission() }
-                    }
-                    // 就绪后点击进入一条龙授权页：本体已通，继续完成投影免弹窗（appops）。
-                    ShellState.Ready -> {
-                        { startGrantActivity(context, SHIZUKU_GRANT_ACTIVITY) }
-                    }
-                    ShellState.Unavailable -> null
-                },
+                // 三态都可进入引导页：未安装先内置安装，未启动先拉起 Shizuku，
+                // 未授权申请权限，已就绪继续完成投影免弹窗（appops）一条龙。
+                onClick = { startGrantActivity(context, SHIZUKU_GRANT_ACTIVITY) },
                 trailing = {
                     Text(
-                        text = if (state.shizuku == ShellState.Ready) {
-                            stringResource(R.string.settings_perm_granted)
-                        } else {
-                            stringResource(R.string.settings_perm_grant)
+                        text = when (state.shizuku) {
+                            ShellState.Ready -> stringResource(R.string.settings_perm_granted)
+                            ShellState.PermissionRequired -> stringResource(R.string.settings_perm_grant)
+                            ShellState.Unavailable -> stringResource(R.string.settings_perm_shizuku_setup)
                         },
                         style = Baic2Mono.label,
                         color = if (state.shizuku == ShellState.Ready) {

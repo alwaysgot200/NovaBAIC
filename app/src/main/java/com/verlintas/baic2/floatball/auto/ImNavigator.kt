@@ -168,7 +168,11 @@ class ImNavigator @Inject constructor(
         /** 前台轮询间隔。 */
         const val POLL_INTERVAL_MS = 250L
 
-        /** LRU 容量：PendingIntent 只存会话跳转键，量级小，32 足够。 */
-        const val CACHE_CAP = 32
+        /**
+         * LRU 容量：PendingIntent 只存会话跳转键，量级小。2026-10-27 由 32 提到
+         * 64——真机账号通知栏可同时挂 50+ 会话（未读堆积），容量小于在挂量时
+         * 目标键会被后续通知挤掉，导航退回必败的搜索链。
+         */
+        const val CACHE_CAP = 64
     }
 }

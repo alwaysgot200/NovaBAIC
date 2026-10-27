@@ -84,6 +84,11 @@ class InjectorSelectorTest {
             InjectorChannel.Shizuku,
             InjectorSelector.select(InjectorSelector.CONFIG_SHIZUKU, a11yReady = true, shizukuReady = true),
         )
+        // 手势粘贴只靠无障碍手势 + 截图 OCR，与 Shizuku 无关（2026-10-27 微信黑洞兜底）。
+        assertEquals(
+            InjectorChannel.Gesture,
+            InjectorSelector.select(InjectorSelector.CONFIG_GESTURE, a11yReady = true, shizukuReady = false),
+        )
     }
 
     @Test
@@ -97,6 +102,11 @@ class InjectorSelectorTest {
             InjectorChannel.DraftFallback,
             InjectorSelector.select(InjectorSelector.CONFIG_SHIZUKU, a11yReady = true, shizukuReady = false),
         )
+        // 手势通道同样不静默换道：a11y 断开（手势/截图都没了）即使 Shizuku 在线也降 C。
+        assertEquals(
+            InjectorChannel.DraftFallback,
+            InjectorSelector.select(InjectorSelector.CONFIG_GESTURE, a11yReady = false, shizukuReady = true),
+        )
     }
 
     @Test
@@ -107,12 +117,12 @@ class InjectorSelectorTest {
         )
     }
 
-    // ── 运行期降级链（2026-10-27 真机修复）：auto 档 A 失败且确定未发出时回落 B ──
+    // ── 运行期降级链（2026-10-27 真机修复）：auto 档 A 失败且确定未发出时依次回落 B/G ──
 
     @Test
-    fun plan_auto_bothReady_walksAThenB() {
+    fun plan_auto_bothReady_walksAThenBThenGesture() {
         assertEquals(
-            listOf(InjectorChannel.A11y, InjectorChannel.Shizuku),
+            listOf(InjectorChannel.A11y, InjectorChannel.Shizuku, InjectorChannel.Gesture),
             InjectorSelector.plan(InjectorSelector.CONFIG_AUTO, a11yReady = true, shizukuReady = true),
         )
     }
@@ -122,6 +132,11 @@ class InjectorSelectorTest {
         assertEquals(
             listOf(InjectorChannel.Shizuku),
             InjectorSelector.plan(InjectorSelector.CONFIG_AUTO, a11yReady = false, shizukuReady = true),
+        )
+        // 本机真机形态（微信黑洞 + 无 Shizuku）：计划 = A 之后直接手势粘贴。
+        assertEquals(
+            listOf(InjectorChannel.A11y, InjectorChannel.Gesture),
+            InjectorSelector.plan(InjectorSelector.CONFIG_AUTO, a11yReady = true, shizukuReady = false),
         )
         // 双通道都不可用：空计划（调用方直接降 C 起草档，不虚构候选）。
         assertEquals(
@@ -140,12 +155,21 @@ class InjectorSelectorTest {
             emptyList<InjectorChannel>(),
             InjectorSelector.plan(InjectorSelector.CONFIG_SHIZUKU, a11yReady = true, shizukuReady = false),
         )
+        // 强制手势：只认 a11y 在线（手势 + 截图来源）。
+        assertEquals(
+            listOf(InjectorChannel.Gesture),
+            InjectorSelector.plan(InjectorSelector.CONFIG_GESTURE, a11yReady = true, shizukuReady = false),
+        )
+        assertEquals(
+            emptyList<InjectorChannel>(),
+            InjectorSelector.plan(InjectorSelector.CONFIG_GESTURE, a11yReady = false, shizukuReady = true),
+        )
     }
 
     @Test
     fun plan_invalidConfig_behavesAsAuto() {
         assertEquals(
-            listOf(InjectorChannel.A11y, InjectorChannel.Shizuku),
+            listOf(InjectorChannel.A11y, InjectorChannel.Shizuku, InjectorChannel.Gesture),
             InjectorSelector.plan("garbage", a11yReady = true, shizukuReady = true),
         )
     }

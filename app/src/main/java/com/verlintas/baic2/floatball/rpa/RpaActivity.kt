@@ -23,11 +23,17 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,22 +41,32 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.verlintas.baic2.R
 import com.verlintas.baic2.core.data.prefs.AppLocaleStore
 import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
 import com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity
+import com.verlintas.rpa.model.RpaIssue
+import com.verlintas.rpa.model.RpaIssueSeverity
+import com.verlintas.rpa.model.RpaReadiness
 import com.verlintas.rpa.model.RpaScriptFactory
 import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaCapabilities
+import com.verlintas.rpa.model.RpaIds
 import com.verlintas.rpa.model.RpaMode
+import com.verlintas.rpa.model.RpaPickKind
+import com.verlintas.rpa.model.RpaPickRequest
 import com.verlintas.rpa.model.RpaScript
+import com.verlintas.rpa.model.RpaValidator
 import com.verlintas.rpa.model.RpaVisionSpec
 import com.verlintas.rpa.store.RpaScriptStore
 import dagger.hilt.android.AndroidEntryPoint
@@ -75,6 +91,12 @@ class RpaActivity : ComponentActivity() {
     lateinit var store: RpaScriptStore
 
     @Inject
+    lateinit var runController: RpaRunController
+
+    @Inject
+    lateinit var pickCoordinator: RpaPickCoordinator
+
+    @Inject
     lateinit var settingsRepository: SettingsRepository
 
     override fun attachBaseContext(newBase: Context) {
@@ -89,6 +111,8 @@ class RpaActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val initialPackage = intent.getStringExtra(EXTRA_IM_PACKAGE)
+        val initialScriptId = intent.getStringExtra(EXTRA_SCRIPT_ID)
+        val initialStepId = intent.getStringExtra(EXTRA_STEP_ID)
         setContent {
             val themeMode by settingsRepository.themeMode
                 .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
@@ -110,13 +134,20 @@ class RpaActivity : ComponentActivity() {
                 RpaApp(
                     device = device,
                     store = store,
+                    runController = runController,
+                    pickCoordinator = pickCoordinator,
                     initialPackage = initialPackage,
+                    initialScriptId = initialScriptId,
+                    initialStepId = initialStepId,
                     onOpenShizuku = {
                         // 视觉线路的执行必须依赖 Shizuku 注入；ShizukuGrantActivity
                         // 覆盖安装 / 授权 / appops 三段引导，返回后由能力卡刷新确认。
                         startActivity(Intent(this@RpaActivity, ShizukuGrantActivity::class.java))
                     },
                     onClose = { finish() },
+                    onCloseForPick = { finish() },
+                    onStartRun = { scriptId -> RpaEntryPoints.startRun(this, scriptId) },
+                    onStopRun = { RpaEntryPoints.stopRun(this) },
                 )
             }
         }
@@ -124,12 +155,23 @@ class RpaActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_IM_PACKAGE = "rpa_im_package"
+        const val EXTRA_SCRIPT_ID = "rpa_script_id"
+        const val EXTRA_STEP_ID = "rpa_step_id"
 
-        fun intent(context: Context, imPackage: String? = null): Intent =
+        fun intent(
+            context: Context,
+            imPackage: String? = null,
+            scriptId: String? = null,
+            stepId: String? = null,
+        ): Intent =
             Intent(context, RpaActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .apply {
                     imPackage?.let { putExtra(EXTRA_IM_PACKAGE, it) }
+                    scriptId?.let {
+                        putExtra(EXTRA_SCRIPT_ID, it)
+                        stepId?.let { step -> putExtra(EXTRA_STEP_ID, step) }
+                    }
                 }
     }
 }
@@ -154,17 +196,47 @@ private enum class RpaScreen {
 private fun RpaApp(
     device: RpaAndroidDevice,
     store: RpaScriptStore,
+    runController: RpaRunController,
+    pickCoordinator: RpaPickCoordinator,
     initialPackage: String?,
+    initialScriptId: String?,
+    initialStepId: String?,
     onOpenShizuku: () -> Unit,
     onClose: () -> Unit,
+    onCloseForPick: () -> Unit,
+    onStartRun: (String) -> Unit,
+    onStopRun: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var screen by remember { mutableStateOf(RpaScreen.LIBRARY) }
+    val context = LocalContext.current
+    val initialScript = remember {
+        initialScriptId?.let { runCatching { store.load(it) }.getOrNull() }
+    }
+    var screen by remember {
+        mutableStateOf(if (initialScript != null) RpaScreen.EDITOR else RpaScreen.LIBRARY)
+    }
     var scripts by remember { mutableStateOf(runCatching { store.list() }.getOrDefault(emptyList())) }
-    var script by remember { mutableStateOf<RpaScript?>(null) }
-    var selectedStepId by remember { mutableStateOf<String?>(null) }
+    var script by remember { mutableStateOf(initialScript) }
+    var selectedStepId by remember {
+        mutableStateOf(
+            initialStepId?.takeIf { id -> initialScript?.steps?.any { it.id == id } == true }
+                ?: initialScript?.steps?.firstOrNull()?.id,
+        )
+    }
     var editingStepId by remember { mutableStateOf<String?>(null) }
     var capabilities by remember { mutableStateOf(device.capabilities) }
+    var blockedIssues by remember { mutableStateOf<List<RpaIssue>>(emptyList()) }
+    // 拾取回跳只让属性面板打开一次；之后在库/编辑器之间往返按默认流程页。
+    var pendingOpenProps by remember { mutableStateOf(initialStepId != null) }
+    val runState by runController.state.collectAsStateWithLifecycle()
+    val runEvents by runController.events.collectAsStateWithLifecycle()
+    val runStartFailed = stringResource(R.string.float_rpa_run_start_failed)
+
+    LaunchedEffect(initialScriptId, initialStepId) {
+        if (initialScriptId != null && initialStepId != null) {
+            Toast.makeText(context, R.string.float_rpa_pick_applied, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     fun refreshCapabilities() {
         capabilities = device.capabilities
@@ -174,6 +246,7 @@ private fun RpaApp(
         script = target
         selectedStepId = target.steps.firstOrNull()?.id
         editingStepId = null
+        pendingOpenProps = false
         screen = RpaScreen.EDITOR
     }
 
@@ -190,8 +263,57 @@ private fun RpaApp(
         screen = RpaScreen.LIBRARY
     }
 
+    /**
+     * 运行前统一门禁：先落盘（列表运行读的是 store 版本），再做校验 + 能力就绪；
+     * 有 ERROR 时只弹问题列表，不启动服务，避免后台跑一半才失败。
+     */
+    fun requestRun(target: RpaScript) {
+        val saved = persist(target) ?: target
+        val issues = RpaValidator.validate(saved) +
+            RpaReadiness.check(saved, device.capabilities) { sid, tid ->
+                store.templateExists(sid, tid)
+            }
+        val errors = issues.filter { it.severity == RpaIssueSeverity.ERROR }
+        if (errors.isNotEmpty()) {
+            blockedIssues = errors
+            return
+        }
+        runCatching { onStartRun(saved.id) }
+            .onFailure {
+                Toast.makeText(context, runStartFailed, Toast.LENGTH_SHORT).show()
+            }
+    }
+
     LaunchedEffect(screen) {
         refreshCapabilities()
+        if (screen == RpaScreen.EDITOR) pendingOpenProps = false
+    }
+
+    /**
+     * 进入拾取（方案 §7.8）：先落盘脚本，再武装请求并退出本页，把目标 App 让到
+     * 前台；用户在悬浮球里打开布局分析 / 以图找图并点「应用到当前步骤」后，
+     * 工具会带 scriptId / stepId 重新打开本页并定位到该步骤。
+     */
+    fun startPick(kind: RpaPickKind) {
+        val active = script ?: return
+        val saved = persist(active) ?: return
+        val stepId = selectedStepId ?: saved.steps.firstOrNull()?.id ?: return
+        val step = saved.steps.firstOrNull { it.id == stepId } ?: return
+        pickCoordinator.arm(
+            RpaPickRequest(
+                requestId = RpaIds.newId("pick"),
+                scriptId = saved.id,
+                stepId = step.id,
+                kind = kind,
+                scriptName = saved.name,
+                stepLabel = step.label.ifBlank {
+                    rpaActionLabelRes(step.action).let { context.getString(it) }
+                },
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
+        Toast.makeText(context, R.string.float_rpa_pick_armed, Toast.LENGTH_LONG).show()
+        onCloseForPick()
     }
 
     // 从 Shizuku 授权页 / 录屏授权弹窗返回时 Activity 会重新 resume；自动复查
@@ -217,6 +339,7 @@ private fun RpaApp(
             scripts = scripts,
             capabilities = capabilities,
             initialPackage = initialPackage,
+            runState = runState,
             onBack = onClose,
             onRefreshCapabilities = { refreshCapabilities() },
             onGrantProjection = {
@@ -236,6 +359,8 @@ private fun RpaApp(
                     openEditor(saved)
                 }
             },
+            onRun = { target -> requestRun(target) },
+            onStopRun = onStopRun,
             onDuplicate = { target ->
                 store.duplicate(target)
                 scripts = runCatching { store.list() }.getOrDefault(scripts)
@@ -257,8 +382,10 @@ private fun RpaApp(
                     script = active,
                     selectedStepId = selectedStepId,
                     capabilities = capabilities,
-                    device = device,
                     store = store,
+                    runState = runState,
+                    runEvents = runEvents,
+                    openPropsInitially = pendingOpenProps,
                     onBack = { leaveEditor() },
                     onSelectStep = { selectedStepId = it },
                     onScriptChange = { updated ->
@@ -286,6 +413,9 @@ private fun RpaApp(
                         editingStepId = stepId
                         screen = RpaScreen.VISION
                     },
+                    onStartPick = { kind -> startPick(kind) },
+                    onRun = { requestRun(active) },
+                    onStopRun = onStopRun,
                 )
             }
         }
@@ -331,5 +461,27 @@ private fun RpaApp(
                 )
             }
         }
+    }
+
+    if (blockedIssues.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { blockedIssues = emptyList() },
+            title = { Text(stringResource(R.string.float_rpa_run_blocked_title)) },
+            text = {
+                Column {
+                    Text(
+                        text = stringResource(R.string.float_rpa_run_blocked_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    RpaIssueList(blockedIssues)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { blockedIssues = emptyList() }) {
+                    Text(stringResource(R.string.float_rpa_run_blocked_dismiss))
+                }
+            },
+        )
     }
 }

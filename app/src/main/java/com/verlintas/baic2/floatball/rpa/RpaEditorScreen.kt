@@ -19,8 +19,11 @@
 
 package com.verlintas.baic2.floatball.rpa
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,18 +34,23 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -56,20 +64,24 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,7 +89,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.verlintas.baic2.R
 import com.verlintas.baic2.floatball.AdvisorPage
-import com.verlintas.rpa.engine.RpaRunner
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaCatalog
@@ -89,6 +100,7 @@ import com.verlintas.rpa.model.RpaIssue
 import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaModePolicy
+import com.verlintas.rpa.model.RpaPickKind
 import com.verlintas.rpa.model.RpaReadiness
 import com.verlintas.rpa.model.RpaRunEvent
 import com.verlintas.rpa.model.RpaCapabilities
@@ -101,8 +113,10 @@ import com.verlintas.rpa.model.RpaValidator
 import com.verlintas.rpa.model.RpaVisionSpec
 import com.verlintas.rpa.store.RpaScriptStore
 import kotlin.math.roundToInt
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 
 // ---------------------------- 脚本编辑辅助 ----------------------------
 
@@ -156,6 +170,12 @@ private data class DragPayload(
     val targetIndex: Int?,
 )
 
+/** 撤销栈上限：只保留结构性改动的最近 20 步，避免长编辑占内存。 */
+private const val UNDO_LIMIT = 20
+
+/** 拖到列表边缘时每帧的滚动像素。 */
+private const val EDGE_SCROLL_PX = 18f
+
 /**
  * RPA 拖拽式编辑器：
  *
@@ -170,8 +190,10 @@ internal fun RpaEditorScreen(
     script: RpaScript,
     selectedStepId: String?,
     capabilities: RpaCapabilities,
-    device: RpaAndroidDevice,
     store: RpaScriptStore,
+    runState: RpaRunController.State,
+    runEvents: List<RpaRunEvent>,
+    openPropsInitially: Boolean = false,
     onBack: () -> Unit,
     onSelectStep: (String?) -> Unit,
     onScriptChange: (RpaScript) -> Unit,
@@ -181,12 +203,23 @@ internal fun RpaEditorScreen(
     onOpenShizuku: () -> Unit,
     onOpenInspector: (String) -> Unit,
     onOpenVision: (String) -> Unit,
+    onStartPick: (RpaPickKind) -> Unit,
+    onRun: () -> Unit,
+    onStopRun: () -> Unit,
 ) {
-    var tab by remember { mutableStateOf(EditorTab.FLOW) }
-    var running by remember { mutableStateOf(false) }
-    var events by remember { mutableStateOf<List<RpaRunEvent>>(emptyList()) }
-    var job by remember { mutableStateOf<Job?>(null) }
-    val scope = rememberCoroutineScope()
+    var tab by remember {
+        mutableStateOf(if (openPropsInitially) EditorTab.PROPS else EditorTab.FLOW)
+    }
+    val runningState = runState as? RpaRunController.State.Running
+    val finishedState = runState as? RpaRunController.State.Finished
+    val running = runningState?.scriptId == script.id
+    val otherRunning = runningState != null && runningState.scriptId != script.id
+    // 只展示当前脚本的事件；换脚本运行时 start() 已清空旧事件。
+    val events = if (running || finishedState?.scriptId == script.id) {
+        runEvents
+    } else {
+        emptyList()
+    }
 
     val selectedStep = script.steps.firstOrNull { it.id == selectedStepId }
     val issues: List<RpaIssue> = remember(script, capabilities) {
@@ -196,36 +229,6 @@ internal fun RpaEditorScreen(
     val canRun = !RpaValidator.hasErrors(issues) &&
         !RpaReadiness.hasErrors(issues) &&
         script.enabledSteps().isNotEmpty()
-
-    DisposableEffect(Unit) {
-        onDispose { job?.cancel() }
-    }
-
-    fun startRun() {
-        if (running || !canRun) return
-        val snapshot = script
-        events = emptyList()
-        running = true
-        job = scope.launch {
-            try {
-                val runner = RpaRunner(
-                    device = device,
-                    templateExists = { sid, tid -> store.templateExists(sid, tid) },
-                )
-                runner.run(snapshot) { event ->
-                    events = (events + event).takeLast(200)
-                }
-            } finally {
-                running = false
-            }
-        }
-    }
-
-    fun stopRun() {
-        job?.cancel()
-        job = null
-        running = false
-    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         AdvisorPage(
@@ -262,8 +265,9 @@ internal fun RpaEditorScreen(
                         script = script,
                         selectedStepId = selectedStepId,
                         capabilities = capabilities,
-                        canRun = canRun,
+                        canRun = canRun && !otherRunning,
                         running = running,
+                        runningStepIndex = if (running) runningState?.stepIndex else null,
                         issues = issues,
                         events = events,
                         onSelectStep = {
@@ -272,8 +276,8 @@ internal fun RpaEditorScreen(
                         },
                         onScriptChange = onScriptChange,
                         onSave = onSave,
-                        onRun = { startRun() },
-                        onStop = { stopRun() },
+                        onRun = onRun,
+                        onStop = onStopRun,
                         onRefreshCapabilities = onRefreshCapabilities,
                         onGrantProjection = onGrantProjection,
                         onOpenShizuku = onOpenShizuku,
@@ -287,6 +291,7 @@ internal fun RpaEditorScreen(
                         onScriptChange = onScriptChange,
                         onOpenInspector = onOpenInspector,
                         onOpenVision = onOpenVision,
+                        onStartPick = onStartPick,
                         onBackToFlow = { tab = EditorTab.FLOW },
                     )
                 }
@@ -350,6 +355,7 @@ private fun FlowPane(
     capabilities: RpaCapabilities,
     canRun: Boolean,
     running: Boolean,
+    runningStepIndex: Int?,
     issues: List<RpaIssue>,
     events: List<RpaRunEvent>,
     onSelectStep: (String) -> Unit,
@@ -361,9 +367,54 @@ private fun FlowPane(
     onGrantProjection: () -> Unit,
     onOpenShizuku: () -> Unit,
 ) {
+    val haptics = LocalHapticFeedback.current
+    val edgePx = with(LocalDensity.current) { 72.dp.toPx() }
     var drag by remember { mutableStateOf<DragPayload?>(null) }
     val anchors = remember { mutableStateMapOf<String, Float>() }
+    val stepTops = remember { mutableStateMapOf<String, Float>() }
+    val stepBottoms = remember { mutableStateMapOf<String, Float>() }
+    val undoStack = remember { mutableStateListOf<RpaScript>() }
     var rootTopLeft by remember { mutableStateOf(Offset.Zero) }
+    var rootHeight by remember { mutableStateOf(0f) }
+    var autoScrollDirection by remember { mutableStateOf(0) }
+    val listState = rememberLazyListState()
+    val activeStepId = runningStepIndex?.let { script.steps.getOrNull(it)?.id }
+
+    // 运行中把当前步骤滚到可见：前两项是动作库与流程标题，步骤从下标 2 开始。
+    LaunchedEffect(runningStepIndex, script.id) {
+        val index = runningStepIndex ?: return@LaunchedEffect
+        listState.animateScrollToItem(index = (index + 2).coerceAtLeast(0))
+    }
+
+    // 拖到列表上下边缘时持续滚动；方向回到 0 或拖拽结束即停。
+    LaunchedEffect(autoScrollDirection) {
+        if (autoScrollDirection == 0) return@LaunchedEffect
+        while (isActive) {
+            if (drag == null) break
+            listState.scrollBy(autoScrollDirection * EDGE_SCROLL_PX)
+            delay(16L)
+        }
+    }
+
+    fun pushUndo() {
+        undoStack.add(script)
+        while (undoStack.size > UNDO_LIMIT) undoStack.removeAt(0)
+    }
+
+    /** 结构性改动（增 / 删 / 移 / 启停）才进撤销栈，属性输入不逐步压栈。 */
+    fun applyStructural(updated: RpaScript) {
+        pushUndo()
+        onScriptChange(updated)
+    }
+
+    fun updateEdgeScroll(localY: Float) {
+        autoScrollDirection = when {
+            rootHeight <= edgePx * 2f -> 0
+            localY < edgePx -> -1
+            localY > rootHeight - edgePx -> 1
+            else -> 0
+        }
+    }
 
     fun targetIndex(y: Float): Int {
         val ordered = script.steps.mapNotNull { step ->
@@ -379,6 +430,8 @@ private fun FlowPane(
         label: String,
         position: Offset,
     ) {
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        updateEdgeScroll(position.y - rootTopLeft.y)
         drag = DragPayload(
             source = source,
             action = action,
@@ -392,11 +445,14 @@ private fun FlowPane(
     fun updateDrag(delta: Offset) {
         val current = drag ?: return
         val next = current.position + delta
+        updateEdgeScroll(next.y - rootTopLeft.y)
         drag = current.copy(position = next, targetIndex = targetIndex(next.y))
     }
 
     fun drop() {
         val current = drag ?: return
+        drag = null
+        autoScrollDirection = 0
         val insert = (current.targetIndex ?: script.steps.size)
             .coerceIn(0, script.steps.size)
         when (current.source) {
@@ -405,7 +461,7 @@ private fun FlowPane(
                 val step = RpaCatalog.defaultStep(action, RpaIds.newId("step"))
                 val list = script.steps.toMutableList()
                 list.add(insert, step)
-                onScriptChange(script.copy(steps = list))
+                applyStructural(script.copy(steps = list))
                 onSelectStep(step.id)
             }
             DragSource.STEP -> {
@@ -418,20 +474,34 @@ private fun FlowPane(
                     .coerceIn(0, list.size)
                 if (target != from) {
                     list.add(target, step)
-                    onScriptChange(script.copy(steps = list))
+                    applyStructural(script.copy(steps = list))
                 }
             }
         }
-        drag = null
+    }
+
+    /** 插入线在窗口坐标中的 Y：用相邻步骤的行边界推算。 */
+    fun insertionY(index: Int): Float? {
+        val steps = script.steps
+        if (steps.isEmpty()) return null
+        return when {
+            index <= 0 -> stepTops[steps.first().id]
+            index >= steps.size -> stepBottoms[steps.last().id]
+            else -> stepBottoms[steps[index - 1].id] ?: stepTops[steps[index].id]
+        }
     }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .onGloballyPositioned { rootTopLeft = it.boundsInWindow().topLeft },
+            .onGloballyPositioned {
+                rootTopLeft = it.boundsInWindow().topLeft
+                rootHeight = it.size.height.toFloat()
+            },
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
         ) {
             item {
@@ -439,7 +509,7 @@ private fun FlowPane(
                     enabled = !running,
                     onAppend = { action ->
                         val step = RpaCatalog.defaultStep(action, RpaIds.newId("step"))
-                        onScriptChange(script.copy(steps = script.steps + step))
+                        applyStructural(script.copy(steps = script.steps + step))
                         onSelectStep(step.id)
                     },
                     onDragStart = { action, label, position ->
@@ -471,6 +541,15 @@ private fun FlowPane(
                             color = MaterialTheme.colorScheme.tertiary,
                         )
                     }
+                    if (undoStack.isNotEmpty()) {
+                        TextButton(onClick = {
+                            drag = null
+                            autoScrollDirection = 0
+                            onScriptChange(undoStack.removeAt(undoStack.lastIndex))
+                        }) {
+                            Text(stringResource(R.string.float_rpa_undo))
+                        }
+                    }
                 }
                 Text(
                     text = stringResource(R.string.float_rpa_steps_hint),
@@ -499,12 +578,13 @@ private fun FlowPane(
                     step = step,
                     mode = script.mode,
                     selected = step.id == selectedStepId,
+                    active = step.id == activeStepId,
                     enabled = !running,
                     isFirst = index == 0,
                     isLast = index == script.steps.lastIndex,
                     onSelect = { onSelectStep(step.id) },
                     onToggle = { checked ->
-                        onScriptChange(
+                        applyStructural(
                             script.copy(
                                 steps = script.steps.map {
                                     if (it.id == step.id) it.copy(enabled = checked) else it
@@ -519,15 +599,19 @@ private fun FlowPane(
                             val list = script.steps.toMutableList()
                             val moved = list.removeAt(from)
                             list.add(to, moved)
-                            onScriptChange(script.copy(steps = list))
+                            applyStructural(script.copy(steps = list))
                         }
                     },
                     onDelete = {
-                        onScriptChange(
+                        applyStructural(
                             script.copy(steps = script.steps.filterNot { it.id == step.id }),
                         )
                     },
-                    onAnchor = { centerY -> anchors[step.id] = centerY },
+                    onAnchor = { centerY, top, bottom ->
+                        anchors[step.id] = centerY
+                        stepTops[step.id] = top
+                        stepBottoms[step.id] = bottom
+                    },
                     onDragStart = { position ->
                         beginDrag(
                             source = DragSource.STEP,
@@ -539,7 +623,10 @@ private fun FlowPane(
                     },
                     onDrag = { delta -> updateDrag(delta) },
                     onDragEnd = { drop() },
-                    onDragCancel = { drag = null },
+                    onDragCancel = {
+                        drag = null
+                        autoScrollDirection = 0
+                    },
                 )
             }
             item {
@@ -593,6 +680,20 @@ private fun FlowPane(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onTertiaryContainer,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
+
+            // 可见插入线：吸附在相邻步骤的行边界上，滚出可视区时自动裁掉。
+            val lineY = insertionY(payload.targetIndex ?: script.steps.size)
+            if (lineY != null && rootHeight > 0f) {
+                val localY = (lineY - rootTopLeft.y).coerceIn(0f, rootHeight - 2f)
+                Box(
+                    modifier = Modifier
+                        .offset { IntOffset(0, localY.roundToInt()) }
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .height(2.dp)
+                        .background(MaterialTheme.colorScheme.tertiary),
                 )
             }
         }
@@ -670,6 +771,7 @@ private fun StepRow(
     step: RpaStep,
     mode: RpaMode,
     selected: Boolean,
+    active: Boolean,
     enabled: Boolean,
     isFirst: Boolean,
     isLast: Boolean,
@@ -677,7 +779,7 @@ private fun StepRow(
     onToggle: (Boolean) -> Unit,
     onMove: (Int) -> Unit,
     onDelete: () -> Unit,
-    onAnchor: (Float) -> Unit,
+    onAnchor: (centerY: Float, top: Float, bottom: Float) -> Unit,
     onDragStart: (Offset) -> Unit,
     onDrag: (Offset) -> Unit,
     onDragEnd: () -> Unit,
@@ -689,18 +791,24 @@ private fun StepRow(
 
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.secondaryContainer
+        color = when {
+            active -> MaterialTheme.colorScheme.tertiaryContainer
+            selected -> MaterialTheme.colorScheme.secondaryContainer
+            else -> MaterialTheme.colorScheme.surfaceContainer
+        },
+        border = if (active) {
+            BorderStroke(1.5.dp, MaterialTheme.colorScheme.tertiary)
         } else {
-            MaterialTheme.colorScheme.surfaceContainer
+            null
         },
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 8.dp)
             .onGloballyPositioned {
-                rowTop = it.boundsInWindow().top
-                rowLeft = it.boundsInWindow().left
-                onAnchor(rowTop + it.size.height / 2f)
+                val bounds = it.boundsInWindow()
+                rowTop = bounds.top
+                rowLeft = bounds.left
+                onAnchor(rowTop + it.size.height / 2f, rowTop, rowTop + it.size.height)
             }
             .clickable(enabled = enabled, onClick = onSelect)
             .alpha(if (step.enabled) 1f else 0.45f),
@@ -744,6 +852,14 @@ private fun StepRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (active) {
+                        Text(
+                            text = stringResource(R.string.float_rpa_running),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
                     Text(
                         text = actionLabel,
                         style = MaterialTheme.typography.labelSmall,
@@ -1014,6 +1130,7 @@ private fun PropertiesPane(
     onScriptChange: (RpaScript) -> Unit,
     onOpenInspector: (String) -> Unit,
     onOpenVision: (String) -> Unit,
+    onStartPick: (RpaPickKind) -> Unit,
     onBackToFlow: () -> Unit,
 ) {
     LazyColumn(
@@ -1087,6 +1204,8 @@ private fun PropertiesPane(
                         },
                         onOpenInspector = { onOpenInspector(step.id) },
                         onOpenVision = { onOpenVision(step.id) },
+                        onPickA11y = { onStartPick(RpaPickKind.A11Y) },
+                        onPickVision = { onStartPick(RpaPickKind.VISION) },
                     )
                 }
             } else {
@@ -1315,7 +1434,7 @@ private fun StepParamsCard(
             modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
         )
         when (step.action) {
-            RpaAction.LAUNCH_APP -> ParamField(
+            RpaAction.LAUNCH_APP -> AppPickerField(
                 value = step.params.packageName.orEmpty(),
                 label = stringResource(R.string.float_rpa_param_package),
                 enabled = enabled,
@@ -1324,7 +1443,7 @@ private fun StepParamsCard(
                 },
             )
             RpaAction.OPEN_CHAT -> {
-                ParamField(
+                AppPickerField(
                     value = step.params.imPackage.orEmpty(),
                     label = stringResource(R.string.float_rpa_param_im_package),
                     enabled = enabled,
@@ -1534,6 +1653,151 @@ private fun ParamField(
     )
 }
 
+/**
+ * 包名输入 + 系统应用选择器。
+ *
+ * 保留手输（跨设备脚本 / 变量占位），旁边按钮弹出已安装启动器应用清单，
+ * 选中后覆盖输入框，避免记错包名导致运行期 `launch_missing`。
+ */
+@Composable
+private fun AppPickerField(
+    value: String,
+    label: String,
+    enabled: Boolean,
+    onChange: (String) -> Unit,
+) {
+    var pickerOpen by remember { mutableStateOf(false) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            label = { Text(label) },
+            singleLine = true,
+            enabled = enabled,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = { pickerOpen = true }, enabled = enabled) {
+            Text(stringResource(R.string.float_rpa_app_picker_pick))
+        }
+    }
+    if (pickerOpen) {
+        AppPickerDialog(
+            current = value,
+            onDismiss = { pickerOpen = false },
+            onPick = { app ->
+                pickerOpen = false
+                onChange(app.packageName)
+            },
+        )
+    }
+}
+
+@Composable
+private fun AppPickerDialog(
+    current: String,
+    onDismiss: () -> Unit,
+    onPick: (RpaInstalledApp) -> Unit,
+) {
+    val context = LocalContext.current
+    var apps by remember { mutableStateOf<List<RpaInstalledApp>?>(null) }
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        apps = withContext(Dispatchers.IO) { RpaInstalledApps.load(context) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.float_rpa_app_picker_title)) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text(stringResource(R.string.float_rpa_app_picker_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                val loaded = apps
+                val filtered = loaded?.let {
+                    val keyword = query.trim()
+                    if (keyword.isEmpty()) {
+                        it
+                    } else {
+                        it.filter { app ->
+                            app.label.contains(keyword, ignoreCase = true) ||
+                                app.packageName.contains(keyword, ignoreCase = true)
+                        }
+                    }
+                }
+                when {
+                    loaded == null -> Text(
+                        text = stringResource(R.string.float_rpa_app_picker_loading),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+
+                    filtered.isNullOrEmpty() -> Text(
+                        text = stringResource(R.string.float_rpa_app_picker_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+
+                    else -> LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp)
+                            .padding(top = 8.dp),
+                    ) {
+                        items(filtered, key = { it.packageName }) { app ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPick(app) }
+                                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = app.label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = app.packageName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                if (app.packageName == current) {
+                                    Text(
+                                        text = stringResource(R.string.float_rpa_app_picker_current),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.float_rpa_app_picker_cancel))
+            }
+        },
+    )
+}
+
 @Composable
 private fun TargetCards(
     script: RpaScript,
@@ -1542,6 +1806,8 @@ private fun TargetCards(
     onStepChange: (RpaStep) -> Unit,
     onOpenInspector: () -> Unit,
     onOpenVision: () -> Unit,
+    onPickA11y: () -> Unit,
+    onPickVision: () -> Unit,
 ) {
     RpaSectionTitle(
         text = stringResource(R.string.float_rpa_prop_target),
@@ -1569,6 +1835,13 @@ private fun TargetCards(
             ) {
                 Text(stringResource(R.string.float_rpa_a11y_open_inspector))
             }
+        }
+        OutlinedButton(
+            onClick = onPickA11y,
+            enabled = enabled && a11yEnabled,
+            modifier = Modifier.padding(top = 4.dp),
+        ) {
+            Text(stringResource(R.string.float_rpa_pick_on_screen))
         }
         if (!a11yEnabled) {
             Text(
@@ -1647,6 +1920,13 @@ private fun TargetCards(
             ) {
                 Text(stringResource(R.string.float_rpa_vision_open))
             }
+        }
+        OutlinedButton(
+            onClick = onPickVision,
+            enabled = enabled && visionEnabled,
+            modifier = Modifier.padding(top = 4.dp),
+        ) {
+            Text(stringResource(R.string.float_rpa_pick_on_screen))
         }
         if (!visionEnabled) {
             Text(

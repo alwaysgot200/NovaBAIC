@@ -53,12 +53,14 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +69,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.verlintas.baic2.EXTRA_FROM_FLOAT
 import com.verlintas.baic2.BuildConfig
@@ -76,6 +81,7 @@ import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
+import com.verlintas.baic2.device.api.ShellState
 import com.verlintas.baic2.floatball.advisor.ContactRepository
 import com.verlintas.baic2.floatball.advisor.StrategyCardRepository
 import com.verlintas.baic2.floatball.advisor.data.CARD_CONFIRMED
@@ -87,6 +93,8 @@ import com.verlintas.baic2.floatball.auto.ReadinessGate
 import com.verlintas.baic2.floatball.auto.ReadinessReport
 import com.verlintas.baic2.floatball.auto.ScreenCapture
 import com.verlintas.baic2.floatball.rpa.RpaActivity
+import com.verlintas.baic2.floatball.shizuku.ShizukuGate
+import com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity
 import com.verlintas.baic2.floatball.update.AppUpdateManager
 import com.verlintas.baic2.floatball.update.CheckOutcome
 import com.verlintas.baic2.floatball.update.UpdateOptionalOverlay
@@ -510,6 +518,7 @@ private fun AdvisorSettingsScreen(
                     settings = settings,
                     prefs = prefs,
                     readinessGate = readinessGate,
+                    shizukuGate = shizukuGate,
                     screenCapture = screenCapture,
                 )
                 // 2026-10-20 通报方案：H 接管/G 达成铃声通报 + SMTP 邮件配置。
@@ -1103,10 +1112,13 @@ private fun AutoExecutorSection(
     settings: AdvisorPrefs.Settings,
     prefs: AdvisorPrefs,
     readinessGate: ReadinessGate,
+    shizukuGate: ShizukuGate,
     screenCapture: ScreenCapture,
 ) {
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
+    val shizukuState by shizukuGate.shellState.collectAsStateWithLifecycle()
+    val shizukuInstalled = shizukuGate.isManagerInstalled()
     SectionLabel(stringResource(R.string.float_settings_executor_section))
     Text(
         text = stringResource(R.string.float_settings_executor_hint),
@@ -1119,6 +1131,7 @@ private fun AutoExecutorSection(
     var checking by remember { mutableStateOf(false) }
     var report by remember { mutableStateOf<ReadinessReport?>(null) }
     fun runCheck() {
+        if (checking) return
         checking = true
         scope.launch {
             report = readinessGate.check(settings.autoWhitelistIds)
@@ -1127,6 +1140,16 @@ private fun AutoExecutorSection(
                 prefs.setAutoExecutorChannel(InjectorSelector.CONFIG_SHIZUKU)
             }
         }
+    }
+    // 从 Shizuku 引导页/系统安装器返回时自动复检：装完、启动完、授权完立刻反映到红绿表。
+    val latestRunCheck = rememberUpdatedState(newValue = { runCheck() })
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && report != null) latestRunCheck.value()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1139,6 +1162,13 @@ private fun AutoExecutorSection(
             selected = settings.autoExecutorChannel == InjectorSelector.CONFIG_A11Y,
             onClick = { prefs.setAutoExecutorChannel(InjectorSelector.CONFIG_A11Y) },
             label = { Text(stringResource(R.string.float_settings_executor_a11y)) },
+        )
+        // 手势粘贴：免 Shizuku、免 a11y 节点树（微信这类节点黑洞 IM 的唯一可用
+        // 本地通道，2026-10-27 真机验证）。无就绪门——只要有 a11y 手势权限即可用。
+        FilterChip(
+            selected = settings.autoExecutorChannel == InjectorSelector.CONFIG_GESTURE,
+            onClick = { prefs.setAutoExecutorChannel(InjectorSelector.CONFIG_GESTURE) },
+            label = { Text(stringResource(R.string.float_settings_executor_gesture)) },
         )
         FilterChip(
             selected = settings.autoExecutorChannel == InjectorSelector.CONFIG_SHIZUKU,
@@ -1192,24 +1222,45 @@ private fun AutoExecutorSection(
                                 .padding(start = 10.dp),
                         )
                         if (!item.ok) {
-                            Text(
-                                text = readinessFixHint(item.id),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = scheme.primary,
-                                modifier = Modifier.clickable {
-                                    when (item.id) {
-                                        ReadinessGate.ID_SHIZUKU -> readinessGate.requestShizukuPermission()
-                                        ReadinessGate.ID_PROJECTION -> scope.launch {
-                                            runCatching { screenCapture.ensureProjection() }
-                                        }
-                                        ReadinessGate.ID_NOTIFY -> runCatching {
-                                            context.startActivity(
-                                                Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS),
-                                            )
-                                        }
+                            // 只有真正带直达动作的缺项才渲染成可点主色；其余缺项
+                            // 保持中性说明色，避免「看起来能点、点了没反应」。
+                            val fixAction: (() -> Unit)? = when (item.id) {
+                                ReadinessGate.ID_SHIZUKU -> ({
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(context, ShizukuGrantActivity::class.java)
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                        )
                                     }
-                                }
-                                .padding(6.dp),
+                                })
+                                ReadinessGate.ID_PROJECTION -> ({
+                                    scope.launch {
+                                        runCatching { screenCapture.ensureProjection() }
+                                    }
+                                })
+                                ReadinessGate.ID_NOTIFY -> ({
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS),
+                                        )
+                                    }
+                                })
+                                ReadinessGate.ID_OCR -> ({ runCheck() })
+                                else -> null
+                            }
+                            Text(
+                                text = readinessFixHint(
+                                    item.id,
+                                    shizukuInstalled = shizukuInstalled,
+                                    shizukuState = shizukuState,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (fixAction != null) scheme.primary else scheme.onSurfaceVariant,
+                                modifier = (if (fixAction != null) {
+                                    Modifier.clickable { fixAction?.invoke() }
+                                } else {
+                                    Modifier
+                                }).padding(6.dp),
                             )
                         }
                     }
@@ -1409,11 +1460,23 @@ private fun readinessLabel(id: String): String = stringResource(
     },
 )
 
-/** 红行的下一步操作入口文案（不可直达的项提示做法，可直达的项点击即触发）。 */
+/**
+ * 红行的下一步操作入口文案（不可直达的项提示做法，可直达的项点击即触发）。
+ * Shizuku 项按「未装 → 去安装；未启动 → 去启动；未授权 → 去授权」给出下一步，
+ * 三种状态都进入同一个引导页（不再直接 requestPermission，未装时那是空操作）。
+ */
 @Composable
-private fun readinessFixHint(id: String): String = stringResource(
+private fun readinessFixHint(
+    id: String,
+    shizukuInstalled: Boolean,
+    shizukuState: ShellState,
+): String = stringResource(
     when (id) {
-        ReadinessGate.ID_SHIZUKU -> R.string.float_readiness_fix_shizuku
+        ReadinessGate.ID_SHIZUKU -> when {
+            !shizukuInstalled -> R.string.float_readiness_fix_shizuku_install
+            shizukuState is ShellState.Unavailable -> R.string.float_readiness_fix_shizuku_launch
+            else -> R.string.float_readiness_fix_shizuku
+        }
         ReadinessGate.ID_PROJECTION -> R.string.float_readiness_fix_projection
         ReadinessGate.ID_OCR -> R.string.float_readiness_fix_ocr
         ReadinessGate.ID_TEMPLATES -> R.string.float_readiness_fix_templates
@@ -1460,7 +1523,7 @@ private val REST_SEGMENT_OPTIONS = listOf(
 
 /**
  * 自动档「回复节奏」档（2026-10-27）：派发前的拟人随机延迟区间（方案 §8.2），
- * 快速档专供真机联调压缩等待，默认仍为拟人档。
+ * 快速档专供真机联调压缩等待，默认档为 [AdvisorPrefs.PACE_DEFAULT]（标准 3~10s）。
  */
 private val PACE_CHOICE_OPTIONS = listOf(
     LabeledOption(AdvisorPrefs.PACE_FAST, R.string.float_settings_pace_fast),

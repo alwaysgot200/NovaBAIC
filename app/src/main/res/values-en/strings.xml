@@ -790,6 +790,8 @@
     <string name="float_readiness_fix_projection">Grant screen recording</string>
     <string name="float_readiness_fix_quiet">Retry after quiet/power-saving hours</string>
     <string name="float_readiness_fix_shizuku">Grant</string>
+    <string name="float_readiness_fix_shizuku_install">Install</string>
+    <string name="float_readiness_fix_shizuku_launch">Start</string>
     <string name="float_readiness_fix_templates">Pending capture</string>
     <string name="float_readiness_fix_whitelist">Add and bind a chat in the whitelist above</string>
     <string name="float_readiness_input">Input channel check</string>
@@ -823,7 +825,7 @@
     <string name="float_settings_executor_hint">Auto fallback = use accessibility when available, else Shizuku without accessibility, else fall back to draft mode. Shizuku mode needs no accessibility and leaves a smaller detection footprint, but requires Shizuku to stay online and screen-recording authorization (status bar indicator); image matching is slightly slower.</string>
     <string name="float_settings_executor_section">Execution channel</string>
     <string name="float_settings_executor_shizuku">Shizuku (no accessibility)</string>
-    <string name="float_settings_readiness_blocked">Some items are missing, so the current channel is kept. Resolve them and tap “Re-check”; it switches automatically when all green.</string>
+    <string name="float_settings_readiness_blocked">Some items are missing, so the current channel is kept. Follow each item’s hint or action; returning here re-checks automatically. Or tap “Re-check” — it switches when all green.</string>
     <string name="float_settings_readiness_checking">Checking readiness item by item…</string>
     <string name="float_settings_readiness_rerun">Re-check</string>
     <!-- 设置：LLM 请求重试 -->
@@ -876,9 +878,9 @@
     <string name="float_shizuku_install_installed">Installed version %1$s</string>
     <string name="float_shizuku_install_permission_hint">Allow “Install unknown apps” for this app, then return here and tap install again.</string>
     <string name="float_shizuku_install_preparing">Preparing the installer…</string>
-    <string name="float_shizuku_install_started">The system installer is open — confirm manually in the dialog.</string>
+    <string name="float_shizuku_install_started">The system installer is open — confirm manually, then return here and tap “Start Shizuku”.</string>
     <string name="float_shizuku_install_title">Step 1 · Install Shizuku</string>
-    <string name="float_shizuku_intro">With accessibility off, screen projection is the only way to see the screen. The grant on this page silences the projection system dialog permanently (persists across reboots), so RPA runs without interruption.</string>
+    <string name="float_shizuku_intro">Shizuku gives AI ADB-level execution. Install the bundled build if it is missing, then start Shizuku and grant access; afterwards you can also silence the projection dialog permanently (persists across reboot) so RPA runs without interruption.</string>
     <string name="float_shizuku_pair_1">In Shizuku tap “Start via wireless debugging”, then turn on “Wireless debugging” in developer options</string>
     <string name="float_shizuku_pair_2">Tap “Pair device with pairing code” and note the 6-digit code shown</string>
     <string name="float_shizuku_pair_3">Back in Shizuku, enter the pairing code and it starts</string>
@@ -886,10 +888,10 @@
     <string name="float_shizuku_prereq_dev">Turn on “USB debugging (Security settings)” in developer options — it is a separate switch from ordinary “USB debugging”. Without it, commands still fail with insufficient permission after pairing.</string>
     <string name="float_shizuku_prereq_notif">Switch notification style to “Native Android” (Settings → Notifications → notification style) — custom notifications on some skins swallow the Shizuku pairing dialog, so the 6-digit code never appears and it sticks at “searching for pairing service”.</string>
     <string name="float_shizuku_prereq_title">Prerequisites (one-time, make-or-break)</string>
-    <string name="float_shizuku_state_granted">Active</string>
+    <string name="float_shizuku_state_granted">Projection dialog silenced</string>
     <string name="float_shizuku_state_granted_hint">The projection dialog is silenced. If it lapses after a factory reset or major OS upgrade, come back here and grant again.</string>
-    <string name="float_shizuku_state_pending">Not active</string>
-    <string name="float_shizuku_title">Silent projection authorization</string>
+    <string name="float_shizuku_state_pending">Projection dialog not silenced</string>
+    <string name="float_shizuku_title">Shizuku setup &amp; authorization</string>
     <!-- 效果统计 -->
     <string name="float_stats_adopt_rate">Adoption rate</string>
     <string name="float_stats_fail_streak">Current losing streak</string>

@@ -35,7 +35,10 @@ object InjectorSelector {
     /** 强制模式 B（Shizuku）；不可用直接降 C，不借道 A。 */
     const val CONFIG_SHIZUKU = "shizuku"
 
-    val CONFIG_OPTIONS = setOf(CONFIG_AUTO, CONFIG_A11Y, CONFIG_SHIZUKU)
+    /** 强制手势粘贴通道（a11y 手势 + 截图 OCR + 剪贴板；免 Shizuku）。 */
+    const val CONFIG_GESTURE = "gesture"
+
+    val CONFIG_OPTIONS = setOf(CONFIG_AUTO, CONFIG_A11Y, CONFIG_SHIZUKU, CONFIG_GESTURE)
 
     /** [configured] 为 AdvisorPrefs 持久化的通道配置（非法值按 auto 处理）。 */
     fun select(configured: String?, a11yReady: Boolean, shizukuReady: Boolean): InjectorChannel =
@@ -44,13 +47,15 @@ object InjectorSelector {
     /**
      * 运行期降级链（2026-10-27 真机修复）：返回**按序尝试**的通道列表，末位
      * 兜底不是 C（本地通道全不可用时列表为空，调用方按 [InjectorChannel.DraftFallback]
-     * 处理）。与 [select] 的差别只在 auto 档多一位候选：
+     * 处理）。与 [select] 的差别只在 auto 档多候选：
      *
-     * - `a11y`/`shizuku` 强制配置：只含该通道（可用时），不可用即空——用户指定
-     *   即强制，绝不静默换道（与 [select] 同口径）。
-     * - `auto`：A 可用先 A；A 失败且「确定未发出」时回落 B 再试一遍。真机
-     *   2026-10-27 事故正是 A 选得中但微信节点树为空（`input_inject_failed`）
-     *   导致整轮静默——B（Shizuku + OCR 定位）本来是通的，只是没人去试。
+     * - `a11y`/`shizuku`/`gesture` 强制配置：只含该通道（可用时），不可用即空——
+     *   用户指定即强制，绝不静默换道（与 [select] 同口径）。
+     * - `auto`：A 可用先 A；A 失败且「确定未发出」时回落 B；B 也不可用/失败再回落
+     *   手势粘贴 G。真机 2026-10-27 两起事故正是这条链的两端——A 选得中但微信
+     *   节点树为空（`input_inject_failed`）导致整轮静默，而本机**没有 Shizuku**，
+     *   B 也不可用，于是彻底发不出去；G（手势 + 剪贴板粘贴 + OCR 证据）是免安装、
+     *   纯本地的最后一档，微信等节点黑洞 IM 上实测可发。
      *
      * 是否允许换道由 `SendSequence.safeToRetryElsewhere` 判定（证据不足绝不重发）。
      */
@@ -58,9 +63,11 @@ object InjectorSelector {
         when (configured) {
             CONFIG_A11Y -> if (a11yReady) listOf(InjectorChannel.A11y) else emptyList()
             CONFIG_SHIZUKU -> if (shizukuReady) listOf(InjectorChannel.Shizuku) else emptyList()
+            CONFIG_GESTURE -> if (a11yReady) listOf(InjectorChannel.Gesture) else emptyList()
             else -> buildList {
                 if (a11yReady) add(InjectorChannel.A11y)
                 if (shizukuReady) add(InjectorChannel.Shizuku)
+                if (a11yReady) add(InjectorChannel.Gesture)
             }
         }
 }

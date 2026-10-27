@@ -114,6 +114,16 @@
                 android:value="Always-on-top floating ball quick entry overlaying other apps" />
         </service>
 
+        <!-- RPA 后台运行：独立于脚本库/编辑器页面，运行期间经 RpaChromeGate 隐藏悬浮球 -->
+        <service
+            android:name=".floatball.rpa.RpaRunService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="RPA automation script execution over other apps" />
+        </service>
+
         <activity
             android:name=".floatball.FloatCaptureActivity"
             android:excludeFromRecents="true"
@@ -169,12 +179,25 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:label="@string/float_playbook_title" />
 
-        <!-- RPA 自动化：脚本库 / 可拖拽编排 / 布局分析器 / 以图找图（vendor/RPA 独立模块） -->
+        <!-- RPA 自动化：脚本库 / 可拖拽编排 / 布局分析器 / 以图找图（vendor/RPA 独立模块）。
+             singleTop：通知栏结果点开与悬浮菜单入口复用同一实例，避免叠多层脚本库。 -->
         <activity
             android:name=".floatball.rpa.RpaActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
-            android:label="@string/float_rpa_title" />
+            android:label="@string/float_rpa_title"
+            android:launchMode="singleTop" />
+
+        <!-- 以图找图：透明全屏结果浮层（无 a11y；不铺截图，目标 App 保持可见）。
+             不能用 noHistory：PickVisualMedia 选图期间本页被系统照片选择器覆盖，
+             noHistory 会提前销毁本页，结果回调再也回不来。 -->
+        <activity
+            android:name=".floatball.rpa.quickfind.RpaQuickFindActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:label="@string/float_rpa_quickfind_title"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- VA-2 U1：全局我方人设标签库（floatball 自有页面，入口在画像页「我的人设」屏顶部） -->
         <activity

@@ -48,6 +48,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -72,15 +73,28 @@ import com.verlintas.baic2.MainActivity
 import com.verlintas.baic2.R
 import com.verlintas.baic2.TAB_SETTINGS
 import com.verlintas.baic2.floatball.director.AdvisorNotificationListener
+import com.verlintas.baic2.floatball.auto.AssistsA11yBridge
 import com.verlintas.baic2.floatball.auto.AutoSelectionStore
 import com.verlintas.baic2.floatball.auto.AutoSessionScheduler
 import com.verlintas.baic2.floatball.auto.CompanionWindowController
 import com.verlintas.baic2.floatball.home.AdvisorRunState
 import com.verlintas.baic2.floatball.home.AdvisorSelfWindowGate
 import com.verlintas.baic2.floatball.notify.EscalationNotifier
+import com.verlintas.baic2.floatball.notify.NotifyGate
+import com.verlintas.baic2.floatball.rpa.RpaActivity
+import com.verlintas.baic2.floatball.rpa.RpaChromeGate
 import com.verlintas.baic2.floatball.rpa.RpaEntryPoints
+import com.verlintas.baic2.floatball.rpa.analyze.RpaAnalyzeCapture
+import com.verlintas.baic2.floatball.rpa.analyze.RpaAnalyzeOverlayController
+import com.verlintas.baic2.floatball.rpa.withA11ySpec
+import com.verlintas.rpa.model.RpaA11ySpec
+import com.verlintas.rpa.model.RpaModePolicy
+import com.verlintas.rpa.model.RpaPickKind
+import com.verlintas.rpa.model.RpaPickRequest
 import com.verlintas.baic2.floatball.contact.ContactRef
 import com.verlintas.baic2.keepalive.KeepAliveManager
+import com.ven.assists.AssistsCore
+import com.ven.assists.service.AssistsService
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlin.math.abs
@@ -91,7 +105,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 悬浮球前台服务：窗口增删、手势路由、状态机、把 [ScreenAdvisor] 的事件
@@ -151,6 +167,34 @@ class FloatBallService : Service() {
     @Inject
     lateinit var imChatNavigator: com.verlintas.baic2.floatball.auto.ImChatNavigator
 
+    /**
+     * 通知 contentIntent 直达会话（2026-10-27 启动导航修复）：视觉/搜索链在
+     * a11y 黑洞 IM + 无 Shizuku 时必败（真机 14:15 实测 32.6s 失败），
+     * 通知自带的 PendingIntent 是唯一稳键；启动顺序＝直达优先、搜索链兜底。
+     */
+    @Inject
+    lateinit var imNavigator: com.verlintas.baic2.floatball.auto.ImNavigator
+
+    /** 布局分析采集：冻结帧 + 多窗口节点树（覆盖层挂载前调用）。 */
+    @Inject
+    lateinit var rpaAnalyzeCapture: RpaAnalyzeCapture
+
+    /** a11y 连接状态：分析器打开期间断开即自动收起，恢复悬浮球。 */
+    @Inject
+    lateinit var a11yBridge: AssistsA11yBridge
+
+    /** RPA 全屏工具 / 后台运行的悬浮球隐藏闸门（原因集合，服务侧统一裁决）。 */
+    @Inject
+    lateinit var rpaChromeGate: RpaChromeGate
+
+    /** 拾取会话：编辑器武装请求 → 悬浮球工具回填（方案 §7.8）。 */
+    @Inject
+    lateinit var pickCoordinator: com.verlintas.baic2.floatball.rpa.RpaPickCoordinator
+
+    /** a11y 拾取直接写脚本库，不经过 Activity 中转。 */
+    @Inject
+    lateinit var rpaScriptStore: com.verlintas.rpa.store.RpaScriptStore
+
     /** 好参谋账号门（商业化 P0）：未登录不进入服务形态，拉起登录页后停服。 */
     @Inject
     lateinit var accountManager: com.verlintas.baic2.floatball.account.AccountManager
@@ -160,6 +204,16 @@ class FloatBallService : Service() {
     lateinit var updateManager: com.verlintas.baic2.floatball.update.AppUpdateManager
 
     private var forcedUpdateStopHandled = false
+
+    /** 布局分析覆盖层：非空期间悬浮球保持隐藏，关闭时统一恢复。 */
+    private var analyze: RpaAnalyzeOverlayController? = null
+    private var analyzeA11yJob: Job? = null
+
+    /**
+     * RPA 工具（以图找图 / 后台运行）打开期间由 [RpaChromeGate] 占位隐藏球；
+     * 工具退出经 [ACTION_RPA_TOOL_FINISHED] 或运行结束释放，闸门清空即恢复。
+     */
+    private var chromeHidden = false
 
     private enum class Mode { IDLE, ONESHOT, RECORDING, AUTO }
 
@@ -186,6 +240,9 @@ class FloatBallService : Service() {
 
     /** 自动档单会话：陪伴窗口已真正开启（用于窗口到期自动复位）。 */
     private var autoCompanionStarted = false
+
+    /** 自动档启动看门狗（方案 §10 风险表）：超时未进入托管即判失败并复位。 */
+    private var autoStartWatchdog: Runnable = Runnable { }
 
     /** 主页入口连续：关闭分屏即停止（方案 §8.12），仅本次会话有效。 */
     private var stopOnSplitClose = false
@@ -267,6 +324,11 @@ class FloatBallService : Service() {
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        // 分析器基于旧方向冻结帧与屏幕坐标：先关闭并恢复球，再按新屏重钳球。
+        analyze?.let { controller ->
+            toast(R.string.float_rpa_analyze_rotation_closed)
+            controller.close()
+        }
         val params = ballParams ?: return
         val view = ball?.root ?: return
         // 收起态下 params.x 是屏外可视值，必须用逻辑坐标重钳，否则旋转后跑位。
@@ -316,6 +378,20 @@ class FloatBallService : Service() {
             mainHandler.post { stopForForcedUpdate() }
         }
         keepAliveManager.onServiceCreated()
+        // RPA 全屏工具 / 运行闸门：只在集合进出时动一次窗口，避免重复摘挂。
+        scope.launch {
+            rpaChromeGate.reasons.collect { reasons ->
+                val hidden = reasons.isNotEmpty()
+                if (hidden == chromeHidden) return@collect
+                chromeHidden = hidden
+                if (hidden) {
+                    cancelEdgeTuck()
+                    hideAllOverlays()
+                } else {
+                    restoreBall()
+                }
+            }
+        }
         showBall()
         // M2-b：开机/服务重启后检点闹钟重挂（总闸关时内部自会撤销）。
         proactiveCheckpoint.ensureScheduled()
@@ -335,6 +411,9 @@ class FloatBallService : Service() {
                     completionCount++
                     ball?.setBadge(completionCount)
                 }
+                // 自动档单会话：第一轮参谋真正落地后，启动阶段才算走完
+                // （2026-10-27 方案 §5.2 S1：状态签从「等待首帧」切「托管中」）。
+                if (autoRun) advisorRunState.setAutoPhase(AdvisorRunState.AutoPhase.READY)
             }
         }
         scope.launch {
@@ -588,6 +667,10 @@ class FloatBallService : Service() {
             ACTION_CONTINUOUS_FROM_MAIN -> startContinuousFromMain()
             ACTION_AUTO_FROM_MAIN -> startAutoFromMain()
             ACTION_STOP_AUTO -> stopAuto(announce = true)
+            // 以图找图 Activity 退出：释放闸门，球由闸门回收器恢复。
+            ACTION_RPA_TOOL_FINISHED -> {
+                rpaChromeGate.show(RpaChromeGate.REASON_QUICK_FIND)
+            }
             // M3-b 陪伴窗口收尾通知「续 30 分钟」：同一状态机入口重启窗口。
             CompanionWindowController.ACTION_RENEW_WINDOW -> onCompanionRenew(intent)
             // M2-a 起草通知点开：分屏预览代拟稿，一键发送/改后发送（§8.1 N4）。
@@ -621,6 +704,11 @@ class FloatBallService : Service() {
         AdvisorSelfWindowGate.reset()
         diffEngine.destroy()
         screenAdvisor.advisorScopeCancel()
+        // 分析器先于服务 scope 释放：删窗不需要回调，避免恢复已销毁的球。
+        analyzeA11yJob?.cancel()
+        analyzeA11yJob = null
+        analyze?.dispose()
+        analyze = null
         scope.cancel()
         FloatCaptureBridge.clear()
         recognizer?.destroy()
@@ -680,10 +768,11 @@ class FloatBallService : Service() {
                     }
                     when (mode) {
                         Mode.IDLE -> {
+                            if (autoRun) return true // 自动档启动阶段：单击不开菜单（S1）
                             cancelPendingExpand()
                             val r = Runnable {
                                 pendingExpand = null
-                                if (mode == Mode.IDLE) expandMenu()
+                                if (mode == Mode.IDLE && !autoRun) expandMenu()
                             }
                             pendingExpand = r
                             view.postDelayed(r, TAP_ARB_MS)
@@ -701,6 +790,14 @@ class FloatBallService : Service() {
                     suppressTapUp = true
                     when (mode) {
                         Mode.IDLE -> {
+                            // 自动档启动阶段（导航中/陪伴窗口未开）：双击=停止自动，
+                            // 不能落进「开手动连续」，否则与在途的自动启动互踩（S2）。
+                            if (autoRun) {
+                                dismissMenuNow()
+                                cancelPendingExpand()
+                                stopAuto(announce = true)
+                                return true
+                            }
                             // 第一击在仲裁窗内已展开菜单（间隔>120ms 的双击），
                             // 撤掉再进连续参谋，防菜单残留。
                             dismissMenuNow()
@@ -718,7 +815,8 @@ class FloatBallService : Service() {
                 override fun onLongPress(e: MotionEvent) {
                     if (revealedFromTuck) return
                     // 长按=单次参谋；OneShot/Recording 态长按拒绝。
-                    if (mode == Mode.IDLE) {
+                    // 自动档启动阶段（导航中）同样拒绝，避免单次参谋抢投影（S2）。
+                    if (mode == Mode.IDLE && !autoRun) {
                         cancelPendingExpand()
                         startOneShot()
                     }
@@ -1141,6 +1239,11 @@ class FloatBallService : Service() {
      * 主页自动键走同一个 [applyAutoTargets] 入口——总闸、白名单、选择集、
      * 运行态、导航、陪伴窗口/调度器全部一致，不再出现「某个入口只开了窗口、
      * 没进自动态」的分叉。
+     *
+     * 2026-10-27（方案 §5.2 S7）：分屏入口是 `navigate=false`，默认信任当前屏；
+     * 开窗前先用 [ImChatNavigator.chatPageTitleMatches] 校验「当前页确实就是这个
+     * 联系人的会话」，明确不是则改用 `navigate=true` 让统一入口自己导航过去，
+     * 避免在错误页面上跑整轮参谋与发送。
      */
     private fun startCompanionWindow() {
         val contact = screenAdvisor.activeContact.value
@@ -1154,9 +1257,18 @@ class FloatBallService : Service() {
                 toast(R.string.float_companion_need_contact)
                 return@launch
             }
+            val imPackage = target.imPackage
+            val onTargetPage = if (imPackage == null) {
+                true
+            } else {
+                // null=不可判定（取帧/OCR 不可用）时按「就在目标页」放行，
+                // 只在明确判定为「不是目标会话」时才补一次导航。
+                imChatNavigator.chatPageTitleMatches(imPackage, target.channelName ?: contact.displayName)
+                    ?: true
+            }
             applyAutoTargets(
                 targets = listOf(target),
-                navigate = false,
+                navigate = !onTargetPage,
                 source = AdvisorRunState.Source.FLOAT_BALL,
                 announce = true,
             )
@@ -1180,27 +1292,31 @@ class FloatBallService : Service() {
         }
     }
 
-    private fun beginCompanion(
+    /**
+     * 打开陪伴窗口（自动/手动共用）。2026-10-27（方案 §5.2 S2）改为 suspend 并
+     * 返回启动结果：早退分支不再只弹 Toast 就返回，调用方可以据此统一收口
+     * `finishAutoRun()`，杜绝「autoRun=true / 球红 / 却没窗口」的卡死态。
+     */
+    private suspend fun beginCompanion(
         contact: ContactRef?,
         announceAuto: Boolean = false,
         imPackage: String? = null,
-    ) {
+    ): CompanionWindowController.StartResult {
         if (contact == null) {
             toast(R.string.float_companion_need_contact)
-            return
+            return CompanionWindowController.StartResult.REASON_NO_CONTACT
         }
         if (companionWindow) {
             toast(R.string.float_companion_gear_conflict)
-            return
+            return CompanionWindowController.StartResult.REASON_GEAR_CONFLICT
         }
-        scope.launch {
-            val result = companionController.start(
-                contact = contact,
-                imPackage = imPackage,
-                manualContinuousActive = mode == Mode.RECORDING,
-            )
-            handleCompanionStart(result, contact, announceAuto)
-        }
+        val result = companionController.start(
+            contact = contact,
+            imPackage = imPackage,
+            manualContinuousActive = mode == Mode.RECORDING,
+        )
+        handleCompanionStart(result, contact, announceAuto)
+        return result
     }
 
     private fun handleCompanionStart(
@@ -1212,6 +1328,8 @@ class FloatBallService : Service() {
             CompanionWindowController.StartResult.STARTED -> {
                 companionWindow = true
                 if (autoRun) {
+                    // 窗口已起：撤销启动看门狗（后续生命周期由窗口自身管理）。
+                    mainHandler.removeCallbacks(autoStartWatchdog)
                     // 自动档单会话：不弹「陪伴窗口已开启」以免污染首帧；起录制
                     // 循环后切 AUTO 态（红球 + 脉冲红点），并立刻主动开第一轮。
                     if (mode == Mode.IDLE) startRecording(forCompanion = true, quiet = true)
@@ -1219,6 +1337,8 @@ class FloatBallService : Service() {
                     ball?.setMode(FloatUi.BallMode.RECORDING, this)
                     ball?.setAutoRunning(true)
                     autoCompanionStarted = true
+                    // 会话已就绪，等首帧/主动首轮/来信（方案 §5.2 S1）。
+                    advisorRunState.setAutoPhase(AdvisorRunState.AutoPhase.WAITING)
                     if (contact != null) {
                         companionController.kickoffAuto(contact)
                         if (announceAuto) {
@@ -1343,6 +1463,12 @@ class FloatBallService : Service() {
      *
      * 分屏「自动」可能在手动连续（RECORDING）中点按：先静默停旧档再进自动，
      * 避免 ModeGate 的三档互斥把用户挡在门外。
+     *
+     * 2026-10-27（方案 §5.2 S1~S6）：
+     * - 单会话分支一进入就切红球 + 脉冲红点 + `AutoPhase.STARTING`，
+     *   导航阶段（可能十几秒）不再「点了没反应」；
+     * - 多目标/联系人级启动前校验通知使用权（事件源），缺失即报因并跳设置；
+     * - 全链路 `auto_start:` 日志（source/targets/result/elapsed/note）。
      */
     private fun applyAutoTargets(
         targets: List<AutoSelectionStore.Target>,
@@ -1350,12 +1476,15 @@ class FloatBallService : Service() {
         source: AdvisorRunState.Source,
         announce: Boolean,
     ) {
+        val startedAt = System.currentTimeMillis()
         if (mode != Mode.IDLE && mode != Mode.RECORDING) {
             toast(R.string.float_home_disabled_busy)
+            logAutoStart(source, targets, result = "BUSY", startedAt = startedAt, note = "mode=$mode")
             return
         }
         if (targets.isEmpty()) {
             toast(R.string.float_home_scope_empty)
+            logAutoStart(source, targets, result = "FAILED", startedAt = startedAt, note = "empty_scope")
             return
         }
         if (!advisorPrefs.state.value.autoModeEnabled) {
@@ -1367,39 +1496,147 @@ class FloatBallService : Service() {
         for (contactId in targets.map { it.contactId }.distinct()) {
             if (!advisorPrefs.addAutoWhitelistContact(contactId)) {
                 toast(getString(R.string.float_auto_whitelist_full, AdvisorPrefs.MAX_AUTO_WHITELIST))
+                logAutoStart(source, targets, result = "FAILED", startedAt = startedAt, note = "whitelist_full")
                 return
             }
+        }
+        val single = targets.size == 1 && targets.first().imPackage != null
+        // S3：多目标/联系人级完全依赖通知事件入队，缺通知使用权时调度器
+        // 只会空转（用户视角就是「选了自动永远不动」），必须前置拦截。
+        if (!single && !notificationListenerEnabled()) {
+            toast(R.string.float_home_auto_need_notify)
+            openNotificationListenerSettings()
+            logAutoStart(source, targets, result = "FAILED", startedAt = startedAt, note = "no_notify_access")
+            return
         }
         // 持久化本次选择：主页「自动」键与后续续期都按同一目标集启动。
         autoSelectionStore.save(AutoSelectionStore.Selection(targets = targets))
         if (mode == Mode.RECORDING) stopRecording(quiet = true)
-        val single = targets.size == 1 && targets.first().imPackage != null
         if (single) {
             val target = targets.first()
             val imPackage = target.imPackage ?: return
             val channel = target.channelName.orEmpty()
+            val appName = appLabel(imPackage)
             autoRun = true
             autoCompanionStarted = false
+            // S1：导航前先把运行态点亮（红球 + 脉冲红点），不再等窗口开成功才可见。
+            ball?.setMode(FloatUi.BallMode.RECORDING, this)
+            ball?.setAutoRunning(true)
+            restoreBall()
             advisorRunState.setAuto(
                 targetCount = 1,
                 activeContact = target.displayName,
-                activeApp = appLabel(imPackage),
+                activeApp = appName,
                 source = source,
+                phase = AdvisorRunState.AutoPhase.STARTING,
             )
+            // 启动看门狗（风险表）：30s 内没能进入托管就判定启动失败并复位，
+            // 避免导航卡死留下「球是红的、状态签自动中、其实什么都没跑」。
+            autoStartWatchdog = Runnable {
+                if (!autoRun) return@Runnable
+                val phase = advisorRunState.state.value.autoPhase
+                val started = autoCompanionStarted ||
+                    phase == AdvisorRunState.AutoPhase.WAITING ||
+                    phase == AdvisorRunState.AutoPhase.READY
+                if (started) return@Runnable
+                Log.w(TAG, "auto_start: watchdog timeout, aborting pending start")
+                notifyAutoStartFailure(
+                    target.displayName,
+                    getString(R.string.float_auto_start_failed_timeout),
+                )
+                finishAutoRun()
+            }
+            mainHandler.postDelayed(autoStartWatchdog, AUTO_START_TIMEOUT_MS)
             scope.launch {
                 if (navigate) {
-                    val nav = imChatNavigator.openChat(imPackage, channel)
-                    if (nav is com.verlintas.baic2.floatball.auto.ImChatNavigator.NavResult.Fail) {
-                        imChatNavigator.toastResult(nav, channel)
-                        finishAutoRun()
-                        return@launch
+                    advisorRunState.setAutoPhase(
+                        AdvisorRunState.AutoPhase.NAVIGATING,
+                        getString(R.string.float_home_auto_phase_navigating, appName),
+                    )
+                    // ① 通知 contentIntent 直达（2026-10-27 真机根因修复）：微信
+                    // 8.0.79 节点树对 a11y 零暴露 + 本机无 Shizuku，视觉/搜索链实测
+                    // 32.6s 必败（目标会话被 47 条置顶/50 未读推深，主列表 4 页扫不到、
+                    // FTS 输入框吞字）。通知自带的 PendingIntent 是 IM 自己发布的
+                    // 「点通知直达该会话」钥匙，不受我方后台弹窗限制；启动前重扫
+                    // 活跃通知补缓存（进程重启/监听重连后缓存为空，只有监听期间
+                    // 新到的通知才会自动入缓存）。
+                    val seeded = AdvisorNotificationListener.refreshIntentCache()
+                    val direct = imNavigator.navigate(
+                        imPackage = imPackage,
+                        contactId = target.contactId,
+                        rawTitleHint = channel,
+                        timeoutMs = AUTO_DIRECT_NAV_TIMEOUT_MS,
+                    )
+                    Log.i(
+                        TAG,
+                        "auto_start: notify-direct seeded=$seeded result=${direct.outcome}" +
+                            " detail=${direct.detail}",
+                    )
+                    if (direct.outcome == com.verlintas.baic2.floatball.auto.ImNavigator
+                            .NavOutcome.NAVIGATED
+                    ) {
+                        Log.i(TAG, "auto_start: notify-direct navigated, skip search chain")
+                    } else {
+                        // ② 视觉/搜索链兜底（无缓存键 / PendingIntent 失效 / 超时）。
+                        val nav = imChatNavigator.openChat(imPackage, channel)
+                        if (nav is com.verlintas.baic2.floatball.auto.ImChatNavigator.NavResult.Fail) {
+                            imChatNavigator.toastResult(nav, channel)
+                            // S10（2026-10-27）：导航失败不再一律硬失败。陪伴窗口
+                            // 要求屏幕停在目标会话页，而 a11y 黑洞 IM + 无 Shizuku 时
+                            // 这个落脚点随时可能拿不到（通知被清空、会话被大量置顶/
+                            // 未读推深）。只要通知使用权可用，就降级为**通知驱动托管**
+                            // （与多会话同源调度器）：来信通知到达时自行导航 → 成稿 →
+                            // 按纪律代答，不依赖屏幕停在会话页。
+                            if (notificationListenerEnabled()) {
+                                autoSessionScheduler.start(targets)
+                                mode = Mode.AUTO
+                                advisorRunState.setAutoPhase(
+                                    AdvisorRunState.AutoPhase.WAITING,
+                                    getString(R.string.float_auto_phase_wait_notify),
+                                )
+                                logAutoStart(
+                                    source, targets, result = "DEGRADED", startedAt = startedAt,
+                                    note = "nav:${direct.outcome.name.lowercase()}>" +
+                                        "${nav.reason}>scheduler",
+                                )
+                                return@launch
+                            }
+                            logAutoStart(
+                                source, targets, result = "FAILED", startedAt = startedAt,
+                                note = "nav:${direct.outcome.name.lowercase()}>${nav.reason}",
+                            )
+                            notifyAutoStartFailure(
+                                target.displayName,
+                                getString(R.string.float_auto_start_failed_nav, appName),
+                            )
+                            finishAutoRun()
+                            return@launch
+                        }
                     }
                 }
                 if (!autoRun) return@launch
-                beginCompanion(
+                val result = beginCompanion(
                     contact = companionController.contactRefFor(target.contactId),
                     announceAuto = announce,
                     imPackage = imPackage,
+                )
+                if (result != CompanionWindowController.StartResult.STARTED) {
+                    // 陪伴窗口没起来（无联系人/档位冲突/总闸关闭）：整体回退空闲，
+                    // 并且不只依赖 Toast——关键失败再补一条可查通知（S2/S6）。
+                    notifyAutoStartFailure(
+                        target.displayName,
+                        getString(R.string.float_auto_start_failed_window, result.name),
+                    )
+                }
+                logAutoStart(
+                    source, targets,
+                    result = if (result == CompanionWindowController.StartResult.STARTED) {
+                        "STARTED"
+                    } else {
+                        "FAILED"
+                    },
+                    startedAt = startedAt,
+                    note = "companion=$result nav=${navigate}",
                 )
             }
         } else {
@@ -1410,10 +1647,31 @@ class FloatBallService : Service() {
             autoSessionScheduler.start(targets)
             ball?.setMode(FloatUi.BallMode.RECORDING, this)
             ball?.setAutoRunning(true)
+            logAutoStart(source, targets, result = "STARTED", startedAt = startedAt, note = "scheduler")
             if (announce) {
                 toast(getString(R.string.float_auto_scope_started_many, targets.size))
             }
         }
+    }
+
+    /**
+     * 启动链统一日志（方案 §5.2 S6）：一行包含来源/目标数/目标/结果/耗时/备注，
+     * 便于真机上区分「根本没启动」与「启动了但没消息」。
+     */
+    private fun logAutoStart(
+        source: AdvisorRunState.Source,
+        targets: List<AutoSelectionStore.Target>,
+        result: String,
+        startedAt: Long,
+        note: String? = null,
+    ) {
+        Log.i(
+            TAG,
+            "auto_start: source=$source targets=${targets.size} " +
+                "first=${targets.firstOrNull()?.let { "${it.displayName}@${it.imPackage ?: "all"}" }} " +
+                "result=$result elapsed=${System.currentTimeMillis() - startedAt}ms" +
+                (note?.let { " note=$it" } ?: ""),
+        )
     }
 
     /**
@@ -1455,13 +1713,19 @@ class FloatBallService : Service() {
      * 分屏「自动」：当前屏联系人可能同时有微信/企微号，优先使用最近识别到的
      * 聊天通道（[ScreenAdvisor.lastChatCandidate]），保证自动发送落在眼前
      * 这个 APP 的会话上，而不是档案默认 APP。
+     *
+     * 2026-10-27（方案 §5.2 S4）：档案 `imPackage` 为空但联系人有关联通道时，
+     * 回退取第一个通道的包名；仍拿不到包名才算「联系人级」目标（交给通知调度器），
+     * 不再静默把「明明在聊天页点自动」变成「只等通知」。
      */
     private suspend fun resolveCurrentAutoTarget(contact: ContactRef): AutoSelectionStore.Target? {
         val profile = contactRepository.profile(contact.contactId) ?: return null
         val channels = runCatching { contactRepository.channelsOf(contact.contactId) }
             .getOrDefault(emptyList())
         val candidate = screenAdvisor.lastChatCandidate
-        val imPackage = candidate?.first?.takeIf { it.isNotBlank() } ?: profile.imPackage
+        val imPackage = candidate?.first?.takeIf { it.isNotBlank() }
+            ?: profile.imPackage
+            ?: channels.firstOrNull()?.imPackage
         val channelName = candidate?.second?.takeIf { it.isNotBlank() }
             ?: channels.firstOrNull { it.imPackage == imPackage }?.displayName
             ?: contact.displayName
@@ -1476,16 +1740,22 @@ class FloatBallService : Service() {
     /** 自动档统一停止（主页自动键 / 双击球 / 通知）：清队列、收窗口、灭红点。 */
     private fun stopAuto(announce: Boolean) {
         if (!autoRun && mode != Mode.AUTO) return
+        mainHandler.removeCallbacks(autoStartWatchdog)
         autoRun = false
         autoCompanionStarted = false
         if (autoSessionScheduler.isRunning()) autoSessionScheduler.stop()
         if (companionWindow) {
             // 单会话：走陪伴窗口既有收尾（汇总通知），不弹「录制已停止」。
             stopRecording()
-        } else if (mode == Mode.AUTO) {
-            mode = Mode.IDLE
-            ball?.setMode(FloatUi.BallMode.NORMAL, this)
-            restoreBall()
+        } else {
+            if (mode == Mode.AUTO) mode = Mode.IDLE
+            // 启动阶段（导航中/陪伴窗口还没开）也可能已经把球点亮成红球（S1），
+            // 统一在这里复位，否则失败后会留下「红球但无窗口可托」的假象（S2）。
+            if (mode != Mode.RECORDING) {
+                ball?.setMode(FloatUi.BallMode.NORMAL, this)
+                ball?.setBadge(0)
+                restoreBall()
+            }
         }
         stopOnSplitClose = false
         advisorRunState.setIdle()
@@ -1501,6 +1771,40 @@ class FloatBallService : Service() {
 
     private fun notificationListenerEnabled(): Boolean =
         NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
+
+    /**
+     * 启动失败可见化（方案 §5.2 S6）：Toast 可能被 IM 前景/系统限制吞掉，
+     * 关键失败再发一条低优先级通知，保证「选了自动没反应」时至少留下可查痕迹，
+     * 用户能区分「根本没启动」与「启动了但没消息」。
+     */
+    private fun notifyAutoStartFailure(contact: String?, reason: String) {
+        runCatching {
+            val manager = NotificationManagerCompat.from(this)
+            if (!manager.areNotificationsEnabled()) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val system = getSystemService(NotificationManager::class.java)
+                if (system.getNotificationChannel(AUTO_CHANNEL_ID) == null) {
+                    system.createNotificationChannel(
+                        NotificationChannel(
+                            AUTO_CHANNEL_ID,
+                            getString(R.string.float_auto_channel),
+                            NotificationManager.IMPORTANCE_LOW,
+                        ),
+                    )
+                }
+            }
+            val text = if (contact.isNullOrBlank()) reason else "$contact：$reason"
+            val notification = NotificationCompat.Builder(this, AUTO_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(getString(R.string.float_auto_start_failed_title))
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setContentIntent(mainActivityPendingIntent())
+                .setAutoCancel(true)
+                .build()
+            NotifyGate.notifyIfPermitted(this, AUTO_FAIL_NOTIFICATION_ID, notification)
+        }.onFailure { Log.d(TAG, "auto fail notification failed", it) }
+    }
 
     private fun openNotificationListenerSettings() {
         runCatching {
@@ -1582,7 +1886,7 @@ class FloatBallService : Service() {
     // ---------------------------------------------------------- overlays
 
     private fun showBall() {
-        if (ball != null) return
+        if (ball != null || analyze != null || rpaChromeGate.isHidden) return
         val screen = screenSize()
         if (ballX == Int.MIN_VALUE) {
             ballX = screen.x - dp(FloatUi.BALL_SIZE_DP + FloatUi.MARGIN_DP)
@@ -2525,8 +2829,8 @@ class FloatBallService : Service() {
 
     /**
      * 「更多」子球：贴球弹出次级入口卡片（方案 §3.2）。分组顺序固定为
-     * RPA 工具置顶、设置与帮助在后；P1 只放已可用的「RPA 设计」，布局分析/
-     * 以图找图可用后再进同一分组，避免死入口。点行=关弹窗再执行。
+     * RPA 工具置顶、设置与帮助在后；RPA 组按「布局分析 → 以图找图 → RPA 设计」
+     * 排列，入口只指向已可用能力，避免死链。
      */
     private fun openMoreMenu() {
         if (cardMenuView != null || ball == null) return
@@ -2539,6 +2843,14 @@ class FloatBallService : Service() {
                 FloatUi.ListMenuGroup(
                     titleRes = R.string.float_more_group_rpa,
                     items = listOf(
+                        FloatUi.ListMenuItem(
+                            labelRes = R.string.float_rpa_tool_analyze,
+                            descRes = R.string.float_rpa_tool_analyze_desc,
+                        ) { openRpaAnalyze() },
+                        FloatUi.ListMenuItem(
+                            labelRes = R.string.float_rpa_tool_quickfind,
+                            descRes = R.string.float_rpa_tool_quickfind_desc,
+                        ) { openRpaQuickFind() },
                         FloatUi.ListMenuItem(
                             labelRes = R.string.float_rpa_tool_design,
                             descRes = R.string.float_rpa_tool_design_desc,
@@ -2577,6 +2889,174 @@ class FloatBallService : Service() {
             RpaEntryPoints.design(this)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
+    }
+
+    /**
+     * 「以图找图」：拉起透明 Activity 覆盖在目标 App 上，选图后自隐抓帧匹配。
+     * 门禁：空闲态（录制/单次/自动期间画面被本 App 占用，抓到的帧不可信）→
+     * 布局分析未打开 → 撤分屏与菜单/球，保证抓帧干净。打开期间球保持隐藏，
+     * Activity 退出经 [ACTION_RPA_TOOL_FINISHED] 复位并恢复球。
+     */
+    private fun openRpaQuickFind() {
+        if (mode != Mode.IDLE) {
+            toast(R.string.float_rpa_quickfind_idle_only)
+            return
+        }
+        if (rpaChromeGate.isHidden || analyze != null) return
+        // 闸门先占位：Activity 启动前的窗口切换期也不再重建球。
+        rpaChromeGate.hide(RpaChromeGate.REASON_QUICK_FIND)
+        closeSplit(keepBall = true)
+        hideAllOverlays()
+        runCatching { startActivity(RpaEntryPoints.quickFind(this)) }
+            .onFailure {
+                rpaChromeGate.show(RpaChromeGate.REASON_QUICK_FIND)
+                toast(R.string.float_rpa_quickfind_open_failed)
+            }
+    }
+
+    /**
+     * 「布局分析」：不启动 Activity，直接在目标 App 上挂全屏 a11y 覆盖层。
+     * 门禁顺序：空闲态 → 无障碍已连接 → 前台不是本 App；随后撤分屏/菜单/球，
+     * 让采集拿到干净的目标画面。分析器打开期间悬浮球保持隐藏。
+     */
+    private fun openRpaAnalyze() {
+        if (mode != Mode.IDLE) {
+            toast(R.string.float_rpa_analyze_idle_only)
+            return
+        }
+        if (analyze != null) return
+        if (AssistsService.getOrNull() == null || !a11yBridge.connected.value) {
+            showAnalyzeA11yNotice()
+            return
+        }
+        val foreground = runCatching {
+            AssistsCore.getPackageName(AssistsCore.NodeLookupScope.ActiveWindow)
+        }.getOrDefault("")
+        if (foreground == packageName) {
+            toast(R.string.float_rpa_analyze_switch_to_target)
+            return
+        }
+        val screen = screenSize()
+        closeSplit(keepBall = true)
+        hideAllOverlays()
+        // 拾取会话（方案 §7.8）：只有 A11Y 线路在此消费；VISION 请求由以图找图
+        // 页消费。任务在打开分析器时取快照，避免分析期间过期判定的抖动。
+        val pickRequest = pickCoordinator.current()?.takeIf { it.kind == RpaPickKind.A11Y }
+        val controller = RpaAnalyzeOverlayController(
+            context = this,
+            capture = rpaAnalyzeCapture,
+            screenWidth = screen.x,
+            screenHeight = screen.y,
+            selfPackage = packageName,
+            onClosed = {
+                analyze = null
+                analyzeA11yJob?.cancel()
+                analyzeA11yJob = null
+                restoreBall()
+            },
+            onFailure = { toast(R.string.float_rpa_analyze_start_failed) },
+            pickHint = pickRequest?.let {
+                getString(R.string.float_rpa_pick_banner, it.scriptName, it.displayStep(null))
+            },
+            onApplyPick = pickRequest?.let { request ->
+                { spec: RpaA11ySpec -> applyA11yPick(request, spec) }
+            },
+            onCancelPick = if (pickRequest != null) {
+                {
+                    pickCoordinator.cancel()
+                    toast(R.string.float_rpa_pick_cancelled)
+                }
+            } else {
+                null
+            },
+        )
+        analyze = controller
+        controller.start()
+        analyzeA11yJob = scope.launch {
+            a11yBridge.connected.collect { connected ->
+                if (!connected && analyze != null) {
+                    toast(R.string.float_rpa_analyze_a11y_lost)
+                    analyze?.close()
+                }
+            }
+        }
+    }
+
+    /**
+     * a11y 拾取回填（方案 §7.8）：写脚本 → 清请求 → 带 scriptId / stepId 重开
+     * 编辑器。复用 [RpaActivity] 的 extras 路径，不新增 Activity、不落结果文件。
+     */
+    private fun applyA11yPick(request: RpaPickRequest, spec: RpaA11ySpec) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val script = rpaScriptStore.load(request.scriptId)
+                        ?: error("script_missing")
+                    if (!RpaModePolicy.a11yEnabled(script.mode)) error("mode_without_a11y")
+                    rpaScriptStore.save(script.withA11ySpec(request.stepId, spec)).getOrThrow()
+                }
+            }
+            result.fold(
+                onSuccess = { script ->
+                    pickCoordinator.cancel()
+                    runCatching {
+                        startActivity(
+                            RpaActivity.intent(
+                                this@FloatBallService,
+                                scriptId = script.id,
+                                stepId = request.stepId,
+                            ),
+                        )
+                    }.onFailure { error ->
+                        toast(
+                            getString(
+                                R.string.float_rpa_pick_store_failed,
+                                error.message ?: "open_editor_failed",
+                            ),
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    toast(
+                        getString(
+                            R.string.float_rpa_pick_store_failed,
+                            error.message ?: "apply_failed",
+                        ),
+                    )
+                },
+            )
+        }
+    }
+
+    /** 无障碍未开启：贴球卡片给出「去开启 / 取消」，不启动任何分析窗口。 */
+    private fun showAnalyzeA11yNotice() {
+        if (cardMenuView != null || ball == null) return
+        revealBall(restartTimer = false)
+        val params = ballParams ?: return
+        val screen = screenSize()
+        val menu = FloatUi.buildGroupedListMenu(
+            this,
+            groups = listOf(
+                FloatUi.ListMenuGroup(
+                    items = listOf(
+                        FloatUi.ListMenuItem(R.string.float_rpa_analyze_open_a11y) {
+                            startActivity(
+                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        },
+                        FloatUi.ListMenuItem(R.string.float_rpa_analyze_cancel) {},
+                    ),
+                ),
+            ),
+            ballCenterX = params.x + dp(FloatUi.BALL_SIZE_DP) / 2,
+            ballCenterY = params.y + dp(FloatUi.BALL_SIZE_DP) / 2,
+            screenWidth = screen.x,
+            screenHeight = screen.y,
+            titleRes = R.string.float_rpa_analyze_need_a11y,
+            onDismiss = { dismissCardMenu() },
+        )
+        attachCardMenu(menu)
     }
 
     /** 「好参谋设置」：好参谋专属设置页（抓帧节奏/权限直达/会话管理等）。 */
@@ -2855,6 +3335,8 @@ class FloatBallService : Service() {
         )
 
     private fun restoreBall() {
+        // 分析器 / RPA 工具闸门仍占位时保持球隐藏；释放后由各自回调恢复。
+        if (analyze != null || rpaChromeGate.isHidden) return
         // 分屏开着也恢复球（面板留着展示结果，球可拖动避让）；只有菜单
         // 展开时球本就存在，无需重建。
         if (ball == null && menuView == null) {
@@ -2953,10 +3435,20 @@ class FloatBallService : Service() {
 
         const val CHANNEL_ID = "float_ball"
         const val NOTIFICATION_ID = 1001
+
+        /** 启动链日志 TAG（`auto_start:` 一行账的过滤前缀）。 */
+        const val TAG = "FloatBallService"
+
+        /** 自动托管启动失败通知（方案 §5.2 S6）：低优先级、独立渠道、独立 id。 */
+        const val AUTO_CHANNEL_ID = "floatball_auto"
+        const val AUTO_FAIL_NOTIFICATION_ID = 2006
         const val ACTION_SHOW_BALL = "com.verlintas.baic2.floatball.SHOW_BALL"
         const val ACTION_REPOST_NOTIFICATION = "com.verlintas.baic2.floatball.REPOST_NOTIFICATION"
         const val ACTION_START_RECORDING = "com.verlintas.baic2.floatball.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.verlintas.baic2.floatball.STOP_RECORDING"
+
+        /** RPA 工具页（以图找图）退出回传：复位悬浮球隐藏标志。 */
+        const val ACTION_RPA_TOOL_FINISHED = "com.verlintas.baic2.floatball.RPA_TOOL_FINISHED"
 
         /** 主页三键入口（方案 §5.5）：action 由 [com.verlintas.baic2.floatball.home.AdvisorHomeLauncher] 发出。 */
         const val ACTION_ONESHOT_FROM_MAIN = "com.verlintas.baic2.floatball.ONESHOT_FROM_MAIN"
@@ -2974,6 +3466,16 @@ class FloatBallService : Service() {
 
         /** 自动托管开启提示延迟：避开差分引擎首帧 OCR，防自家 Toast 污染。 */
         const val AUTO_ANNOUNCE_DELAY_MS = 1_200L
+
+        /** 自动档启动看门狗超时（ms）：导航+开窗的总预算，超时判失败并复位。 */
+        const val AUTO_START_TIMEOUT_MS = 30_000L
+
+        /**
+         * 启动时「通知 contentIntent 直达」的等待预算（ms）：微信/企微等 a11y
+         * 黑洞下这是唯一稳键（发布方为 IM，不受我方后台弹窗限制）。命中通常
+         * <1s；3s 未到前台即判失败并回落视觉/搜索链，不吞掉看门狗预算。
+         */
+        const val AUTO_DIRECT_NAV_TIMEOUT_MS = 3_000L
 
         /** 单击展开扇形菜单的双击仲裁窗：tap-UP 后该时间内无第二击即展开。 */
         const val TAP_ARB_MS = 120L

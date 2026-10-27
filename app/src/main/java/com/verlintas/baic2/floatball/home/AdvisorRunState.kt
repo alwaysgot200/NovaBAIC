@@ -40,6 +40,30 @@ class AdvisorRunState @Inject constructor() {
     /** 触发来源：悬浮球手势 / 主页三键操作条（主页入口关闭分屏即停止连续）。 */
     enum class Source { FLOAT_BALL, HOME }
 
+    /**
+     * 自动档启动阶段（2026-10-27 方案 §5.2 S1）：把「已进入自动」与
+     * 「正在打开会话/等待首帧」区分开，避免导航十几秒里用户以为没反应。
+     */
+    enum class AutoPhase {
+        /** 空闲或已停止。 */
+        IDLE,
+
+        /** 已受理启动请求，正在做前置校验/开总闸。 */
+        STARTING,
+
+        /** 正在导航到目标会话（可能数秒到数十秒）。 */
+        NAVIGATING,
+
+        /** 会话已就绪，等待首帧/主动首轮/来信。 */
+        WAITING,
+
+        /** 首轮已就绪，正常运行（收到回合/在治理/在发送）。 */
+        READY,
+
+        /** 启动链失败，本次托管不会继续（[Snapshot.autoNote] 带原因）。 */
+        FAILED,
+    }
+
     data class Snapshot(
         val mode: Mode = Mode.IDLE,
         val source: Source = Source.FLOAT_BALL,
@@ -53,6 +77,10 @@ class AdvisorRunState @Inject constructor() {
         /** 队列积压与会话暂停数（自动状态签/托管面板用）。 */
         val autoQueued: Int = 0,
         val autoPaused: Int = 0,
+        /** 启动阶段：状态签据此显示「启动中/打开微信…/托管中/失败」。 */
+        val autoPhase: AutoPhase = AutoPhase.IDLE,
+        /** 阶段说明（失败原因/静默跳过原因等，可直接展示的短句）。 */
+        val autoNote: String? = null,
     )
 
     private val _state = MutableStateFlow(Snapshot())
@@ -79,6 +107,8 @@ class AdvisorRunState @Inject constructor() {
         queued: Int = 0,
         paused: Int = 0,
         source: Source = Source.HOME,
+        phase: AutoPhase = AutoPhase.READY,
+        note: String? = null,
     ) {
         _state.update {
             Snapshot(
@@ -89,7 +119,19 @@ class AdvisorRunState @Inject constructor() {
                 autoActiveApp = activeApp,
                 autoQueued = queued,
                 autoPaused = paused,
+                autoPhase = phase,
+                autoNote = note,
             )
+        }
+    }
+
+    /**
+     * 只推进启动阶段，不改动模式与目标信息（2026-10-27 方案 §5.2 S1/S5）。
+     * 非 AUTO 态调用是无效的（可能已停止/被别的档接管），直接忽略。
+     */
+    fun setAutoPhase(phase: AutoPhase, note: String? = null) {
+        _state.update {
+            if (it.mode != Mode.AUTO) it else it.copy(autoPhase = phase, autoNote = note)
         }
     }
 

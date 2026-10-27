@@ -50,3 +50,7 @@ keystore.properties
 
 # Reference-only asset the owner dropped in for design study
 /Coupon Reveal.json
+
+# 构建日志：统一写到 logs/（整目录不入库）；根目录历史 build_*.log 同样不再跟踪
+/logs/
+/build_*.log

@@ -20,15 +20,18 @@
 package com.verlintas.baic2.floatball.auto
 
 /**
- * 执行通道三模（方案 §17.2）：A=a11y（节点/手势/SET_TEXT）、B=Shizuku（shell
- * `input tap`/剪贴板+粘贴）、C=纯感知起草档（无注入能力，自动挂起草通知）。
+ * 执行通道（方案 §17.2）：A=a11y（节点/手势/SET_TEXT）、B=Shizuku（shell
+ * `input tap`/剪贴板+粘贴）、G=手势粘贴（a11y 手势 + 截图 OCR + 剪贴板，
+ * 2026-10-27 真机新增：节点黑洞 IM 上免 Shizuku 的兜底通道）、C=纯感知起草档
+ * （无注入能力，自动挂起草通知）。
  */
-enum class InjectorChannel { A11y, Shizuku, DraftFallback }
+enum class InjectorChannel { A11y, Shizuku, Gesture, DraftFallback }
 
 /**
  * 执行通道抽象（方案 §17.2「定位/执行解耦」）：[SendSequence] 负责三步状态机
  * 编排，一切触点坐标来自 [SendLocator] 定位结果，注入/点击由本接口实现执行。
- * 模式 A（[A11yInjector]）与模式 B（[ShizukuInjector]）共用同一状态机底座。
+ * 模式 A（[A11yInjector]）、模式 B（[ShizukuInjector]）与手势粘贴
+ * （[A11yGestureInjector]）共用同一状态机底座。
  */
 interface InputInjector {
 

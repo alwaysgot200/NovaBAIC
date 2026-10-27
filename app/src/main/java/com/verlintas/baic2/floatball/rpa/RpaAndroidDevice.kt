@@ -260,6 +260,25 @@ class RpaAndroidDevice @Inject constructor(
     ): Result<CvMatch> =
         templateMatcher.find(frame, templateFile, threshold, region, grayscale)
 
+    /**
+     * 快捷找图（P3）：返回**不设阈值**的最佳匹配，由调用方决定是否命中，
+     * 从而能展示「未命中但最佳得分 0.62」而不是只有一句失败原因。
+     */
+    suspend fun bestTemplateMatch(
+        frame: Bitmap,
+        templateFile: java.io.File,
+        region: RpaRect? = null,
+        grayscale: Boolean = true,
+    ): Result<CvMatch> =
+        templateMatcher.bestMatch(frame, templateFile, region, grayscale)
+
+    /**
+     * 快捷找图的帧源：与 VISION 执行线路同源（Shizuku / 投影），且带
+     * 空白帧质检——FLAG_SECURE / 息屏时显式返回 `blank_frame`，不拿黑图硬匹配。
+     */
+    suspend fun quickFindFrame(): Result<Bitmap> =
+        screenCapture.captureNow(qualityCheck = true)
+
     suspend fun ocrLines(frame: Bitmap): List<OcrLine> = withContext(Dispatchers.Default) {
         val png = frame.toJpegBytes() ?: return@withContext emptyList()
         ocr.recognize(png).getOrDefault(emptyList())

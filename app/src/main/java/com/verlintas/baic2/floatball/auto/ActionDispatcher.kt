@@ -367,6 +367,7 @@ class ActionDispatcher @Inject constructor(
     private val assists: AssistsA11yBridge,
     private val a11yInjector: A11yInjector,
     private val shizukuInjector: ShizukuInjector,
+    private val gestureInjector: A11yGestureInjector,
     private val ocrSendLocator: OcrSendLocator,
     private val imNavigator: ImNavigator,
     private val imChatNavigator: ImChatNavigator,
@@ -481,16 +482,21 @@ class ActionDispatcher @Inject constructor(
         request: AutoSendRequest,
         trace: TimingTrace,
     ): String? {
-        // 发送后上屏回读证据源（§四.A.3）：A=a11y 节点树；B=当前帧 OCR。
+        // 发送后上屏回读证据源（§四.A.3）：A=a11y 节点树；B/G=当前帧 OCR。
         val evidence: SendEvidenceFinder? = when (channel) {
             InjectorChannel.A11y -> SendEvidenceFinder { clip -> bridge.findText(clip).isNotEmpty() }
-            InjectorChannel.Shizuku -> SendEvidenceFinder { clip -> ocrSendLocator.frameContains(clip) }
+            InjectorChannel.Shizuku,
+            InjectorChannel.Gesture,
+            -> SendEvidenceFinder { clip -> ocrSendLocator.frameContains(clip) }
             InjectorChannel.DraftFallback -> null
         }
         // 模式 B 三态证据（2026-10-27 真机假成功修复）：像素可见发送按钮时，
         // 「按钮仍在原位」是「未发出」的强证据，优先于纯文本回读。
+        // 手势粘贴通道（G）同源：定位与证据全部走截图/OCR/像素，故共用同一取证器。
         val proofFinder: SendProofFinder? = when (channel) {
-            InjectorChannel.Shizuku -> SendProofFinder { clips, tapped ->
+            InjectorChannel.Shizuku,
+            InjectorChannel.Gesture,
+            -> SendProofFinder { clips, tapped ->
                 ocrSendLocator.sendProof(clips, tapped)
             }
             else -> null
@@ -512,6 +518,10 @@ class ActionDispatcher @Inject constructor(
                     focused
                 }
             }
+            // 手势粘贴通道自带聚焦自检（[A11yGestureInjector] 的「键盘自检 + 锚点
+            // 阶梯」在注入前跑，且以 OCR 判定键盘是否真的弹起），这里不重复做一遍
+            // 取帧/OCR，避免同一次注入付两份探针成本。
+            InjectorChannel.Gesture -> null
             InjectorChannel.DraftFallback -> null
         }
         // 会话导航（§四.A.2）：前台不在目标 IM → 通知 contentIntent 拉起 +
@@ -538,9 +548,10 @@ class ActionDispatcher @Inject constructor(
         // 发送前会话页守卫（2026-10-27 真机 12:16/12:17）：导航自称 Ok 后
         // 页面可能已漂到主列表/通讯录页（微信主列表与聊天页同为 LauncherUI），
         // 旧链路只校验前台包名 → 在非会话页注入、locate 必败并留下草稿。
-        // 仅 Shizuku 通道做视觉守卫（无 a11y 节点树可查）；判定 null=无法判定，
-        // 一律放行，绝不因 OCR 抖动拦住正常发送。
-        if (channel == InjectorChannel.Shizuku) {
+        // 坐标注入通道（B/G）都做视觉守卫（无 a11y 节点树可查）；判定 null=无法
+        // 判定（如无 Shizuku 时 activity 探针不可用），一律放行，绝不因 OCR 抖动
+        // 拦住正常发送。
+        if (channel == InjectorChannel.Shizuku || channel == InjectorChannel.Gesture) {
             val verdict = trace.stageSuspend("guard") {
                 imChatNavigator.chatPageTitleMatches(request.imPackage, request.contactName)
             }
@@ -589,6 +600,27 @@ class ActionDispatcher @Inject constructor(
                         // 发送成功即收起键盘：Sogou 工具条/候选条会被下一帧
                         // OCR 当成来信，诱发自问自答回合（2026-10-27 真机）。
                         runCatching { shizukuInjector.hideImeIfShown() }
+                    }
+                    result
+                }
+                // 手势粘贴通道：定位/证据与模式 B 同源（截图 + OCR + 像素），
+                // 只有「注入」换成剪贴板 + 长按粘贴菜单（[A11yGestureInjector]）。
+                InjectorChannel.Gesture -> {
+                    val result = SendSequence.run(
+                        injector = gestureInjector,
+                        locator = ocrSendLocator,
+                        foregroundPackage = effectiveForeground,
+                        imPackage = request.imPackage,
+                        draft = request.draft,
+                        evidence = evidence,
+                        proofFinder = proofFinder,
+                        focusStep = focusStep,
+                        trace = trace,
+                    )
+                    if (result == null) {
+                        // 与模式 B 同款收尾：注入前必然展开的 Sogou 键盘要在发送后
+                        // 收起，否则工具条/候选词进下一帧 OCR 会诱发自问自答回合。
+                        runCatching { gestureInjector.hideImeIfShown() }
                     }
                     result
                 }
@@ -667,10 +699,11 @@ class ActionDispatcher @Inject constructor(
     private fun withDraftSource(reason: String, source: String?): String =
         if (source.isNullOrBlank()) reason else "$reason:src=$source"
 
-    /** 前台包名探针（通道自选）：A=a11y 桥；B=Shizuku dumpsys；C=null（拒注入）。 */
+    /** 前台包名探针（通道自选）：A/G=a11y 桥；B=Shizuku dumpsys；C=null（拒注入）。 */
     private suspend fun probeForeground(channel: InjectorChannel): String? = when (channel) {
         InjectorChannel.A11y -> bridge.foregroundPackage()
         InjectorChannel.Shizuku -> shizukuInjector.foregroundPackage()
+        InjectorChannel.Gesture -> gestureInjector.foregroundPackage()
         InjectorChannel.DraftFallback -> null
     }
 

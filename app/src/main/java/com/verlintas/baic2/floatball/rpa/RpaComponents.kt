@@ -106,23 +106,25 @@ internal fun rpaLineLabel(line: RpaLine): String = stringResource(
     },
 )
 
+/** 动作名资源（非 Composable 场景也能取，如运行通知）。 */
+internal fun rpaActionLabelRes(action: RpaAction): Int = when (action) {
+    RpaAction.LAUNCH_APP -> R.string.float_rpa_action_launch_app
+    RpaAction.OPEN_CHAT -> R.string.float_rpa_action_open_chat
+    RpaAction.WAIT -> R.string.float_rpa_action_wait
+    RpaAction.WAIT_FOR_TARGET -> R.string.float_rpa_action_wait_target
+    RpaAction.TAP -> R.string.float_rpa_action_tap
+    RpaAction.LONG_PRESS -> R.string.float_rpa_action_long_press
+    RpaAction.INPUT_TEXT -> R.string.float_rpa_action_input_text
+    RpaAction.PRESS_KEY -> R.string.float_rpa_action_press_key
+    RpaAction.SWIPE -> R.string.float_rpa_action_swipe
+    RpaAction.SCROLL -> R.string.float_rpa_action_scroll
+    RpaAction.ASSERT_TEXT -> R.string.float_rpa_action_assert_text
+    RpaAction.COMMENT -> R.string.float_rpa_action_comment
+}
+
 @Composable
-internal fun rpaActionLabel(action: RpaAction): String = stringResource(
-    when (action) {
-        RpaAction.LAUNCH_APP -> R.string.float_rpa_action_launch_app
-        RpaAction.OPEN_CHAT -> R.string.float_rpa_action_open_chat
-        RpaAction.WAIT -> R.string.float_rpa_action_wait
-        RpaAction.WAIT_FOR_TARGET -> R.string.float_rpa_action_wait_target
-        RpaAction.TAP -> R.string.float_rpa_action_tap
-        RpaAction.LONG_PRESS -> R.string.float_rpa_action_long_press
-        RpaAction.INPUT_TEXT -> R.string.float_rpa_action_input_text
-        RpaAction.PRESS_KEY -> R.string.float_rpa_action_press_key
-        RpaAction.SWIPE -> R.string.float_rpa_action_swipe
-        RpaAction.SCROLL -> R.string.float_rpa_action_scroll
-        RpaAction.ASSERT_TEXT -> R.string.float_rpa_action_assert_text
-        RpaAction.COMMENT -> R.string.float_rpa_action_comment
-    },
-)
+internal fun rpaActionLabel(action: RpaAction): String =
+    stringResource(rpaActionLabelRes(action))
 
 @Composable
 internal fun rpaCategoryLabel(category: RpaActionCategory): String = stringResource(

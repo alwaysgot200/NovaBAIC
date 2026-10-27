@@ -106,7 +106,7 @@ class DemoSeedReceiver : BroadcastReceiver() {
 
     private suspend fun handle(context: Context, intent: Intent): Int {
         // 联调参数钩子（2026-10-27 自动档复测）：`--es pace "1-3"`（派发前随机延迟
-        // 区间，秒）、`--es executor a11y|shizuku|auto`、`--es work 60 --es rest 60`
+        // 区间，秒）、`--es executor a11y|gesture|shizuku|auto`、`--es work 60 --es rest 60`
         // （工作/停歇段，秒；rest=0 表示不停歇）。只写好参谋自有偏好，不碰 IM。
         val tuned = applyTuningPrefs(intent)
         // 自动档脚本化入口（2026-10-27 反复复测）：`--ez auto true` 走与主页
@@ -233,6 +233,9 @@ class DemoSeedReceiver : BroadcastReceiver() {
             val channel = when (raw) {
                 "a11y" -> InjectorSelector.CONFIG_A11Y
                 "shizuku" -> InjectorSelector.CONFIG_SHIZUKU
+                // 2026-10-27 免 Shizuku 兜底通道：微信节点黑洞（a11y 零暴露）+ 本机
+                // 无 Shizuku 时，只有手势粘贴能发出去，复测要能直接锁定它。
+                "gesture" -> InjectorSelector.CONFIG_GESTURE
                 "auto" -> InjectorSelector.CONFIG_AUTO
                 else -> null
             }
@@ -244,7 +247,7 @@ class DemoSeedReceiver : BroadcastReceiver() {
         val workSec = intent.getIntExtra("work", -1)
         if (workSec > 0) {
             val ms = workSec * 1000L
-            // 档位外取值不落库：setWorkMs 对未知名目会回退 10 分钟，静默改参数更难排障。
+            // 档位外取值不落库：setWorkMs 对未知名目会回退默认档（1 分钟），静默改参数更难排障。
             if (ms in AdvisorPrefs.WORK_REST_OPTIONS) {
                 prefs.setWorkMs(ms)
                 applied += "work=${workSec}s"

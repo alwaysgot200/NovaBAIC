@@ -343,6 +343,13 @@ class AutoSessionScheduler @Inject constructor(
             activeApp = active?.imPackage?.let(::appLabel),
             queued = synchronized(queue) { queue.size },
             paused = paused.size,
+            // 有目标在跑=READY；纯等通知=WAITING（状态签据此显示「等待来信」，
+            // 2026-10-27 方案 §5.2 S1）。
+            phase = if (active == null) {
+                AdvisorRunState.AutoPhase.WAITING
+            } else {
+                AdvisorRunState.AutoPhase.READY
+            },
         )
         if (!running) runState.setIdle()
     }

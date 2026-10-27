@@ -433,24 +433,15 @@ private fun PulsingDot(color: androidx.compose.ui.graphics.Color) {
 
 // --------------------------------------------------------------- 状态签
 
+/**
+ * 运行状态签（方案 §4.4 + 2026-10-27 §14.1）：自动档按 [AdvisorRunState.AutoPhase]
+ * 显示启动/导航/等待阶段与当前注释，避免「点了自动十几秒没反应」。
+ */
 @Composable
 private fun StatusChip(state: AdvisorRunState.Snapshot, onClick: (() -> Unit)? = null) {
     val text = when (state.mode) {
         AdvisorRunState.Mode.CONTINUOUS -> stringResource(R.string.float_home_status_continuous)
-        AdvisorRunState.Mode.AUTO -> if (state.autoTargetCount <= 1) {
-            stringResource(
-                R.string.float_home_status_auto_one,
-                state.autoActiveContact.orEmpty(),
-                state.autoActiveApp.orEmpty(),
-            )
-        } else {
-            stringResource(
-                R.string.float_home_status_auto_many,
-                state.autoTargetCount,
-                state.autoActiveContact.orEmpty(),
-                state.autoActiveApp.orEmpty(),
-            )
-        }
+        AdvisorRunState.Mode.AUTO -> autoChipText(state)
         else -> ""
     }
     if (text.isEmpty()) return
@@ -475,6 +466,53 @@ private fun StatusChip(state: AdvisorRunState.Snapshot, onClick: (() -> Unit)? =
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/** 自动档状态签文案：启动阶段优先，注释（note）非空时优先展示为副说明。 */
+@Composable
+private fun autoChipText(state: AdvisorRunState.Snapshot): String {
+    val note = state.autoNote.orEmpty()
+    return when (state.autoPhase) {
+        AdvisorRunState.AutoPhase.STARTING -> stringResource(
+            R.string.float_home_status_auto_starting,
+            state.autoActiveContact.orEmpty(),
+            state.autoActiveApp.orEmpty(),
+        )
+        AdvisorRunState.AutoPhase.NAVIGATING -> note.ifEmpty {
+            stringResource(
+                R.string.float_home_status_auto_navigating,
+                state.autoActiveApp.orEmpty(),
+            )
+        }
+        AdvisorRunState.AutoPhase.WAITING -> stringResource(
+            R.string.float_home_status_auto_waiting,
+            state.autoActiveContact.orEmpty(),
+            state.autoActiveApp.orEmpty(),
+        )
+        AdvisorRunState.AutoPhase.FAILED -> stringResource(
+            R.string.float_home_status_auto_failed,
+            state.autoNote.orEmpty(),
+        )
+        AdvisorRunState.AutoPhase.IDLE,
+        AdvisorRunState.AutoPhase.READY,
+        -> {
+            val base = if (state.autoTargetCount <= 1) {
+                stringResource(
+                    R.string.float_home_status_auto_one,
+                    state.autoActiveContact.orEmpty(),
+                    state.autoActiveApp.orEmpty(),
+                )
+            } else {
+                stringResource(
+                    R.string.float_home_status_auto_many,
+                    state.autoTargetCount,
+                    state.autoActiveContact.orEmpty(),
+                    state.autoActiveApp.orEmpty(),
+                )
+            }
+            if (note.isEmpty()) base else "$base · $note"
+        }
     }
 }
 
