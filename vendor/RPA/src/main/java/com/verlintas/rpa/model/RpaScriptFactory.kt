@@ -48,7 +48,7 @@ object RpaScriptFactory {
                 step(
                     action = RpaAction.LAUNCH_APP,
                     label = "打开目标 App",
-                    params = RpaParams(packageName = appPackage.ifBlank { "com.tencent.mm" }),
+                    params = RpaParams(packageName = appPackage),
                     timeoutMs = 15_000,
                 ),
                 step(

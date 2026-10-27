@@ -205,7 +205,7 @@ internal fun RpaLibraryScreen(
 
     if (creating) {
         CreateScriptDialog(
-            defaultPackage = initialPackage ?: "com.tencent.mm",
+            defaultPackage = initialPackage.orEmpty(),
             onDismiss = { creating = false },
             onConfirm = { name, mode, pkg ->
                 creating = false

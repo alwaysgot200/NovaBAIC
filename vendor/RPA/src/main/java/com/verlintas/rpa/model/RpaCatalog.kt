@@ -169,15 +169,11 @@ object RpaCatalog {
     fun defaultStep(action: RpaAction, fallbackId: String = RpaIds.newId("step")): RpaStep {
         val base = RpaStep(id = fallbackId, action = action)
         return when (action) {
-            RpaAction.LAUNCH_APP -> base.copy(
-                params = RpaParams(packageName = "com.tencent.mm"),
-                label = "",
-            )
+            // 发行版不预填任何 App：由应用选择器 / 用户输入决定目标包名，
+            // 避免把测试夹具里的微信包名当成产品默认值。
+            RpaAction.LAUNCH_APP -> base
             RpaAction.OPEN_CHAT -> base.copy(
-                params = RpaParams(
-                    imPackage = "com.tencent.mm",
-                    contactName = "\${contactName}",
-                ),
+                params = RpaParams(contactName = "\${contactName}"),
                 timeoutMs = 20_000,
             )
             RpaAction.WAIT -> base.copy(params = RpaParams(waitMs = 800), timeoutMs = 2_000)
@@ -227,7 +223,7 @@ object RpaModePolicy {
 object RpaIds {
 
     /**
-     * 进程内单调序号：Demo 一次创建 9 个步骤、复制脚本一次重排全部步骤时，
+     * 进程内单调序号：一次插入多个步骤、复制脚本一次重排全部步骤时，
      * 单纯「毫秒 + 三位随机数」有可见的撞 id 概率（校验器会报 step_id_duplicate）。
      */
     private val sequence = java.util.concurrent.atomic.AtomicLong(0)
