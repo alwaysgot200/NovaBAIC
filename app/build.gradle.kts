@@ -86,6 +86,9 @@ android {
         // 自更新测试地址：release 恒空（走 SERVER_ORIGIN），debug 由下方覆盖。
         buildConfigField("String", "DEV_UPDATE_MANIFEST_URL", "\"\"")
 
+        // 真机 RPA 夹具（app/src/androidTest）：标准仪器测试通道。
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
         // ABI 按变体分流。AGP 会把 defaultConfig 与 buildType 的 abiFilters 合并
         // 取并集，所以默认只声明发行基线 arm64-v8a；debug 显式补齐模拟器冒烟所需
         // 的 x86_64 与 32 位兼容的 armeabi-v7a，release 不写 ndk 块、严格只打
@@ -162,6 +165,17 @@ android {
             java.srcDir(rpaSources)
             kotlin.srcDir(rpaSources)
         }
+        // 共享测试夹具：JVM 单测与真机 androidTest 复用同一份 7 步微信脚本。
+        // 只存在于测试源集，不进入 release / 发行包。
+        val sharedTestSources = file("src/sharedTest/java")
+        getByName("test") {
+            java.srcDir(sharedTestSources)
+            kotlin.srcDir(sharedTestSources)
+        }
+        getByName("androidTest") {
+            java.srcDir(sharedTestSources)
+            kotlin.srcDir(sharedTestSources)
+        }
     }
 
     packaging {
@@ -224,4 +238,12 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
+
+    // 真机仪器测试：7 步微信夹具（app/src/androidTest）走标准 AndroidJUnitRunner。
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    // androidTest 与 JVM 单测一样使用共享夹具；显式引入其编译期依赖，
+    // 不依赖 implementation 的传递可见性。
+    androidTestImplementation(libs.hilt.android)
+    androidTestImplementation(libs.kotlinx.coroutines.core)
 }

@@ -39,8 +39,8 @@ import com.verlintas.rpa.model.RpaVisionSpec
  * 用户原始需求里的微信 7 步例子：**只用于测试**，不进入发行版。
  *
  * 发行版只保留 [com.verlintas.rpa.model.RpaScriptFactory] 的空白脚本骨架；
- * 本夹具只存在于 `app/src/test`，由 JVM 测试验证结构，并在真机阶段由
- * androidTest / 手工导入 JSON 反复跑通。断言不占第 8 步：
+ * 本夹具只存在于 `app/src/sharedTest`（JVM 单测与 androidTest 共用），
+ * 由 JVM 测试验证结构，并由真机 androidTest 实际跑通。断言不占第 8 步：
  * 测试代码在脚本结束后自行检查「你好」是否在屏。
  */
 object RpaWechatHelloFixture {
