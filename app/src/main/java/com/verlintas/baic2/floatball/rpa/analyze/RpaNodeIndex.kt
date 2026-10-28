@@ -117,8 +117,10 @@ data class RpaAnalyzeWindow(
 /**
  * 一次采集结果的只读索引。
  *
- * [hitTest] 采用「包含点击点且面积最小」的节点：父子同框时优先最深的可点
- * 控件；`visibleToUser=false` 或空矩形不参与命中。
+ * 命中测试按「包含点击点 → 面积小优先 → 深度大优先」排序：父子同框时优先
+ * 最深的可点控件；[hitTestAll] 保留全部候选供重叠区域巡检（分析器点一下先
+ * 选中最小框，菜单里循环切换，长按列出整摞候选）。
+ * `visibleToUser=false` 或空矩形不参与命中。
  */
 class RpaNodeIndex private constructor(
     val windows: List<RpaAnalyzeWindow>,
@@ -142,21 +144,31 @@ class RpaNodeIndex private constructor(
         y: Int,
         windowIndex: Int,
         exclude: Set<Int> = emptySet(),
-    ): RpaAnalyzeNode? {
-        var best: RpaAnalyzeNode? = null
+    ): RpaAnalyzeNode? = hitTestAll(x, y, windowIndex, exclude).firstOrNull()
+
+    /**
+     * 点击点下的**全部**候选，按「面积小 → 深度大 → 全局索引」排序。
+     *
+     * 重叠区域巡检依赖这个顺序：第一个就是 [hitTest] 的返回值（最内层控件），
+     * 后续依次是祖先容器/背景层。分析器据此实现「点按循环 / 长按列表」，
+     * 纯逻辑层只保证顺序稳定，不替 UI 决定展示方式。
+     */
+    fun hitTestAll(
+        x: Int,
+        y: Int,
+        windowIndex: Int,
+        exclude: Set<Int> = emptySet(),
+    ): List<RpaAnalyzeNode> {
+        val hits = ArrayList<RpaAnalyzeNode>()
         for (node in nodes) {
             if (node.windowIndex != windowIndex || node.index in exclude) continue
             if (!node.raw.visibleToUser || !node.raw.enabled) continue
             val box = node.bounds
             if (box.isEmpty || !box.contains(x, y)) continue
-            val current = best
-            if (current == null || box.area < current.bounds.area ||
-                (box.area == current.bounds.area && node.depth > current.depth)
-            ) {
-                best = node
-            }
+            hits.add(node)
         }
-        return best
+        hits.sortWith(HIT_ORDER)
+        return hits
     }
 
     fun sameBounds(a: RpaAnalyzeNode, b: RpaAnalyzeNode): Boolean =
@@ -365,6 +377,17 @@ class RpaNodeIndex private constructor(
     companion object {
         const val DEFAULT_MAX_NODES = 800
         private const val MAX_PATH_DEPTH = 64
+
+        /**
+         * 重叠候选的稳定顺序：面积小（更贴手的控件）→ 深度大（同框时选子节点）
+         * → 全局索引（完全同框且同深度时先出现者优先）。排序是纯函数，单测
+         * 直接断言数组顺序。
+         */
+        private val HIT_ORDER: Comparator<RpaAnalyzeNode> = compareBy(
+            { it.bounds.area },
+            { -it.depth },
+            { it.index },
+        )
 
         fun build(
             windows: List<RpaAnalyzeWindow>,

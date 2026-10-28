@@ -155,10 +155,13 @@ object RpaWechatHelloFixture {
                         primary = RpaVisionLocator(
                             kind = RpaVisionKind.RATIO,
                             ratioX = 0.5f,
-                            ratioY = 0.88f,
+                            // 2026-10-28 真机（1080×2460）实测：微信 8.0.79 聊天页
+                            // 输入栏在 y≈2280–2400，点击 y=2320 才弹出键盘；
+                            // 旧值 0.88（y≈2165）落在消息区，点了没有任何反应。
+                            ratioY = 0.94f,
                             pick = RpaPick.BOTTOM_MOST,
                         ),
-                        note = "聊天输入栏固定在底部中央",
+                        note = "聊天输入栏固定在底部中央（真机 ratio≈0.94）",
                     ),
                 ),
                 timeoutMs = 5_000,
@@ -194,11 +197,14 @@ object RpaWechatHelloFixture {
                         ),
                         fallback = RpaVisionLocator(
                             kind = RpaVisionKind.RATIO,
-                            ratioX = 0.92f,
-                            ratioY = 0.88f,
+                            ratioX = 0.91f,
+                            // 键盘弹出后输入栏上移到 y≈1340–1440，绿色「发送」按钮
+                            // 中心≈(980,1390)，真机 ratio≈(0.907,0.565)；
+                            // 旧的 0.88 落在键盘键位区，会点空。
+                            ratioY = 0.565f,
                             pick = RpaPick.BOTTOM_MOST,
                         ),
-                        note = "底部右侧 OCR「发送」，失败用比例兜底",
+                        note = "底部右侧 OCR「发送」，失败用比例兜底（键盘弹出后 ratio≈0.565）",
                     ),
                 ),
                 timeoutMs = 6_000,

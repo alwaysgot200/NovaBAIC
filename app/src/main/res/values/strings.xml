@@ -1582,6 +1582,16 @@
     <string name="float_rpa_analyze_menu_exit">退出分析</string>
     <string name="float_rpa_analyze_window_foreground">（前台）</string>
     <string name="float_rpa_analyze_window_background">（后台）</string>
+    <!-- 无障碍节点被目标 App 屏蔽（微信 8.x）时只拿得到窗口根节点 -->
+    <string name="float_rpa_analyze_empty_tree_notice">只读到窗口根节点：目标应用可能把控件标记为无障碍不可见（如微信 8.x）。请关闭再开启无障碍服务后刷新；仍为空请改用「以图找图 / OCR」定位。</string>
+    <!-- 重叠区域巡检：点按循环 / 长按整摞列表 -->
+    <string name="float_rpa_analyze_stack_cycle">重叠 %1$d/%2$d · 点按切换</string>
+    <string name="float_rpa_analyze_stack_list">列出重叠控件（%1$d）</string>
+    <string name="float_rpa_analyze_stack_title">重叠控件</string>
+    <string name="float_rpa_analyze_stack_hint">面积小的在内层；点一行查看属性，黄色高亮为当前选中。长按画布可再次打开本列表。</string>
+    <string name="float_rpa_analyze_stack_empty">此处没有可分析的节点</string>
+    <string name="float_rpa_analyze_stack_row_title">%1$d. %2$s</string>
+    <string name="float_rpa_analyze_stack_row_meta">%1$s · %2$s · 深度 %3$d · 面积 %4$d</string>
 
     <!-- RPA 自动化：以图找图透明结果浮层 -->
     <string name="float_rpa_quickfind_title">以图找图</string>

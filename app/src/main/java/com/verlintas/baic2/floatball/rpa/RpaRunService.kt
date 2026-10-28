@@ -28,6 +28,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.verlintas.baic2.R
@@ -120,6 +121,7 @@ class RpaRunService : Service() {
                     )
                     val result = runner.run(script) { event ->
                         controller.record(event)
+                        logEvent(event)
                         if (event is RpaRunEvent.StepStarted ||
                             event is RpaRunEvent.LineFallback
                         ) {
@@ -157,6 +159,28 @@ class RpaRunService : Service() {
         if (outcomeRecorded) return
         outcomeRecorded = true
         controller.finish(ok, detail)
+    }
+
+    /**
+     * 逐事件落 logcat：真机排障时结果通知只有一个最终 detail，无法还原
+     * 「哪一步、走了哪条线、为什么失败」。事件本身仍由 [controller] 收口，
+     * 这里只做可观测性，不改变执行语义。
+     */
+    private fun logEvent(event: RpaRunEvent) {
+        when (event) {
+            is RpaRunEvent.ScriptStarted ->
+                Log.i(TAG, "script_start id=${event.script.id} line=${event.line}")
+            is RpaRunEvent.StepStarted ->
+                Log.i(TAG, "step_start #${event.index} ${event.step.action} id=${event.step.id} line=${event.line}")
+            is RpaRunEvent.StepFinished ->
+                Log.i(TAG, "step_end #${event.index} ok=${event.ok} detail=${event.detail}")
+            is RpaRunEvent.LineFallback ->
+                Log.i(TAG, "line_fallback #${event.index} ${event.from}->${event.to} reason=${event.reason}")
+            is RpaRunEvent.Log ->
+                Log.i(TAG, "event: ${event.message}")
+            is RpaRunEvent.ScriptFinished ->
+                Log.i(TAG, "script_end ok=${event.ok} failed_step=${event.failedStepIndex} detail=${event.detail}")
+        }
     }
 
     private fun releaseAndStop() {
@@ -312,6 +336,8 @@ class RpaRunService : Service() {
     )
 
     companion object {
+        private const val TAG = "RpaRunService"
+
         const val ACTION_START = "com.verlintas.baic2.floatball.rpa.RUN_START"
         const val ACTION_STOP = "com.verlintas.baic2.floatball.rpa.RUN_STOP"
         const val EXTRA_SCRIPT_ID = "rpa_script_id"

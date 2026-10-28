@@ -32,6 +32,7 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -55,10 +56,11 @@ import kotlin.math.abs
  * 会改变目标 App 的无障碍窗口顺序，刷新时还会把自己的面板拍进截图。
  *
  * 交互链：
- * 1. 冻结帧 fitCenter + 绿色控件框；
- * 2. 点控件 → 白色竖排菜单（AutoJs6 同款）；
- * 3. 属性卡 / 层级 / 窗口选择都在覆盖层内完成；
- * 4. 隐藏节点只影响画框，不修改系统节点树。
+ * 1. 冻结帧 fitCenter + **1dp 细边框**控件框（中心透明，不遮挡目标界面）；
+ * 2. 点控件 → 选中框半透明黄色填充 + 2dp 高亮边，并弹白色竖排菜单；
+ * 3. 重叠区域：点按循环候选（面积小 → 内层优先），长按列出整摞候选；
+ * 4. 属性卡 / 层级 / 窗口选择都在覆盖层内完成；
+ * 5. 隐藏节点只影响画框，不修改系统节点树。
  */
 internal class RpaAnalyzeOverlayView(
     context: Context,
@@ -97,8 +99,16 @@ internal class RpaAnalyzeOverlayView(
     private var index: RpaNodeIndex? = null
     private var currentWindowIndex = 0
     private var selected: RpaAnalyzeNode? = null
+
+    /**
+     * 当前点击点下的全部重叠候选（由 [RpaNodeIndex.hitTestAll] 提供，面积
+     * 小 → 内层优先）。[hitCandidateIndex] 与 [selected] 同步，菜单里的
+     * 「重叠 1/N · 点按切换」和长按候选列表都基于这一摞。
+     */
+    private var hitCandidates: List<RpaAnalyzeNode> = emptyList()
+    private var hitCandidateIndex = 0
     private var currentFilter = NodeFilter.ALL
-    private var showLabels = true
+    private var showLabels = false
     private var loading = true
     private var hiddenByWindow = mutableMapOf<Int, MutableSet<Int>>()
 
@@ -110,6 +120,7 @@ internal class RpaAnalyzeOverlayView(
     private var hierarchyScroll: ScrollView? = null
     private var hierarchyRows: LinearLayout? = null
     private var hierarchyRowViews = mutableMapOf<Int, TextView>()
+    private val hitStackRows = ArrayList<TextView>()
     private var filterChips = mutableMapOf<NodeFilter, TextView>()
 
     private lateinit var chromeColumn: LinearLayout
@@ -117,6 +128,7 @@ internal class RpaAnalyzeOverlayView(
     private lateinit var restoreButton: TextView
     private lateinit var frameNoticeView: TextView
     private lateinit var backgroundNoticeView: TextView
+    private lateinit var emptyTreeNoticeView: TextView
     private lateinit var loadingView: LinearLayout
     private lateinit var errorView: LinearLayout
     private lateinit var errorDetailView: TextView
@@ -139,6 +151,7 @@ internal class RpaAnalyzeOverlayView(
         snapshot = null
         index = null
         selected = null
+        clearHitCandidates()
         hiddenByWindow.clear()
         dismissMenu()
         dismissDetail()
@@ -148,6 +161,7 @@ internal class RpaAnalyzeOverlayView(
         subtitleView.text = context.getString(R.string.float_rpa_analyze_loading)
         frameNoticeView.visibility = GONE
         backgroundNoticeView.visibility = GONE
+        emptyTreeNoticeView.visibility = GONE
         updateChrome()
         canvasView.invalidate()
     }
@@ -162,6 +176,7 @@ internal class RpaAnalyzeOverlayView(
         currentWindowIndex = built.activeWindowIndex
             .coerceIn(0, (built.windows.size - 1).coerceAtLeast(0))
         selected = null
+        clearHitCandidates()
         hiddenByWindow.clear()
         loading = false
         errorView.visibility = GONE
@@ -175,6 +190,7 @@ internal class RpaAnalyzeOverlayView(
         snapshot = null
         index = null
         selected = null
+        clearHitCandidates()
         hiddenByWindow.clear()
         dismissMenu()
         dismissDetail()
@@ -184,6 +200,7 @@ internal class RpaAnalyzeOverlayView(
         errorDetailView.text = context.getString(R.string.float_rpa_analyze_capture_failed, code)
         frameNoticeView.visibility = GONE
         backgroundNoticeView.visibility = GONE
+        emptyTreeNoticeView.visibility = GONE
         subtitleView.text = context.getString(R.string.float_rpa_analyze_capture_failed, code)
         canvasView.invalidate()
     }
@@ -196,6 +213,7 @@ internal class RpaAnalyzeOverlayView(
         snapshot = null
         index = null
         selected = null
+        clearHitCandidates()
         hiddenByWindow.clear()
         removeAllViews()
     }
@@ -294,6 +312,18 @@ internal class RpaAnalyzeOverlayView(
             LayoutParams.WRAP_CONTENT,
         ).apply { topMargin = dp(6) })
 
+        // 只拿到窗口根节点时，目标 App 基本就是对无障碍屏蔽了内容（微信 8.x
+        // 是典型）。必须当场报因并给替代通道，不能只留一个空画布让用户猜。
+        emptyTreeNoticeView = noticeText(
+            context.getString(R.string.float_rpa_analyze_empty_tree_notice),
+            Color.parseColor("#FCE8E6"),
+            Color.parseColor("#A50E0E"),
+        ).apply { visibility = GONE }
+        chromeColumn.addView(emptyTreeNoticeView, LinearLayout.LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(6) })
+
         chromeColumn.background = roundedBackground(toolbarColor, 12)
         addView(
             chromeColumn,
@@ -377,6 +407,7 @@ internal class RpaAnalyzeOverlayView(
             subtitleView.text = context.getString(R.string.float_rpa_analyze_loading)
             frameNoticeView.visibility = GONE
             backgroundNoticeView.visibility = GONE
+            emptyTreeNoticeView.visibility = GONE
             restoreButton.visibility = VISIBLE
             return
         }
@@ -397,10 +428,14 @@ internal class RpaAnalyzeOverlayView(
             frameNoticeView.visibility = if (snap.hasFrame) GONE else VISIBLE
             backgroundNoticeView.visibility =
                 if (currentWindowIndex == snap.activeWindowIndex) GONE else VISIBLE
+            // 根节点之外没有任何子节点 = 目标 App 屏蔽了无障碍内容，提示换通道。
+            val meaningful = idx.nodes.count { it.depth > 0 }
+            emptyTreeNoticeView.visibility = if (meaningful == 0) VISIBLE else GONE
         } else {
             subtitleView.text = ""
             frameNoticeView.visibility = GONE
             backgroundNoticeView.visibility = GONE
+            emptyTreeNoticeView.visibility = GONE
         }
         val hiddenCount = hiddenByWindow[currentWindowIndex]?.size ?: 0
         restoreButton.text = if (hiddenCount > 0) {
@@ -518,16 +553,16 @@ internal class RpaAnalyzeOverlayView(
         private val scrimPaint = Paint().apply { color = Color.argb(120, 0, 0, 0) }
         private val boxStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = max(1f, 2f * density)
+            // 1dp 细边框：中心完全透明，不遮挡目标界面内容。
+            strokeWidth = max(1f, 1f * density)
             color = green
         }
         private val selectedStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = max(1f, 3f * density)
+            strokeWidth = max(2f, 2f * density)
             color = yellow
         }
-        private val greenFill = Paint().apply { color = Color.argb(26, 0, 230, 118) }
-        private val selectedFill = Paint().apply { color = Color.argb(52, 255, 214, 0) }
+        private val selectedFill = Paint().apply { color = Color.argb(64, 255, 214, 0) }
         private val labelBackground = Paint().apply { color = Color.argb(210, 0, 0, 0) }
         private val labelText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
@@ -562,14 +597,26 @@ internal class RpaAnalyzeOverlayView(
             labelRects.clear()
             val hidden = hiddenSet()
             var labelsLeft = MAX_LABELS
+            val selectedNode = selected?.takeIf {
+                it.windowIndex == currentWindowIndex && it.index !in hidden
+            }
+            // 普通节点只画 1dp 细边框：整屏几十个控件也不会把界面糊成绿色。
             for (node in idx.boxNodes(currentWindowIndex, hidden)) {
+                if (node.index == selectedNode?.index) continue
                 val rect = rectForNode(node) ?: continue
                 if (rect.width() < 1f || rect.height() < 1f) continue
-                val isSelected = selected?.index == node.index
-                canvas.drawRect(rect, if (isSelected) selectedFill else greenFill)
-                canvas.drawRect(rect, if (isSelected) selectedStroke else boxStroke)
+                canvas.drawRect(rect, boxStroke)
                 if (showLabels && labelsLeft > 0) {
                     if (drawLabel(canvas, node, rect)) labelsLeft--
+                }
+            }
+            // 选中节点最后画：半透明填充 + 2dp 黄边，保证压在交界线之上。
+            if (selectedNode != null) {
+                val rect = rectForNode(selectedNode)
+                if (rect != null && rect.width() >= 1f && rect.height() >= 1f) {
+                    canvas.drawRect(rect, selectedFill)
+                    canvas.drawRect(rect, selectedStroke)
+                    drawLabel(canvas, selectedNode, rect)
                 }
             }
         }
@@ -614,15 +661,47 @@ internal class RpaAnalyzeOverlayView(
             return true
         }
 
+        private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+        private var downX = 0f
+        private var downY = 0f
+        private var longPressConsumed = false
+        private val longPressRunnable = Runnable {
+            if (!longPressConsumed) {
+                longPressConsumed = true
+                onCanvasLongPress(downX, downY)
+            }
+        }
+
         override fun onTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> return true
-                MotionEvent.ACTION_UP -> {
-                    onCanvasTap(event.x, event.y)
-                    performClick()
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
+                    longPressConsumed = false
+                    postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
                     return true
                 }
-                MotionEvent.ACTION_CANCEL -> return true
+                MotionEvent.ACTION_MOVE -> {
+                    // 手指移出触摸阈值说明不是长按，取消定时器；本次 UP 仍是点按。
+                    if (!longPressConsumed &&
+                        (abs(event.x - downX) > touchSlop || abs(event.y - downY) > touchSlop)
+                    ) {
+                        removeCallbacks(longPressRunnable)
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    removeCallbacks(longPressRunnable)
+                    if (!longPressConsumed) {
+                        onCanvasTap(event.x, event.y)
+                        performClick()
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    removeCallbacks(longPressRunnable)
+                    return true
+                }
             }
             return super.onTouchEvent(event)
         }
@@ -651,17 +730,91 @@ internal class RpaAnalyzeOverlayView(
         val screenX = point.x.roundToInt()
         val screenY = point.y.roundToInt()
         if (screenX < 0 || screenY < 0) return
-        val node = idx.hitTest(
+        val hits = idx.hitTestAll(
             x = screenX,
             y = screenY,
             windowIndex = currentWindowIndex,
             exclude = hiddenSet(),
-        ) ?: return
-        selected = node
+        )
+        if (hits.isEmpty()) {
+            clearHitCandidates()
+            selected = null
+            canvasView.invalidate()
+            return
+        }
+        selectHitCandidate(hits, index = 0, screenX = screenX, screenY = screenY)
+        showNodeMenu(hits[0])
+    }
+
+    /**
+     * 长按：把点击点下的整摞候选列成底部清单。比在菜单里逐个循环更适合
+     * 「多层浮层叠在一起」的场景——每行直接带类名/坐标/深度/面积。
+     */
+    private fun onCanvasLongPress(x: Float, y: Float) {
+        val idx = index ?: return
+        val point = viewToScreen(x, y) ?: return
+        val screenX = point.x.roundToInt()
+        val screenY = point.y.roundToInt()
+        if (screenX < 0 || screenY < 0) return
+        val hits = idx.hitTestAll(
+            x = screenX,
+            y = screenY,
+            windowIndex = currentWindowIndex,
+            exclude = hiddenSet(),
+        )
+        if (hits.isEmpty()) {
+            toast(R.string.float_rpa_analyze_stack_empty)
+            return
+        }
+        dismissMenu()
+        dismissDetail()
+        dismissSheet()
+        selectHitCandidate(hits, index = 0, screenX = screenX, screenY = screenY)
+        showHitStack()
+    }
+
+    /** 记录点击点下的候选摞并选中第 [index] 个；菜单锚点固定为屏幕坐标。 */
+    private fun selectHitCandidate(
+        hits: List<RpaAnalyzeNode>,
+        index: Int,
+        screenX: Int,
+        screenY: Int,
+    ) {
+        if (hits.isEmpty()) return
+        hitCandidates = hits
+        hitCandidateIndex = index.coerceIn(0, hits.lastIndex)
+        selected = hits[hitCandidateIndex]
         menuAnchorX = screenX.toFloat()
         menuAnchorY = screenY.toFloat()
         canvasView.invalidate()
-        showNodeMenu(node)
+    }
+
+    private fun clearHitCandidates() {
+        hitCandidates = emptyList()
+        hitCandidateIndex = 0
+    }
+
+    /** 隐藏节点后把候选摞里被隐藏的项剔除，保持循环索引有效。 */
+    private fun pruneHitCandidates() {
+        if (hitCandidates.isEmpty()) return
+        val hidden = hiddenSet()
+        hitCandidates = hitCandidates.filter { it.index !in hidden }
+        hitCandidateIndex = if (hitCandidates.isEmpty()) {
+            0
+        } else {
+            hitCandidateIndex.coerceIn(0, hitCandidates.lastIndex)
+        }
+    }
+
+    /** 菜单里的「重叠 1/N · 点按切换」：循环到下一个候选并重建菜单。 */
+    private fun cycleHitCandidate() {
+        val hits = hitCandidates
+        if (hits.size <= 1) return
+        val next = (hitCandidateIndex + 1) % hits.size
+        hitCandidateIndex = next
+        selected = hits[next]
+        canvasView.invalidate()
+        showNodeMenu(hits[next])
     }
 
     // ------------------------------------------------------------------ menu
@@ -674,7 +827,7 @@ internal class RpaAnalyzeOverlayView(
             elevation = dp(10).toFloat()
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
-        val entries = ArrayList<Pair<String, () -> Unit>>(8)
+        val entries = ArrayList<Pair<String, () -> Unit>>(10)
         if (pickHint != null) {
             entries.add(
                 context.getString(R.string.float_rpa_pick_apply) to {
@@ -690,6 +843,24 @@ internal class RpaAnalyzeOverlayView(
                         dismissMenu()
                         callbacks.onApplyPick(spec)
                     }
+                },
+            )
+        }
+        if (hitCandidates.size > 1) {
+            entries.add(
+                context.getString(
+                    R.string.float_rpa_analyze_stack_cycle,
+                    hitCandidateIndex + 1,
+                    hitCandidates.size,
+                ) to { cycleHitCandidate() },
+            )
+            entries.add(
+                context.getString(
+                    R.string.float_rpa_analyze_stack_list,
+                    hitCandidates.size,
+                ) to {
+                    dismissMenu()
+                    showHitStack()
                 },
             )
         }
@@ -795,6 +966,105 @@ internal class RpaAnalyzeOverlayView(
     private fun dismissMenu() {
         menuView?.let { removeView(it) }
         menuView = null
+    }
+
+    // ------------------------------------------------------------- hit stack
+
+    /**
+     * 重叠候选清单（底部 sheet）：一行一个候选，点行选中并打开属性卡。
+     * 与层级面板同一套视觉，避免用户在两套列表之间重新学习。
+     */
+    private fun showHitStack() {
+        val hits = hitCandidates
+        if (hits.isEmpty()) return
+        dismissMenu()
+        dismissDetail()
+        dismissSheet()
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBackground(sheetBackgroundColor, 14)
+            elevation = dp(12).toFloat()
+        }
+        val header = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(12), dp(8), dp(2))
+        }
+        header.addView(TextView(context).apply {
+            text = context.getString(R.string.float_rpa_analyze_stack_title)
+            setTextColor(primaryText)
+            textSize = 15f
+            setTypeface(typeface, Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+        })
+        header.addView(closeButton { dismissSheet() })
+        card.addView(header)
+        card.addView(TextView(context).apply {
+            text = context.getString(R.string.float_rpa_analyze_stack_hint)
+            setTextColor(secondaryText)
+            textSize = 11f
+            setLineSpacing(dp(2).toFloat(), 1f)
+            setPadding(dp(16), 0, dp(16), dp(6))
+        })
+
+        val scroll = ScrollView(context)
+        val rows = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(2), dp(8), dp(8))
+        }
+        hitStackRows.clear()
+        hits.forEachIndexed { position, node ->
+            val title = context.getString(
+                R.string.float_rpa_analyze_stack_row_title,
+                position + 1,
+                node.label.take(28),
+            )
+            val meta = context.getString(
+                R.string.float_rpa_analyze_stack_row_meta,
+                node.simpleClassName,
+                node.bounds.toString(),
+                node.depth,
+                node.bounds.area,
+            )
+            val row = TextView(context).apply {
+                text = "$title\n$meta"
+                setTextColor(primaryText)
+                textSize = 12f
+                setLineSpacing(dp(2).toFloat(), 1f)
+                setPadding(dp(12), dp(9), dp(12), dp(9))
+                background = stackRowBackground(position == hitCandidateIndex)
+                isClickable = true
+                setOnClickListener {
+                    hitCandidateIndex = position
+                    selected = node
+                    canvasView.invalidate()
+                    refreshStackSelection()
+                    showDetail(node)
+                }
+            }
+            hitStackRows.add(row)
+            rows.addView(row, LinearLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                LayoutParams.WRAP_CONTENT,
+            ))
+        }
+        scroll.addView(rows)
+        card.addView(scroll, LinearLayout.LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            0,
+            1f,
+        ))
+        sheetView = card
+        addView(card, sheetParams(heightFraction = 0.5f))
+    }
+
+    private fun stackRowBackground(active: Boolean): GradientDrawable? =
+        if (active) roundedBackground(Color.parseColor("#FFF3CD"), 6) else null
+
+    private fun refreshStackSelection() {
+        hitStackRows.forEachIndexed { position, row ->
+            row.background = stackRowBackground(position == hitCandidateIndex)
+        }
     }
 
     // ---------------------------------------------------------------- detail
@@ -1081,6 +1351,7 @@ internal class RpaAnalyzeOverlayView(
                 isClickable = true
                 setOnClickListener {
                     selected = node
+                    clearHitCandidates()
                     canvasView.invalidate()
                     refreshRowSelection()
                     scroll.post {
@@ -1127,6 +1398,7 @@ internal class RpaAnalyzeOverlayView(
         hierarchyScroll = null
         hierarchyRows = null
         hierarchyRowViews.clear()
+        hitStackRows.clear()
         filterChips.clear()
     }
 
@@ -1194,6 +1466,7 @@ internal class RpaAnalyzeOverlayView(
                 setOnClickListener {
                     currentWindowIndex = window.index
                     selected = null
+                    clearHitCandidates()
                     dismissSheet()
                     dismissDetail()
                     updateChrome()
@@ -1245,6 +1518,7 @@ internal class RpaAnalyzeOverlayView(
         val set = hiddenByWindow.getOrPut(currentWindowIndex) { mutableSetOf() }
         set.add(node.index)
         if (selected?.index == node.index) selected = null
+        pruneHitCandidates()
         updateChrome()
         canvasView.invalidate()
     }
@@ -1256,12 +1530,14 @@ internal class RpaAnalyzeOverlayView(
             .filter { idx.sameBounds(it, node) }
             .forEach { set.add(it.index) }
         if (selected?.index == node.index) selected = null
+        pruneHitCandidates()
         updateChrome()
         canvasView.invalidate()
     }
 
     private fun restoreHidden() {
         if (hiddenByWindow.remove(currentWindowIndex) != null) {
+            clearHitCandidates()
             updateChrome()
             canvasView.invalidate()
         }

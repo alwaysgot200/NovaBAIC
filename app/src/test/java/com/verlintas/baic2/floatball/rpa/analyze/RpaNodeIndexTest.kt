@@ -150,6 +150,67 @@ class RpaNodeIndexTest {
     }
 
     @Test
+    fun `hit test all returns smallest area then deepest first`() {
+        val root = node(
+            bounds = RpaBox(0, 0, 1080, 1920),
+            children = listOf(
+                node(
+                    text = "卡片",
+                    bounds = RpaBox(0, 0, 1080, 600),
+                    children = listOf(
+                        node(
+                            text = "外层",
+                            bounds = RpaBox(10, 10, 300, 300),
+                            clickable = true,
+                            children = listOf(
+                                node(
+                                    text = "内层",
+                                    bounds = RpaBox(10, 10, 300, 300),
+                                    clickable = true,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val index = RpaNodeIndex.build(listOf(window(root)))
+
+        val hits = index.hitTestAll(100, 100, windowIndex = 0)
+        // 同框时内层（深度大）排在外层前面；容器按面积递增；根节点兜底。
+        assertEquals(listOf("内层", "外层", "卡片", ""), hits.map { it.raw.text })
+        assertEquals("内层", index.hitTest(100, 100, windowIndex = 0)?.raw?.text)
+    }
+
+    @Test
+    fun `hit test all filters flags windows and exclusions`() {
+        val root = node(
+            bounds = RpaBox(0, 0, 1080, 1920),
+            children = listOf(
+                node(text = "外层", bounds = RpaBox(0, 0, 1080, 600), clickable = true),
+                node(text = "禁用", bounds = RpaBox(10, 10, 200, 200), enabled = false),
+                node(text = "不可见", bounds = RpaBox(10, 10, 190, 190), visible = false),
+                node(text = "隐藏", bounds = RpaBox(10, 10, 180, 180)),
+            ),
+        )
+        val other = node(text = "别的窗口", bounds = RpaBox(0, 0, 1080, 1920))
+        val index = RpaNodeIndex.build(
+            listOf(window(root, index = 0), window(other, index = 1)),
+        )
+        val hidden = index.nodes.first { it.raw.text == "隐藏" }.index
+
+        assertEquals(
+            listOf("外层", ""),
+            index.hitTestAll(100, 100, windowIndex = 0, exclude = setOf(hidden))
+                .map { it.raw.text },
+        )
+        assertEquals(
+            listOf("别的窗口"),
+            index.hitTestAll(100, 100, windowIndex = 1).map { it.raw.text },
+        )
+    }
+
+    @Test
     fun `box nodes exclude empty invisible and hidden`() {
         val root = node(
             bounds = RpaBox(0, 0, 1080, 1920),

@@ -92,33 +92,42 @@ class ImageMatcher @Inject constructor(
             )
         runCatching { OpenCVLoader.initLocal() }
 
-        val source = bitmapToMat(frame, grayscale)
+        // 模板引用必须在任何路径上归还：bitmapToMat 也可能因 OOM 抛错。
         try {
-            val region = regionOf(source, roi)
+            val source = bitmapToMat(frame, grayscale)
             try {
-                val best = ImageScales.forScreen(frame.width)
-                    .mapNotNull { scale -> matchAtScale(region.mat, template, scale) }
-                    .maxByOrNull { it.score }
-                if (best == null) {
-                    Result.failure(IllegalStateException("match_failed: template larger than region"))
-                } else {
-                    val framed = best.intoFrame(region.offsetX, region.offsetY)
-                    if (framed.score >= threshold) {
-                        Result.success(framed)
+                val region = regionOf(source, roi)
+                try {
+                    val best = ImageScales.forScreen(frame.width)
+                        .mapNotNull { scale -> matchAtScale(region.mat, template, scale) }
+                        .maxByOrNull { it.score }
+                    if (best == null) {
+                        Result.failure(IllegalStateException("match_failed: template larger than region"))
                     } else {
-                        Result.failure(
-                            IllegalStateException("match_below_threshold: best=${framed.score}"),
-                        )
+                        val framed = best.intoFrame(region.offsetX, region.offsetY)
+                        if (framed.score >= threshold) {
+                            Result.success(framed)
+                        } else {
+                            Result.failure(
+                                IllegalStateException("match_below_threshold: best=${framed.score}"),
+                            )
+                        }
                     }
+                } finally {
+                    region.release()
                 }
             } finally {
-                region.release()
+                source.release()
             }
         } finally {
-            source.release()
+            template.release()
         }
     }
 
+    /**
+     * 取模板并持有一个引用（[CvTemplate.release] 由调用方负责）；
+     * 缓存 miss 时新建的模板自带引用，`put` 只额外增加缓存自己的那一份。
+     */
     private fun loadTemplate(assetDir: String?, name: String, grayscale: Boolean): CvTemplate? =
         synchronized(loadLock) {
             val key = "${assetDir.orEmpty()}/$name" + if (grayscale) "#gray" else "#bgr"

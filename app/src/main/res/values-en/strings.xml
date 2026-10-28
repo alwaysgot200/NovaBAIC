@@ -1483,6 +1483,16 @@
     <string name="float_rpa_analyze_menu_exit">Exit inspector</string>
     <string name="float_rpa_analyze_window_foreground">(Foreground)</string>
     <string name="float_rpa_analyze_window_background">(Background)</string>
+    <!-- Target apps that hide accessibility nodes (WeChat 8.x) expose only the window root -->
+    <string name="float_rpa_analyze_empty_tree_notice">Only the window root was read: the target app may mark its views as not important for accessibility (e.g. WeChat 8.x). Toggle the accessibility service off and on, then refresh; if it is still empty, use template matching / OCR instead.</string>
+    <!-- Overlapping-region inspection: tap to cycle / long-press for the full stack -->
+    <string name="float_rpa_analyze_stack_cycle">Overlap %1$d/%2$d · tap to cycle</string>
+    <string name="float_rpa_analyze_stack_list">List overlapping views (%1$d)</string>
+    <string name="float_rpa_analyze_stack_title">Overlapping views</string>
+    <string name="float_rpa_analyze_stack_hint">Smaller areas are inner views. Tap a row to inspect it; yellow marks the current selection. Long-press the canvas to reopen this list.</string>
+    <string name="float_rpa_analyze_stack_empty">No analyzable node at this point</string>
+    <string name="float_rpa_analyze_stack_row_title">%1$d. %2$s</string>
+    <string name="float_rpa_analyze_stack_row_meta">%1$s · %2$s · depth %3$d · area %4$d</string>
 
     <!-- RPA automation: image search -->
     <string name="float_rpa_quickfind_title">Image search</string>

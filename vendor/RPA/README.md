@@ -138,8 +138,10 @@ filesDir/rpa/
 - **前台守卫 fail-closed**：脚本声明 `appPackage` 时，点击 / 输入 / 断言前必须确认前台
   包名；探针返回 `null` 直接失败，绝不在未知前台执行。
 - **就绪门**：运行前 `RpaReadiness` 按模式只校验本线路所需能力；A11Y 模式不查 vision 模板。
-- **模板缓存**：LRU 16，淘汰即 `release()` native `Mat`；模板覆盖 / 删除后
-  `RpaAndroidDevice.invalidateTemplate()` 立即失效。
+- **模板缓存**：LRU 16；`CvTemplate` 带引用计数（缓存一份 + 每个匹配线程各一份），
+  淘汰 / 失效只释放缓存自己的引用，正在 `matchTemplate` 的线程用完才真正
+  `release()` native `Mat`，因此「缓存换模板」与「匹配进行中」可安全并发。
+  模板覆盖 / 删除后 `RpaAndroidDevice.invalidateTemplate()` 立即失效。
 
 ### 3.3 脚本 JSON 示例（节选）
 
@@ -446,25 +448,31 @@ drag = null                                         // 取消
 | 数据 | 来源 | 说明 |
 |---|---|---|
 | 截图 | `RpaAnalyzeCapture`（`FrameSource.grabFrameWithFreshness()`） | 仅用于配置展示，不参与 VISION 执行 |
-| 节点树 | `AssistsCore.getRootNodeTree()` | 复用 Assists 的 a11y 树 |
-| 可编辑性 | `AccessibilityNodeInfo.isEditable` | 通过 `getAllNodes()` 关联补全 |
+| 节点树 | `AssistsService.getOrNull().windows`（失败回退 `rootInActiveWindow`） | 直接复用 Assists 无障碍服务；按 1200 节点 / 深度 64 预算遍历 |
+| 前台包名 | `AssistsCore.getPackageName(NodeLookupScope.AllWindows)` | 聚焦窗口排序与前台窗口偏好 |
+| 可编辑性 | `AccessibilityNodeInfo.isEditable` | 采集时逐节点读取，不依赖 `AssistsCore.NodeTree`（缺该字段） |
+
+> 服务配置必须带 `flagIncludeNotImportantViews`（对照 Assists 官方
+> `assists_service.xml`）。微信 8.x 会把大量视图标记为「not important for
+> accessibility」，缺该 flag 时 `windows` 只能拿到空根。改配置后需重新开关无障碍服务。
 
 ### 7.2 交互流程
 
 1. 打开覆盖层自动抓帧 + 取树；失败时区分「没有 a11y」与「抓帧失败」；
-2. 画面叠加节点框：
-   - 选中节点 → 高亮色；
-   - 可编辑节点 → 可编辑色；
-   - 可点击节点 → 可点击色；
-   - 其他 → 普通描边；
+2. 画面叠加节点框：**普通节点 1dp 绿色细边框、中心完全透明**（不遮挡目标界面）；
+   - 选中节点 → 2dp 黄色边框 + 半透明黄色填充（`argb(64,255,214,0)`），标签始终绘制；
+   - 标签默认关闭，减少视觉噪音；
    - 最多绘制 300 个框，避免大页面卡顿；
-3. 点击画面 → `RpaNodeIndex.hitTest(x, y)` 命中**面积最小**的节点（最具体元素）；
-4. 节点列表按层级缩进，可按 `ALL / 可点击 / 可编辑 / 有文本` 过滤；
-5. 选中节点后展示：text、description、viewId、className、clickable、editable、scrollable、
+3. 点击画面 → `RpaNodeIndex.hitTestAll(x, y)` 返回点下**全部**候选，按
+   「面积小 → 深度大 → 全局索引」排序；默认选中最小/最内层；
+4. 重叠区域：菜单出现「重叠 1/N · 点按切换」循环候选；**长按画布**打开底部
+   「重叠控件」清单，点行直接看该节点属性；
+5. 节点列表按层级缩进，可按 `ALL / 可点击 / 可编辑 / 有文本` 过滤；
+6. 选中节点后展示：text、description、viewId、className、clickable、editable、scrollable、
    visibleToUser、bounds；
-6. 勾选要纳入选择器的条件（文本 / 描述 / id / 类名 / 可点击 / 可编辑），选择匹配口径与
+7. 勾选要纳入选择器的条件（文本 / 描述 / id / 类名 / 可点击 / 可编辑），选择匹配口径与
    `pick` 策略，实时预览选择器摘要；
-7. 「应用到当前步骤」→ 写 `cacheDir/rpa/pick/request.json`，经 `RpaPickCoordinator`
+8. 「应用到当前步骤」→ 写 `cacheDir/rpa/pick/request.json`，经 `RpaPickCoordinator`
    回填编辑器当前步骤，并附带 `RpaNodeSnapshot`。
 
 ### 7.3 生成的定位表达式
@@ -478,7 +486,10 @@ drag = null                                         // 取消
 
 - 不提供 JS 注入 / 控件层级实时刷新循环，采用「手动刷新」快照，避免持续占用 a11y；
 - 选择器生成后是**声明式数据**，不是脚本代码，便于跨设备复用与校验；
-- 节点树来自 Assists，不重新实现无障碍服务。
+- 节点树来自 Assists，不重新实现无障碍服务；
+- AssistX（`e:\_android_work\assistsx`）本身是 WebView + NanoHTTPD 插件宿主，
+  没有可视化布局分析 UI；本项目只借鉴其「服务单例 + 节点缓存」出口设计，
+  覆盖层交互仍由自绘 View 完成（见方案文档 §7.14）。
 
 ---
 
@@ -634,9 +645,9 @@ delayBeforeMs
 | 2 | `TAP` 搜索图标 | — | `description` 含「搜索」或 `viewId` 含 `search` | `RATIO(0.88, 0.075)` |
 | 3 | `INPUT_TEXT` | `${contactName}`，`clearFirst=true` | — | — |
 | 4 | `TAP` 联系人 | — | `text` 含 `${contactName}` + `clickableOnly` | OCR `${contactName}` + 区域；比例兜底 |
-| 5 | `TAP` 输入框 | — | `editableOnly` + `BOTTOM_MOST` | 比例 `(0.50, 0.88)` |
+| 5 | `TAP` 输入框 | — | `editableOnly` + `BOTTOM_MOST` | 比例 `(0.50, 0.94)` |
 | 6 | `INPUT_TEXT` | `你好`，`clearFirst=true` | — | — |
-| 7 | `TAP` 发送 | — | 文本/描述「发送」+ `BOTTOM_MOST` | OCR「发送」+ 比例兜底 |
+| 7 | `TAP` 发送 | — | 文本/描述「发送」+ `BOTTOM_MOST` | OCR「发送」+ 比例兜底 `(0.91, 0.565)` |
 
 严格 7 步，不含第 8 步断言；脚本是否发送成功由测试用例断言引擎结果。
 
@@ -663,6 +674,13 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 - a11y 可用：全程 `line=A11Y`；
 - 仅 vision 可用：`DUAL` 起始线路为 `VISION`（`initialLine()` 先看 a11y，再 vision）；
 - a11y 某步定位失败但 vision 可用：日志出现 `LineFallback(A11Y→VISION, locate_miss)`，之后粘性走 vision；
+- **微信 8.0.79（2026-10-28 真机实测）**：微信对无障碍完全不可见（`uiautomator dump`
+  只有 381 字节空根，连输入法窗口也 dump 不到），`DUAL` 会在第一步定位 miss 后
+  粘性切到 `VISION`，后续全部走 Shizuku 注入 + OCR；
+- 真机实测坐标（1080×2460、dpi 440、HyperOS/Android 16）：聊天页输入栏
+  `y≈2280–2400`，点击 `y=2320`（ratio≈0.94）才会弹键盘；键盘弹出后输入栏上移到
+  `y≈1340–1440`，绿色「发送」按钮中心≈`(980,1390)`（ratio≈0.907/0.565）。
+  旧夹具的 0.88 两处都会点空，已按实测修正。
 - 真机上若发送键无文本/描述，用「以图找图」框选发送按钮并保存模板后重跑。
 
 ---
@@ -689,10 +707,12 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 
 ### 11.3 布局分析器
 
-- [ ] 画面点击命中最小节点；
-- [ ] 过滤「可点击 / 可编辑 / 有文本」生效；
+- [ ] 普通节点是 1dp 细边框、中心透明，不遮挡目标界面；
+- [ ] 点选节点后 2dp 高亮边 + 半透明填充，标签可见；
+- [ ] 画面点击命中最小节点；重叠时菜单可 `1/N` 循环、长按可列出全部候选；
+- [ ] 过滤「可点击 / 可编辑 / 有文本」生效，过滤后重叠候选同步裁剪；
 - [ ] 应用当前节点的选择器能在运行中命中同一元素；
-- [ ] 无 a11y 时给出明确提示而不是空白页；
+- [ ] 无 a11y / 空树时给出明确提示而不是空白页；
 - [ ] 快照 bounds 与画面位置一致（含状态栏偏移）。
 
 ### 11.4 以图找图
@@ -733,8 +753,13 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 
 ## 13. 已知限制
 
-1. **微信 a11y 树不稳定**：部分版本输入框/发送键不暴露文本或 `editable`，必须用布局分析器
-   重新生成，或改用 vision 模板；这是 7 步夹具默认同时写两套定位的原因。
+1. **微信 a11y 树可能不可见**：8.0.79 真机上 `uiautomator dump` 任意页面
+   （聊天列表 / 聊天页）只有 381 字节空根，输入法窗口也 dump 不到。但 `uiautomator`
+   用的是它自己的服务配置，**不能据此判定本项目也看不到**：本项目已按 Assists 官方
+   配置补上 `flagIncludeNotImportantViews`，重开无障碍后需在真机复核微信节点；
+   若仍为空根，则该版本对 a11y 完全隐身，微信只能走 `VISION`（Shizuku 注入 +
+   截图/OCR），`DUAL` 依赖定位 miss 后显式 `LineFallback` 切到 vision，不会静默换线。
+   微信版本变化后需重新校准比例/OCR 区域。
 2. **无 a11y 的输入依赖 Shizuku**：录屏只能抽帧，不能注入点击 / 输入；没有 Shizuku 时
    `VISION` / `DUAL` 的就绪门会报 `ready_vision_missing` / `ready_vision_injection_missing`
    并拒绝运行。输入法候选、剪贴板 PASTE 行为因机型而异，失败会显式报 `input_failed`。

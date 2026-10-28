@@ -68,23 +68,28 @@ class RpaTemplateMatcher @Inject constructor() {
             ?: return@withContext Result.failure(
                 IllegalStateException("template_decode_failed: ${templateFile.name}"),
             )
-        val source = bitmapToMat(frame, grayscale)
+        // 模板引用必须在任何路径上归还：bitmapToMat 也可能因 OOM 抛错。
         try {
-            val area = regionOf(source, region?.toRect(frame.width, frame.height))
+            val source = bitmapToMat(frame, grayscale)
             try {
-                val best = ImageScales.FACTORS
-                    .mapNotNull { scale -> matchAtScale(area.mat, template, scale) }
-                    .maxByOrNull { it.score }
-                if (best == null) {
-                    Result.failure(IllegalStateException("match_failed: template_larger_than_region"))
-                } else {
-                    Result.success(best.intoFrame(area.offsetX, area.offsetY))
+                val area = regionOf(source, region?.toRect(frame.width, frame.height))
+                try {
+                    val best = ImageScales.FACTORS
+                        .mapNotNull { scale -> matchAtScale(area.mat, template, scale) }
+                        .maxByOrNull { it.score }
+                    if (best == null) {
+                        Result.failure(IllegalStateException("match_failed: template_larger_than_region"))
+                    } else {
+                        Result.success(best.intoFrame(area.offsetX, area.offsetY))
+                    }
+                } finally {
+                    area.release()
                 }
             } finally {
-                area.release()
+                source.release()
             }
         } finally {
-            source.release()
+            template.release()
         }
     }
 
@@ -111,15 +116,19 @@ class RpaTemplateMatcher @Inject constructor() {
     /**
      * 缓存键必须带灰度开关：彩色帧（3 通道）只能匹配彩色模板，
      * 灰度帧（1 通道）只能匹配灰度模板，否则 matchTemplate 通道数不一致直接失败。
+     *
+     * 返回的模板带一个调用方引用，匹配结束必须 `release()`；加锁只是避免
+     * 同一模板被并发重复解码，引用计数才是并发安全的保证。
      */
-    private fun loadTemplate(file: File, grayscale: Boolean): CvTemplate? {
-        val key = cacheKey(file, grayscale)
-        val stamp = file.lastModified()
-        cache.get(key, stamp)?.let { return it }
-        val loaded = loadUncached(file, stamp, grayscale) ?: return null
-        cache.put(key, loaded)
-        return loaded
-    }
+    private fun loadTemplate(file: File, grayscale: Boolean): CvTemplate? =
+        synchronized(loadLock) {
+            val key = cacheKey(file, grayscale)
+            val stamp = file.lastModified()
+            cache.get(key, stamp)?.let { return it }
+            val loaded = loadUncached(file, stamp, grayscale) ?: return null
+            cache.put(key, loaded)
+            loaded
+        }
 
     private fun loadUncached(
         file: File,
@@ -147,6 +156,8 @@ class RpaTemplateMatcher @Inject constructor() {
             (r.bottom * frameHeight).toInt().coerceIn(1, frameHeight),
         )
     }
+
+    private val loadLock = Any()
 
     private val cache = CvTemplateCache()
 

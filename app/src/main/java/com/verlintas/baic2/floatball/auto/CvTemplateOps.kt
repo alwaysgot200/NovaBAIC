@@ -21,6 +21,7 @@ package com.verlintas.baic2.floatball.auto
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import java.util.concurrent.atomic.AtomicInteger
 import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.CvType
@@ -35,7 +36,45 @@ import org.opencv.imgproc.Imgproc
  * 帧源、阈值治理与业务错误码留给调用方，避免两条线路各写一份 native 代码。
  */
 
-/** 预转换模板：灰度或 BGR Mat + 可选 alpha 掩膜；[stamp] 用于文件模板的 mtime 失效。 */
+/**
+ * native 资源引用计数：缓存持有一份，正在匹配的线程各持一份。
+ * 只有归零才真正释放 Mat，避免「缓存淘汰/失效」与「匹配进行中」并发时
+ * 把仍在使用的模板释放掉（native 侧会直接崩溃）。
+ *
+ * 重复 release 幂等；归零后的 acquire 返回 false，调用方按缓存失效处理。
+ */
+internal class CvRefCount(private val onZero: () -> Unit = {}) {
+
+    private val refs = AtomicInteger(1)
+
+    val count: Int get() = refs.get()
+
+    fun tryAcquire(): Boolean {
+        while (true) {
+            val current = refs.get()
+            if (current <= 0) return false
+            if (refs.compareAndSet(current, current + 1)) return true
+        }
+    }
+
+    fun release() {
+        while (true) {
+            val current = refs.get()
+            if (current <= 0) return
+            if (refs.compareAndSet(current, current - 1)) {
+                if (current == 1) onZero()
+                return
+            }
+        }
+    }
+}
+
+/**
+ * 预转换模板：灰度或 BGR Mat + 可选 alpha 掩膜；[stamp] 用于文件模板的 mtime 失效。
+ *
+ * 获取方（缓存 get / 新建模板）天然持有一个引用；匹配结束必须 [release]。
+ * 缓存自身另持一个引用，淘汰/失效只减缓存那一份，不打断进行中的匹配。
+ */
 internal class CvTemplate(
     val mat: Mat,
     val mask: Mat?,
@@ -43,10 +82,14 @@ internal class CvTemplate(
     val height: Int,
     val stamp: Long = 0L,
 ) {
-    fun release() {
+    private val refs = CvRefCount {
         mat.release()
         mask?.release()
     }
+
+    fun tryAcquire(): Boolean = refs.tryAcquire()
+
+    fun release() = refs.release()
 }
 
 /**
@@ -65,8 +108,12 @@ internal class CvRegion(
 }
 
 /**
- * 模板 LRU 缓存：上限 [maxEntries]，淘汰时立即 release native Mat，
- * 防止长期运行/大量脚本模板导致 native 内存只增不减。
+ * 模板 LRU 缓存：上限 [maxEntries]，淘汰/失效只释放缓存自己的引用，
+ * 正在匹配的线程仍持有一份引用，native Mat 不会被提前释放。
+ *
+ * - [get] 返回已 acquire 的模板，调用方用完后必须 [CvTemplate.release]；
+ * - [put] 让缓存再持有一个引用，调用方的原引用保持不变；
+ * - 因此「缓存换模板」与「线程正在 matchTemplate」可以安全并发。
  */
 internal class CvTemplateCache(private val maxEntries: Int = DEFAULT_MAX_ENTRIES) {
 
@@ -79,11 +126,17 @@ internal class CvTemplateCache(private val maxEntries: Int = DEFAULT_MAX_ENTRIES
             cached.release()
             return null
         }
+        if (!cached.tryAcquire()) {
+            // 缓存项已被别的路径释放（理论不应发生），当作 miss 清掉。
+            entries.remove(key)
+            return null
+        }
         cached
     }
 
     fun put(key: String, template: CvTemplate) {
         synchronized(entries) {
+            if (!template.tryAcquire()) return
             entries.put(key, template)?.release()
             while (entries.size > maxEntries) {
                 val iterator = entries.entries.iterator()
