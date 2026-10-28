@@ -1287,7 +1287,11 @@
     <string name="float_rpa_issue_steps_empty">脚本至少需要一个动作</string>
     <string name="float_rpa_issue_step_duplicate">动作 id 重复</string>
     <string name="float_rpa_issue_timeout_invalid">超时时间必须大于 0</string>
+    <string name="float_rpa_issue_timeout_over_limit">超时超过上限，运行时将按上限截断</string>
     <string name="float_rpa_issue_retries_invalid">重试次数不能为负</string>
+    <string name="float_rpa_issue_retries_over_limit">重试次数超过上限，运行时将按上限截断</string>
+    <string name="float_rpa_issue_delay_over_limit">步骤前后等待超过上限，运行时将截断</string>
+    <string name="float_rpa_issue_wait_over_limit">等待时长超过上限，运行时将截断</string>
     <string name="float_rpa_issue_package">启动 App 需要填写包名</string>
     <string name="float_rpa_issue_im_package">打开聊天需要填写 IM 包名</string>
     <string name="float_rpa_issue_contact">打开聊天需要填写联系人</string>
@@ -1346,6 +1350,11 @@
     <string name="float_rpa_delete">删除</string>
     <string name="float_rpa_delete_title">删除 RPA 脚本</string>
     <string name="float_rpa_delete_hint">仅删除本地脚本登记与模板，不影响真实聊天记录。确认删除？</string>
+    <string name="float_rpa_save_failed">保存脚本失败：%1$s</string>
+    <string name="float_rpa_duplicate_failed">复制脚本失败：%1$s</string>
+    <string name="float_rpa_delete_failed">删除脚本失败</string>
+    <string name="float_rpa_script_missing">脚本不存在或已损坏</string>
+    <string name="float_rpa_broken_scripts">有 %1$d 个脚本文件无法解析，已跳过</string>
 
     <!-- RPA 自动化：编辑器 -->
     <string name="float_rpa_editor_flow">流程</string>

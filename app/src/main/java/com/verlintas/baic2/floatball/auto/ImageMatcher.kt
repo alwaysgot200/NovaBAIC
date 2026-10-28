@@ -29,12 +29,6 @@ import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.opencv.android.OpenCVLoader
-import org.opencv.android.Utils
-import org.opencv.core.Core
-import org.opencv.core.CvType
-import org.opencv.core.Mat
-import org.opencv.core.Size
-import org.opencv.imgproc.Imgproc
 
 /** 一次找图命中：模板在源图上的矩形、中心点与匹配置信度（0..1）。 */
 data class CvMatch(
@@ -92,7 +86,7 @@ class ImageMatcher @Inject constructor(
             ?: return@withContext Result.failure(
                 IllegalStateException("frame_unavailable: no frame for matching"),
             )
-        val template = loadTemplate(assetDir, templateName)
+        val template = loadTemplate(assetDir, templateName, grayscale)
             ?: return@withContext Result.failure(
                 IllegalStateException("template_missing: assets/rpa_templates/${assetDir.orEmpty()}/$templateName.png"),
             )
@@ -100,175 +94,63 @@ class ImageMatcher @Inject constructor(
 
         val source = bitmapToMat(frame, grayscale)
         try {
-            val region = if (roi != null) {
-                val l = roi.left.coerceIn(0, source.cols() - 1)
-                val t = roi.top.coerceIn(0, source.rows() - 1)
-                val w = roi.width().coerceAtMost(source.cols() - l)
-                val h = roi.height().coerceAtMost(source.rows() - t)
-                source.submat(t, t + h, l, l + w)
-            } else {
-                source
-            }
+            val region = regionOf(source, roi)
             try {
                 val best = ImageScales.forScreen(frame.width)
-                    .mapNotNull { scale -> matchAtScale(region, template, scale) }
+                    .mapNotNull { scale -> matchAtScale(region.mat, template, scale) }
                     .maxByOrNull { it.score }
                 if (best == null) {
                     Result.failure(IllegalStateException("match_failed: template larger than region"))
                 } else {
-                    best.intoFrame(roi).takeIf { it.score >= threshold }
-                        ?.let { Result.success(it) }
-                        ?: Result.failure(
-                            IllegalStateException(
-                                "match_below_threshold: best=${best.intoFrame(roi).score}",
-                            ),
+                    val framed = best.intoFrame(region.offsetX, region.offsetY)
+                    if (framed.score >= threshold) {
+                        Result.success(framed)
+                    } else {
+                        Result.failure(
+                            IllegalStateException("match_below_threshold: best=${framed.score}"),
                         )
+                    }
                 }
             } finally {
-                if (roi != null) region.release()
+                region.release()
             }
         } finally {
             source.release()
         }
     }
 
-    /** 单尺度匹配；模板缩放后超出区域时返回 null。 */
-    private fun matchAtScale(region: Mat, template: CachedTemplate, scale: Double): CvMatch? {
-        val tw = (template.width * scale).toInt()
-        val th = (template.height * scale).toInt()
-        if (tw < 2 || th < 2 || tw > region.cols() || th > region.rows()) return null
-        val scaled = Mat()
-        Imgproc.resize(template.mat, scaled, Size(tw.toDouble(), th.toDouble()))
-        val mask = template.mask?.let { m ->
-            val sm = Mat()
-            Imgproc.resize(m, sm, Size(tw.toDouble(), th.toDouble()))
-            sm
-        }
-        try {
-            val result = Mat(region.rows() - th + 1, region.cols() - tw + 1, CvType.CV_32FC1)
-            try {
-                if (mask != null) {
-                    Imgproc.matchTemplate(region, scaled, result, Imgproc.TM_CCORR_NORMED, mask)
-                } else {
-                    Imgproc.matchTemplate(region, scaled, result, Imgproc.TM_CCOEFF_NORMED)
-                }
-                val mmr = Core.minMaxLoc(result)
-                val x = mmr.maxLoc.x.toInt()
-                val y = mmr.maxLoc.y.toInt()
-                return CvMatch(
-                    centerX = x + tw / 2,
-                    centerY = y + th / 2,
-                    score = mmr.maxVal,
-                    left = x,
-                    top = y,
-                    right = x + tw,
-                    bottom = y + th,
-                )
-            } finally {
-                result.release()
-            }
-        } finally {
-            scaled.release()
-            mask?.release()
-        }
-    }
-
-    private fun CvMatch.intoFrame(roi: Rect?): CvMatch =
-        if (roi == null) this else copy(
-            centerX = centerX + roi.left,
-            centerY = centerY + roi.top,
-            left = left + roi.left,
-            top = top + roi.top,
-            right = right + roi.left,
-            bottom = bottom + roi.top,
-        )
-
-    private fun bitmapToMat(bitmap: Bitmap, grayscale: Boolean): Mat {
-        val argb = if (bitmap.config == Bitmap.Config.ARGB_8888) {
-            bitmap
-        } else {
-            bitmap.copy(Bitmap.Config.ARGB_8888, false)
-        }
-        val rgba = Mat()
-        Utils.bitmapToMat(argb, rgba)
-        if (argb !== bitmap) argb.recycle()
-        if (!grayscale) {
-            Imgproc.cvtColor(rgba, rgba, Imgproc.COLOR_RGBA2BGR)
-            return rgba
-        }
-        val gray = Mat()
-        Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
-        rgba.release()
-        return gray
-    }
-
-    private fun loadTemplate(assetDir: String?, name: String): CachedTemplate? =
-        synchronized(templateCache) {
-            val key = "${assetDir.orEmpty()}/$name"
-            templateCache[key]?.let { return it }
-            val loaded = loadTemplateUncached(assetDir, name)
-            if (loaded != null) templateCache[key] = loaded
+    private fun loadTemplate(assetDir: String?, name: String, grayscale: Boolean): CvTemplate? =
+        synchronized(loadLock) {
+            val key = "${assetDir.orEmpty()}/$name" + if (grayscale) "#gray" else "#bgr"
+            templateCache.get(key)?.let { return it }
+            val loaded = loadTemplateUncached(assetDir, name, grayscale)
+            if (loaded != null) templateCache.put(key, loaded)
             loaded
         }
 
-    private fun loadTemplateUncached(assetDir: String?, name: String): CachedTemplate? =
-        runCatching {
-            val path = buildString {
-                append("rpa_templates/")
-                assetDir?.takeIf { it.isNotBlank() }?.let { append("$it/") }
-                append("$name.png")
-            }
-            context.assets.open(path).use { input ->
-                val raw = BitmapFactory.decodeStream(input) ?: return null
-                val argb = if (raw.config == Bitmap.Config.ARGB_8888) {
-                    raw
-                } else {
-                    raw.copy(Bitmap.Config.ARGB_8888, false).also { raw.recycle() }
-                }
-                val rgba = Mat()
-                Utils.bitmapToMat(argb, rgba)
-                val hasTransparency = hasTransparentPixels(argb)
-                val gray = Mat()
-                Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
-                val mask = if (hasTransparency) {
-                    val m = Mat()
-                    Core.extractChannel(rgba, m, 3)
-                    m
-                } else {
-                    null
-                }
-                rgba.release()
-                CachedTemplate(
-                    mat = gray,
-                    mask = mask,
-                    width = argb.width,
-                    height = argb.height,
-                )
-            }
-        }.getOrNull()
-
-    private fun hasTransparentPixels(bitmap: Bitmap): Boolean {
-        if (!bitmap.hasAlpha()) return false
-        val w = bitmap.width
-        val h = bitmap.height
-        val row = IntArray(w)
-        for (y in 0 until h) {
-            bitmap.getPixels(row, 0, w, 0, y, w, 1)
-            for (pixel in row) {
-                if (pixel ushr 24 < 0xFA) return true
+    private fun loadTemplateUncached(
+        assetDir: String?,
+        name: String,
+        grayscale: Boolean,
+    ): CvTemplate? = runCatching {
+        val path = buildString {
+            append("rpa_templates/")
+            assetDir?.takeIf { it.isNotBlank() }?.let { append("$it/") }
+            append("$name.png")
+        }
+        context.assets.open(path).use { input ->
+            val bitmap = BitmapFactory.decodeStream(input) ?: return null
+            try {
+                templateFromBitmap(bitmap, grayscale)
+            } finally {
+                bitmap.recycle()
             }
         }
-        return false
-    }
+    }.getOrNull()
 
-    private class CachedTemplate(
-        val mat: Mat,
-        val mask: Mat?,
-        val width: Int,
-        val height: Int,
-    )
+    private val loadLock = Any()
 
-    private val templateCache = HashMap<String, CachedTemplate>()
+    private val templateCache = CvTemplateCache()
 
     companion object {
         const val DEFAULT_THRESHOLD = 0.80

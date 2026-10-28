@@ -1194,7 +1194,11 @@
     <string name="float_rpa_issue_steps_empty">A script needs at least one action</string>
     <string name="float_rpa_issue_step_duplicate">Duplicate action ID</string>
     <string name="float_rpa_issue_timeout_invalid">Timeout must be greater than 0</string>
+    <string name="float_rpa_issue_timeout_over_limit">Timeout exceeds the limit; it will be capped at run time</string>
     <string name="float_rpa_issue_retries_invalid">Retry count cannot be negative</string>
+    <string name="float_rpa_issue_retries_over_limit">Retry count exceeds the limit; it will be capped at run time</string>
+    <string name="float_rpa_issue_delay_over_limit">Step delay exceeds the limit; it will be capped at run time</string>
+    <string name="float_rpa_issue_wait_over_limit">Wait duration exceeds the limit; it will be capped at run time</string>
     <string name="float_rpa_issue_package">Launch app requires a package name</string>
     <string name="float_rpa_issue_im_package">Open chat requires an IM package name</string>
     <string name="float_rpa_issue_contact">Open chat requires a contact</string>
@@ -1253,6 +1257,11 @@
     <string name="float_rpa_delete">Delete</string>
     <string name="float_rpa_delete_title">Delete RPA script</string>
     <string name="float_rpa_delete_hint">Only the local script record and templates are deleted; real chat history is not affected. Delete?</string>
+    <string name="float_rpa_save_failed">Failed to save script: %1$s</string>
+    <string name="float_rpa_duplicate_failed">Failed to duplicate script: %1$s</string>
+    <string name="float_rpa_delete_failed">Failed to delete script</string>
+    <string name="float_rpa_script_missing">Script is missing or corrupted</string>
+    <string name="float_rpa_broken_scripts">%1$d script files could not be parsed and were skipped</string>
 
     <string name="float_rpa_editor_flow">Flow</string>
     <string name="float_rpa_editor_props">Properties</string>

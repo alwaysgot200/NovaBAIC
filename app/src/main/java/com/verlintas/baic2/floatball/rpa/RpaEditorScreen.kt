@@ -69,6 +69,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -98,6 +99,7 @@ import com.verlintas.rpa.model.RpaExpect
 import com.verlintas.rpa.model.RpaFailurePolicy
 import com.verlintas.rpa.model.RpaIds
 import com.verlintas.rpa.model.RpaIssue
+import com.verlintas.rpa.model.RpaLimits
 import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaModePolicy
@@ -213,7 +215,7 @@ internal fun RpaEditorScreen(
     }
     val runningState = runState as? RpaRunController.State.Running
     val finishedState = runState as? RpaRunController.State.Finished
-    val running = runningState?.scriptId == script.id
+    val running = runningState != null && runningState.scriptId == script.id
     val otherRunning = runningState != null && runningState.scriptId != script.id
     // 只展示当前脚本的事件；换脚本运行时 start() 已清空旧事件。
     val events = if (running || finishedState?.scriptId == script.id) {
@@ -228,11 +230,20 @@ internal fun RpaEditorScreen(
     var focusStepOnce by remember {
         mutableStateOf(openPropsInitially && selectedStep != null)
     }
-    val issues: List<RpaIssue> = remember(script, capabilities) {
-        RpaValidator.validate(script) +
+    val validationIssues = remember(script) { RpaValidator.validate(script) }
+    // 模板存在性是文件 IO：移出组合期主线程；结果回来之前运行按钮保持禁用。
+    val readinessIssues by produceState<List<RpaIssue>?>(
+        initialValue = null,
+        script,
+        capabilities,
+    ) {
+        value = withContext(Dispatchers.IO) {
             RpaReadiness.check(script, capabilities) { sid, tid -> store.templateExists(sid, tid) }
+        }
     }
-    val canRun = !RpaValidator.hasErrors(issues) &&
+    val issues: List<RpaIssue> = validationIssues + readinessIssues.orEmpty()
+    val canRun = readinessIssues != null &&
+        !RpaValidator.hasErrors(issues) &&
         !RpaReadiness.hasErrors(issues) &&
         script.enabledSteps().isNotEmpty()
 
@@ -273,7 +284,7 @@ internal fun RpaEditorScreen(
                         capabilities = capabilities,
                         canRun = canRun && !otherRunning,
                         running = running,
-                        runningStepIndex = if (running) runningState?.stepIndex else null,
+                        runningStepIndex = if (running) runningState.stepIndex else null,
                         issues = issues,
                         events = events,
                         onSelectStep = {
@@ -1380,7 +1391,12 @@ private fun StepBasicCard(
             OutlinedTextField(
                 value = step.timeoutMs.toString(),
                 onValueChange = { raw ->
-                    onStepChange(step.copy(timeoutMs = raw.toLongOrNull() ?: 0L))
+                    onStepChange(
+                        step.copy(
+                            timeoutMs = (raw.toLongOrNull() ?: 0L)
+                                .coerceIn(0L, RpaLimits.MAX_STEP_TIMEOUT_MS),
+                        ),
+                    )
                 },
                 label = { Text(stringResource(R.string.float_rpa_prop_timeout)) },
                 singleLine = true,
@@ -1392,7 +1408,12 @@ private fun StepBasicCard(
             OutlinedTextField(
                 value = step.retries.toString(),
                 onValueChange = { raw ->
-                    onStepChange(step.copy(retries = raw.toIntOrNull() ?: 0))
+                    onStepChange(
+                        step.copy(
+                            retries = (raw.toIntOrNull() ?: 0)
+                                .coerceIn(0, RpaLimits.MAX_RETRIES),
+                        ),
+                    )
                 },
                 label = { Text(stringResource(R.string.float_rpa_prop_retries)) },
                 singleLine = true,
@@ -1484,7 +1505,10 @@ private fun StepParamsCard(
                 onChange = { value ->
                     onStepChange(
                         step.copy(
-                            params = step.params.copy(waitMs = value.toLongOrNull() ?: 0L),
+                            params = step.params.copy(
+                                waitMs = (value.toLongOrNull() ?: 0L)
+                                    .coerceIn(0L, RpaLimits.MAX_WAIT_MS),
+                            ),
                         ),
                     )
                 },
@@ -1587,7 +1611,8 @@ private fun StepParamsCard(
                         onStepChange(
                             step.copy(
                                 params = step.params.copy(
-                                    durationMs = value.toIntOrNull() ?: 0,
+                                    durationMs = (value.toIntOrNull() ?: 0)
+                                        .coerceIn(0, RpaLimits.MAX_SWIPE_DURATION_MS),
                                 ),
                             ),
                         )
@@ -1629,7 +1654,8 @@ private fun StepParamsCard(
                         onStepChange(
                             step.copy(
                                 expect = expect.copy(
-                                    timeoutMs = value.toLongOrNull() ?: 0L,
+                                    timeoutMs = (value.toLongOrNull() ?: 0L)
+                                        .coerceIn(0L, RpaLimits.MAX_STEP_TIMEOUT_MS),
                                 ),
                             ),
                         )
@@ -2086,5 +2112,6 @@ private fun VariablesCard(
 
 private fun RpaStep.withTarget(target: RpaTarget?): RpaStep = copy(target = target)
 
-/** 执行前 / 后等待统一 0..60s 钳制；非法输入归零。 */
-private fun String.clampDelayMs(): Long = (toLongOrNull() ?: 0L).coerceIn(0L, 60_000L)
+/** 执行前 / 后等待与引擎共用同一上限；非法输入归零。 */
+private fun String.clampDelayMs(): Long =
+    (toLongOrNull() ?: 0L).coerceIn(0L, RpaLimits.MAX_DELAY_MS)

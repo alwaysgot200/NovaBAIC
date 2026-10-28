@@ -31,7 +31,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.getValue
-import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -41,10 +40,10 @@ import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
-import com.verlintas.baic2.floatball.FloatBallService
 import com.verlintas.baic2.floatball.auto.ScreenCapture
 import com.verlintas.baic2.floatball.rpa.RpaActivity
 import com.verlintas.baic2.floatball.rpa.RpaAndroidDevice
+import com.verlintas.baic2.floatball.rpa.RpaChromeGate
 import com.verlintas.baic2.floatball.rpa.RpaPickCoordinator
 import com.verlintas.baic2.floatball.rpa.withVisionSpec
 import com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity
@@ -73,8 +72,8 @@ import kotlin.coroutines.resume
  * - 抓帧前把自身 `decorView.alpha` 置 0（不是 GONE，避免窗口重建），等 2 帧
  *   + [SETTLE_MS] 让合成层彻底不画本页，再走 [RpaAndroidDevice.quickFindFrame]
  *   （Shizuku / 投影，空白帧显式报因），回调 `finally` 恢复 alpha；
- * - 退出（含返回键）清 `cacheDir/rpa/quickfind`，并通知
- *   [FloatBallService] 恢复被本工具隐藏的悬浮球；
+ * - 退出（含返回键）清 `cacheDir/rpa/quickfind`，并清 [RpaChromeGate] 的
+ *   `quick_find` 闸门，让 FloatBallService 恢复被本工具隐藏的悬浮球；
  * - 不使用 a11y 截图：与「无 a11y 视觉线路」的执行面保持同源。
  *
  * 清单刻意**不加** `noHistory`：本页用 `PickVisualMedia` 选图，选图期间本页
@@ -97,6 +96,9 @@ class RpaQuickFindActivity : ComponentActivity() {
 
     @Inject
     lateinit var pickCoordinator: RpaPickCoordinator
+
+    @Inject
+    lateinit var chromeGate: RpaChromeGate
 
     /** 应用拾取结果期间禁用重复点击；模板写盘 + 脚本落盘都在 IO 线程。 */
     private var applyingPick = false
@@ -328,15 +330,9 @@ class RpaQuickFindActivity : ComponentActivity() {
         if (isChangingConfigurations || finishedNotified) return
         finishedNotified = true
         runCatching { File(cacheDir, CACHE_DIR).deleteRecursively() }
-        runCatching {
-            // 服务已在运行（悬浮球被它隐藏），用普通 startService 回传即可。
-            // 服务若已停，异常交给 runCatching，不因收尾失败影响页面退出。
-            ContextCompat.startForegroundService(
-                this,
-                Intent(this, FloatBallService::class.java)
-                    .setAction(FloatBallService.ACTION_RPA_TOOL_FINISHED),
-            )
-        }
+        // 悬浮球由 FloatBallService 观察 RpaChromeGate；进程内直接清闸门即可。
+        // 不再从后台 startForegroundService（Android 12+ 可能被系统拒绝且无提示）。
+        chromeGate.show(RpaChromeGate.REASON_QUICK_FIND)
     }
 
     companion object {

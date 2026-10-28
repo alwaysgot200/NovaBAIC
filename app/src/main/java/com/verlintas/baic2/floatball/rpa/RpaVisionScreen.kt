@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -70,7 +71,9 @@ import com.verlintas.rpa.model.RpaVisionSpec
 import com.verlintas.rpa.store.RpaScriptStore
 import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class VisionTest(
     val ok: Boolean,
@@ -100,7 +103,7 @@ internal fun RpaVisionScreen(
     var loading by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var selection by remember { mutableStateOf<RpaRect?>(null) }
-    var templates by remember { mutableStateOf(runCatching { store.listTemplateIds(scriptId) }.getOrDefault(emptyList())) }
+    var templates by remember { mutableStateOf<List<String>>(emptyList()) }
     var templateId by remember { mutableStateOf(initial?.primary?.templateId) }
     var primary by remember { mutableStateOf(initial?.primary ?: RpaVisionLocator()) }
     var fallback by remember { mutableStateOf(initial?.fallback) }
@@ -111,10 +114,15 @@ internal fun RpaVisionScreen(
     var templateSavedId by remember { mutableStateOf<String?>(null) }
     var templateError by remember { mutableStateOf<String?>(null) }
 
-    val cropPreview = remember(frame, selection) {
+    // 裁剪/压缩是位图重活：离开主线程，选区确认后才算一次。
+    val cropPreview by produceState<Bitmap?>(initialValue = null, frame, selection) {
         val bitmap = frame
         val rect = selection
-        if (bitmap == null || rect == null) null else cropBitmap(bitmap, rect)
+        value = if (bitmap == null || rect == null) {
+            null
+        } else {
+            withContext(Dispatchers.Default) { cropBitmap(bitmap, rect) }
+        }
     }
     val testBox = test?.match?.let { match ->
         FrameBox(
@@ -126,9 +134,15 @@ internal fun RpaVisionScreen(
     suspend fun reload() {
         loading = true
         loadError = null
-        frame = runCatching { device.visionConfigFrame() }.getOrNull()
-        templates = runCatching { store.listTemplateIds(scriptId) }.getOrDefault(templates)
-        if (frame == null) {
+        val captured = withContext(Dispatchers.IO) {
+            runCatching { device.visionConfigFrame() }.getOrNull()
+        }
+        val ids = withContext(Dispatchers.IO) {
+            runCatching { store.listTemplateIds(scriptId) }.getOrDefault(templates)
+        }
+        frame = captured
+        templates = ids
+        if (captured == null) {
             loadError = "frame_unavailable"
         }
         loading = false
@@ -139,29 +153,40 @@ internal fun RpaVisionScreen(
     fun saveTemplateFromSelection() {
         val bitmap = frame ?: return
         val rect = selection ?: return
-        val crop = cropBitmap(bitmap, rect) ?: return
-        val bytes = ByteArrayOutputStream().use { sink ->
-            if (crop.compress(Bitmap.CompressFormat.PNG, 100, sink)) {
-                sink.toByteArray()
-            } else {
-                null
+        scope.launch {
+            val bytes = withContext(Dispatchers.Default) {
+                cropBitmap(bitmap, rect)?.let { crop ->
+                    try {
+                        encodePng(crop)
+                    } finally {
+                        crop.recycle()
+                    }
+                }
             }
-        } ?: return
-        val id = RpaIds.newId("tpl")
-        store.saveTemplate(scriptId, id, bytes)
-            .onSuccess {
-                templateId = id
-                primary = primary.copy(kind = RpaVisionKind.TEMPLATE, templateId = id)
-                templates = runCatching { store.listTemplateIds(scriptId) }
-                    .getOrDefault(templates)
-                templateSavedId = id
-                templateError = null
-                test = null
-            }
-            .onFailure {
+            if (bytes == null) {
                 templateSavedId = null
-                templateError = it.message ?: "template_save_failed"
+                templateError = "template_encode_failed"
+                return@launch
             }
+            val id = RpaIds.newId("tpl")
+            val saved = withContext(Dispatchers.IO) {
+                store.saveTemplate(scriptId, id, bytes)
+            }.getOrNull()
+            if (saved == null) {
+                templateSavedId = null
+                templateError = "template_save_failed"
+                return@launch
+            }
+            device.invalidateTemplate(saved)
+            templateId = id
+            primary = primary.copy(kind = RpaVisionKind.TEMPLATE, templateId = id)
+            templates = withContext(Dispatchers.IO) {
+                runCatching { store.listTemplateIds(scriptId) }.getOrDefault(templates)
+            }
+            templateSavedId = id
+            templateError = null
+            test = null
+        }
     }
 
     fun runTemplateTest() {
@@ -380,18 +405,26 @@ internal fun RpaVisionScreen(
                                     )
                                     TextButton(
                                         onClick = {
-                                            store.deleteTemplate(scriptId, id)
-                                            templates = runCatching {
-                                                store.listTemplateIds(scriptId)
-                                            }.getOrDefault(emptyList())
-                                            if (templateId == id) templateId = null
-                                            if (primary.templateId == id) {
-                                                primary = primary.copy(templateId = null)
+                                            scope.launch {
+                                                withContext(Dispatchers.IO) {
+                                                    val file = store.templateFile(scriptId, id)
+                                                    store.deleteTemplate(scriptId, id)
+                                                    device.invalidateTemplate(file)
+                                                }
+                                                templates = withContext(Dispatchers.IO) {
+                                                    runCatching {
+                                                        store.listTemplateIds(scriptId)
+                                                    }.getOrDefault(emptyList())
+                                                }
+                                                if (templateId == id) templateId = null
+                                                if (primary.templateId == id) {
+                                                    primary = primary.copy(templateId = null)
+                                                }
+                                                if (fallback?.templateId == id) {
+                                                    fallback = fallback?.copy(templateId = null)
+                                                }
+                                                test = null
                                             }
-                                            if (fallback?.templateId == id) {
-                                                fallback = fallback?.copy(templateId = null)
-                                            }
-                                            test = null
                                         },
                                     ) {
                                         Text(stringResource(R.string.float_rpa_vision_template_delete))
@@ -839,6 +872,15 @@ private fun LocatorEditorCard(
         }
     }
 }
+
+private fun encodePng(bitmap: Bitmap): ByteArray? =
+    ByteArrayOutputStream().use { sink ->
+        if (bitmap.compress(Bitmap.CompressFormat.PNG, 100, sink)) {
+            sink.toByteArray()
+        } else {
+            null
+        }
+    }
 
 private fun cropBitmap(bitmap: Bitmap, rect: RpaRect): Bitmap? {
     val normalized = rect.normalized()

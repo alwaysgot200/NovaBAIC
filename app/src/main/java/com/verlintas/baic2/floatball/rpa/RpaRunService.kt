@@ -43,6 +43,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * RPA 后台运行服务：脚本执行不再依赖编辑器页面存活。
@@ -94,41 +95,49 @@ class RpaRunService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startRun(scriptId: String?) {
-        if (job?.isActive == true) return
-        val script = scriptId?.let { store.load(it) }
-        if (script == null) {
-            recordFinish(false, "script_missing")
-            releaseAndStop()
+        if (job?.isActive == true) {
+            // 同一时间只允许一个运行；第二命令不能静默消失，留痕便于排查。
+            controller.record(RpaRunEvent.Log("start_ignored: already_running"))
             return
         }
-        scriptName = script.name
         outcomeRecorded = false
-        controller.start(script)
-        refreshNotification()
         job = scope.launch {
             try {
-                val runner = RpaRunner(
-                    device = device,
-                    templateExists = { sid, tid -> store.templateExists(sid, tid) },
-                )
-                val result = runner.run(script) { event ->
-                    controller.record(event)
-                    if (event is RpaRunEvent.StepStarted ||
-                        event is RpaRunEvent.LineFallback
-                    ) {
-                        refreshNotification()
-                    }
+                // 脚本加载（JSON 解析 + 文件 IO）不进主线程。
+                val script = withContext(Dispatchers.IO) { scriptId?.let { store.load(it) } }
+                if (script == null) {
+                    // 此时 controller 仍是 Idle，finish() 不会收口，必须直接发结果通知。
+                    notifyMissing(scriptId)
+                    return@launch
                 }
-                recordFinish(result.ok, result.detail)
-            } catch (cancelled: CancellationException) {
-                recordFinish(false, "stopped")
-            } catch (failure: Throwable) {
-                recordFinish(
-                    false,
-                    failure.message ?: failure::class.java.simpleName,
-                )
+                scriptName = script.name
+                controller.start(script)
+                refreshNotification()
+                try {
+                    val runner = RpaRunner(
+                        device = device,
+                        templateExists = { sid, tid -> store.templateExists(sid, tid) },
+                    )
+                    val result = runner.run(script) { event ->
+                        controller.record(event)
+                        if (event is RpaRunEvent.StepStarted ||
+                            event is RpaRunEvent.LineFallback
+                        ) {
+                            refreshNotification()
+                        }
+                    }
+                    recordFinish(result.ok, result.detail)
+                } catch (cancelled: CancellationException) {
+                    recordFinish(false, "stopped")
+                } catch (failure: Throwable) {
+                    recordFinish(
+                        false,
+                        failure.message ?: failure::class.java.simpleName,
+                    )
+                } finally {
+                    notifyFinished()
+                }
             } finally {
-                notifyFinished()
                 releaseAndStop()
             }
         }
@@ -247,6 +256,22 @@ class RpaRunService : Service() {
                 append(state.detail)
             }
         }
+        postResultNotification(title, text)
+    }
+
+    /** 脚本文件缺失 / 损坏：controller 尚未进入 Running，单独给用户一个结果通知。 */
+    private fun notifyMissing(scriptId: String?) {
+        val text = buildString {
+            append(getString(R.string.float_rpa_script_missing))
+            if (!scriptId.isNullOrBlank()) {
+                append(" · ")
+                append(scriptId)
+            }
+        }
+        postResultNotification(getString(R.string.float_rpa_run_finished_failed), text)
+    }
+
+    private fun postResultNotification(title: String, text: String) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)

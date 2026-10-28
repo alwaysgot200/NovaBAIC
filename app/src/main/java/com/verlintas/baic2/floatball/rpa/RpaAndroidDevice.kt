@@ -246,6 +246,11 @@ class RpaAndroidDevice @Inject constructor(
     ): Result<CvMatch> =
         templateMatcher.find(frame, templateFile, threshold, region, grayscale)
 
+    /** 模板文件被覆盖/删除后让匹配缓存立即失效。 */
+    fun invalidateTemplate(templateFile: java.io.File) {
+        templateMatcher.invalidate(templateFile)
+    }
+
     /**
      * 快捷找图（P3）：返回**不设阈值**的最佳匹配，由调用方决定是否命中，
      * 从而能展示「未命中但最佳得分 0.62」而不是只有一句失败原因。

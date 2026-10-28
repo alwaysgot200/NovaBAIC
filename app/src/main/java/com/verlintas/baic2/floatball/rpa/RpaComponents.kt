@@ -188,7 +188,11 @@ internal fun rpaIssueText(issue: RpaIssue): String {
             "script_steps_empty" -> R.string.float_rpa_issue_steps_empty
             "step_id_duplicate" -> R.string.float_rpa_issue_step_duplicate
             "step_timeout_invalid" -> R.string.float_rpa_issue_timeout_invalid
+            "step_timeout_over_limit" -> R.string.float_rpa_issue_timeout_over_limit
             "step_retries_invalid" -> R.string.float_rpa_issue_retries_invalid
+            "step_retries_over_limit" -> R.string.float_rpa_issue_retries_over_limit
+            "step_delay_over_limit" -> R.string.float_rpa_issue_delay_over_limit
+            "param_wait_over_limit" -> R.string.float_rpa_issue_wait_over_limit
             "param_package_missing" -> R.string.float_rpa_issue_package
             "param_im_package_missing" -> R.string.float_rpa_issue_im_package
             "param_contact_missing" -> R.string.float_rpa_issue_contact

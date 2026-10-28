@@ -75,6 +75,7 @@ import com.verlintas.rpa.model.RpaScript
 @Composable
 internal fun RpaLibraryScreen(
     scripts: List<RpaScript>,
+    brokenScripts: Int,
     capabilities: RpaCapabilities,
     initialPackage: String?,
     runState: RpaRunController.State,
@@ -146,6 +147,19 @@ internal fun RpaLibraryScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp),
+                        )
+                    }
+                }
+                if (brokenScripts > 0) {
+                    item {
+                        Text(
+                            text = stringResource(
+                                R.string.float_rpa_broken_scripts,
+                                brokenScripts,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                         )
                     }
                 }

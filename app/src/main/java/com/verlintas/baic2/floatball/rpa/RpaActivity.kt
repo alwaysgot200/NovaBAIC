@@ -71,12 +71,14 @@ import com.verlintas.rpa.store.RpaScriptStore
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * RPA 自动化全屏入口（独立模块 UI）：
  *
- * 脚本库 → 编辑器（三模式 + 动作库拖拽 + 属性面板）→ 布局分析器 / 以图找图
+ * 脚本库 → 编辑器（三模式 + 动作库拖拽 + 属性面板）→ 在目标应用拾取 / 以图找图
  * 配置 → 运行日志。入口有两处：好参谋设置页与画像页「聊天会话」行的 RPA
  * 按钮；后者只预填 IM 包名，用于新建脚本时少填一项，不再生成任何 Demo。
  */
@@ -107,8 +109,8 @@ class RpaActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         val initialPackage = intent.getStringExtra(EXTRA_IM_PACKAGE)
         val initialScriptId = intent.getStringExtra(EXTRA_SCRIPT_ID)
         val initialStepId = intent.getStringExtra(EXTRA_STEP_ID)
@@ -207,20 +209,11 @@ private fun RpaApp(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val initialScript = remember {
-        initialScriptId?.let { runCatching { store.load(it) }.getOrNull() }
-    }
-    var screen by remember {
-        mutableStateOf(if (initialScript != null) RpaScreen.EDITOR else RpaScreen.LIBRARY)
-    }
-    var scripts by remember { mutableStateOf(runCatching { store.list() }.getOrDefault(emptyList())) }
-    var script by remember { mutableStateOf(initialScript) }
-    var selectedStepId by remember {
-        mutableStateOf(
-            initialStepId?.takeIf { id -> initialScript?.steps?.any { it.id == id } == true }
-                ?: initialScript?.steps?.firstOrNull()?.id,
-        )
-    }
+    var screen by remember { mutableStateOf(RpaScreen.LIBRARY) }
+    var scripts by remember { mutableStateOf<List<RpaScript>>(emptyList()) }
+    var brokenScripts by remember { mutableStateOf(0) }
+    var script by remember { mutableStateOf<RpaScript?>(null) }
+    var selectedStepId by remember { mutableStateOf<String?>(null) }
     var editingStepId by remember { mutableStateOf<String?>(null) }
     var capabilities by remember { mutableStateOf(device.capabilities) }
     var blockedIssues by remember { mutableStateOf<List<RpaIssue>>(emptyList()) }
@@ -230,27 +223,45 @@ private fun RpaApp(
     val runEvents by runController.events.collectAsStateWithLifecycle()
     val runStartFailed = stringResource(R.string.float_rpa_run_start_failed)
 
-    LaunchedEffect(initialScriptId, initialStepId) {
-        if (initialScriptId != null && initialStepId != null) {
-            Toast.makeText(context, R.string.float_rpa_pick_applied, Toast.LENGTH_SHORT).show()
-        }
-    }
-
     fun refreshCapabilities() {
         capabilities = device.capabilities
     }
 
-    fun openEditor(target: RpaScript) {
+    fun openEditor(target: RpaScript, stepId: String? = null) {
         script = target
-        selectedStepId = target.steps.firstOrNull()?.id
+        selectedStepId = stepId?.takeIf { id -> target.steps.any { it.id == id } }
+            ?: target.steps.firstOrNull()?.id
         editingStepId = null
-        pendingOpenProps = false
+        pendingOpenProps = stepId != null
         screen = RpaScreen.EDITOR
     }
 
     /**
-     * 从布局分析器 / 以图找图返回：选中被编辑的步骤并打开其属性页。
-     * 分析器与以图找图的入口都在步骤属性里，返回时不能落到脚本级设置或流程页，
+     * 磁盘扫描与脚本加载全部离开主线程：脚本一多就是几十次 JSON 解析。
+     * 放在 [openEditor] 之后定义，局部函数先声明后使用。
+     */
+    LaunchedEffect(initialScriptId) {
+        val report = withContext(Dispatchers.IO) { store.listReport() }
+        scripts = report.scripts
+        brokenScripts = report.failed.size
+        if (initialScriptId != null) {
+            val target = withContext(Dispatchers.IO) { store.load(initialScriptId) }
+            if (target == null) {
+                Toast.makeText(context, R.string.float_rpa_script_missing, Toast.LENGTH_LONG)
+                    .show()
+            } else {
+                openEditor(target, initialStepId)
+                if (initialStepId != null) {
+                    Toast.makeText(context, R.string.float_rpa_pick_applied, Toast.LENGTH_SHORT)
+                        .show()
+                }
+            }
+        }
+    }
+
+    /**
+     * 从在目标应用拾取 / 以图找图返回：选中被编辑的步骤并打开其属性页。
+     * 拾取与以图找图的入口都在步骤属性里，返回时不能落到脚本级设置或流程页，
      * 否则用户会误以为刚生成的选择器/模板没有落到该动作上。
      */
     fun returnToStepProps() {
@@ -259,16 +270,40 @@ private fun RpaApp(
         screen = RpaScreen.EDITOR
     }
 
-    fun persist(target: RpaScript?): RpaScript? {
+    suspend fun refreshScripts() {
+        val report = withContext(Dispatchers.IO) { store.listReport() }
+        scripts = report.scripts
+        brokenScripts = report.failed.size
+    }
+
+    /**
+     * 落盘是唯一的真相入口：保存失败必须显式报错并返回 null，
+     * 调用方不得拿内存里的未保存版本继续校验 / 运行 / 拾取。
+     */
+    suspend fun persist(target: RpaScript?, notifySuccess: Boolean = false): RpaScript? {
         val value = target ?: return null
-        val saved = store.save(value).getOrNull() ?: value
+        val result = withContext(Dispatchers.IO) { store.save(value) }
+        val saved = result.getOrNull()
+        if (saved == null) {
+            val detail = result.exceptionOrNull()?.message.orEmpty()
+            Toast.makeText(
+                context,
+                context.getString(R.string.float_rpa_save_failed, detail),
+                Toast.LENGTH_LONG,
+            ).show()
+            return null
+        }
         script = saved
-        scripts = runCatching { store.list() }.getOrDefault(scripts)
+        refreshScripts()
+        if (notifySuccess) {
+            Toast.makeText(context, R.string.float_rpa_saved, Toast.LENGTH_SHORT).show()
+        }
         return saved
     }
 
-    fun leaveEditor() {
-        persist(script)
+    suspend fun leaveEditor() {
+        // 保存失败就留在编辑器：宁可让用户重试，也不能静默丢掉本次编辑。
+        if (persist(script) == null) return
         screen = RpaScreen.LIBRARY
     }
 
@@ -276,12 +311,14 @@ private fun RpaApp(
      * 运行前统一门禁：先落盘（列表运行读的是 store 版本），再做校验 + 能力就绪；
      * 有 ERROR 时只弹问题列表，不启动服务，避免后台跑一半才失败。
      */
-    fun requestRun(target: RpaScript) {
-        val saved = persist(target) ?: target
-        val issues = RpaValidator.validate(saved) +
-            RpaReadiness.check(saved, device.capabilities) { sid, tid ->
-                store.templateExists(sid, tid)
-            }
+    suspend fun requestRun(target: RpaScript) {
+        val saved = persist(target) ?: return
+        val issues = withContext(Dispatchers.IO) {
+            RpaValidator.validate(saved) +
+                RpaReadiness.check(saved, device.capabilities) { sid, tid ->
+                    store.templateExists(sid, tid)
+                }
+        }
         val errors = issues.filter { it.severity == RpaIssueSeverity.ERROR }
         if (errors.isNotEmpty()) {
             blockedIssues = errors
@@ -302,24 +339,23 @@ private fun RpaApp(
      * 前台；用户在悬浮球里打开布局分析 / 以图找图并点「应用到当前步骤」后，
      * 工具会带 scriptId / stepId 重新打开本页并定位到该步骤。
      */
-    fun startPick(kind: RpaPickKind) {
+    suspend fun startPick(kind: RpaPickKind) {
         val active = script ?: return
         val saved = persist(active) ?: return
         val stepId = selectedStepId ?: saved.steps.firstOrNull()?.id ?: return
         val step = saved.steps.firstOrNull { it.id == stepId } ?: return
-        pickCoordinator.arm(
-            RpaPickRequest(
-                requestId = RpaIds.newId("pick"),
-                scriptId = saved.id,
-                stepId = step.id,
-                kind = kind,
-                scriptName = saved.name,
-                stepLabel = step.label.ifBlank {
-                    rpaActionLabelRes(step.action).let { context.getString(it) }
-                },
-                createdAt = System.currentTimeMillis(),
-            ),
+        val request = RpaPickRequest(
+            requestId = RpaIds.newId("pick"),
+            scriptId = saved.id,
+            stepId = step.id,
+            kind = kind,
+            scriptName = saved.name,
+            stepLabel = step.label.ifBlank {
+                rpaActionLabelRes(step.action).let { context.getString(it) }
+            },
+            createdAt = System.currentTimeMillis(),
         )
+        withContext(Dispatchers.IO) { pickCoordinator.arm(request) }
         Toast.makeText(context, R.string.float_rpa_pick_armed, Toast.LENGTH_LONG).show()
         onCloseForPick()
     }
@@ -332,7 +368,7 @@ private fun RpaApp(
 
     BackHandler(enabled = screen != RpaScreen.LIBRARY) {
         when (screen) {
-            RpaScreen.EDITOR -> leaveEditor()
+            RpaScreen.EDITOR -> scope.launch { leaveEditor() }
             RpaScreen.VISION -> returnToStepProps()
             RpaScreen.LIBRARY -> Unit
         }
@@ -341,6 +377,7 @@ private fun RpaApp(
     when (screen) {
         RpaScreen.LIBRARY -> RpaLibraryScreen(
             scripts = scripts,
+            brokenScripts = brokenScripts,
             capabilities = capabilities,
             initialPackage = initialPackage,
             runState = runState,
@@ -354,25 +391,55 @@ private fun RpaApp(
             },
             onOpenShizuku = onOpenShizuku,
             onOpen = { target ->
-                openEditor(store.load(target.id) ?: target)
+                runController.dismissFinished()
+                openEditor(target)
             },
             onCreate = { name, mode, pkg ->
-                val created = RpaScriptFactory.starter(name, mode, pkg)
-                store.save(created).getOrNull()?.let { saved ->
-                    scripts = runCatching { store.list() }.getOrDefault(scripts)
-                    openEditor(saved)
+                scope.launch {
+                    val created = RpaScriptFactory.starter(name, mode, pkg)
+                    val saved = withContext(Dispatchers.IO) { store.save(created) }.getOrNull()
+                    if (saved == null) {
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.float_rpa_save_failed, "create"),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else {
+                        refreshScripts()
+                        openEditor(saved)
+                    }
                 }
             },
-            onRun = { target -> requestRun(target) },
+            onRun = { target -> scope.launch { requestRun(target) } },
             onStopRun = onStopRun,
             onDuplicate = { target ->
-                store.duplicate(target)
-                scripts = runCatching { store.list() }.getOrDefault(scripts)
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) { store.duplicate(target) }
+                    if (result.isSuccess) {
+                        refreshScripts()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            context.getString(
+                                R.string.float_rpa_duplicate_failed,
+                                result.exceptionOrNull()?.message.orEmpty(),
+                            ),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
             },
             onDelete = { target ->
-                store.delete(target.id)
-                scripts = runCatching { store.list() }.getOrDefault(scripts)
-                if (script?.id == target.id) script = null
+                scope.launch {
+                    val removed = withContext(Dispatchers.IO) { store.delete(target.id) }
+                    if (removed) {
+                        if (script?.id == target.id) script = null
+                        refreshScripts()
+                    } else {
+                        Toast.makeText(context, R.string.float_rpa_delete_failed, Toast.LENGTH_LONG)
+                            .show()
+                    }
+                }
             },
         )
 
@@ -390,7 +457,7 @@ private fun RpaApp(
                     runState = runState,
                     runEvents = runEvents,
                     openPropsInitially = pendingOpenProps,
-                    onBack = { leaveEditor() },
+                    onBack = { scope.launch { leaveEditor() } },
                     onSelectStep = { selectedStepId = it },
                     onScriptChange = { updated ->
                         script = updated
@@ -400,7 +467,7 @@ private fun RpaApp(
                             selectedStepId = updated.steps.firstOrNull()?.id
                         }
                     },
-                    onSave = { persist(script) },
+                    onSave = { scope.launch { persist(script, notifySuccess = true) } },
                     onRefreshCapabilities = { refreshCapabilities() },
                     onGrantProjection = {
                         scope.launch {
@@ -413,8 +480,8 @@ private fun RpaApp(
                         editingStepId = stepId
                         screen = RpaScreen.VISION
                     },
-                    onStartPick = { kind -> startPick(kind) },
-                    onRun = { requestRun(active) },
+                    onStartPick = { kind -> scope.launch { startPick(kind) } },
+                    onRun = { scope.launch { requestRun(active) } },
                     onStopRun = onStopRun,
                 )
             }

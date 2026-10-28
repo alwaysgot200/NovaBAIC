@@ -237,6 +237,43 @@ object RpaIds {
 }
 
 /**
+ * 运行期硬边界：编辑器输入与解释器执行共用同一组上限，避免「UI 允许填、
+ * 引擎静默截断」的两套语义。超限只报警告，执行时按此钳制。
+ */
+object RpaLimits {
+
+    /** 单步超时上限（含 WAIT_FOR_TARGET / ASSERT_TEXT 轮询）。 */
+    const val MAX_STEP_TIMEOUT_MS = 600_000L
+
+    /** 单步等待上限。 */
+    const val MAX_WAIT_MS = 600_000L
+
+    /** 单步重试次数上限（0 表示不重试）。 */
+    const val MAX_RETRIES = 10
+
+    /** 步骤前后延迟上限。 */
+    const val MAX_DELAY_MS = 60_000L
+
+    /** 单次运行总预算，防止 WAIT / 重试把任务无限拖长。 */
+    const val DEFAULT_RUN_TIMEOUT_MS = 1_800_000L
+    const val MAX_RUN_TIMEOUT_MS = 3_600_000L
+
+    const val MIN_SWIPE_DURATION_MS = 50
+    const val MAX_SWIPE_DURATION_MS = 3_000
+
+    fun stepTimeout(value: Long): Long =
+        if (value <= 0) MIN_STEP_TIMEOUT_MS else value.coerceAtMost(MAX_STEP_TIMEOUT_MS)
+
+    fun waitMs(value: Long): Long = value.coerceIn(0L, MAX_WAIT_MS)
+
+    fun retries(value: Int): Int = value.coerceIn(0, MAX_RETRIES)
+
+    fun delayMs(value: Long): Long = value.coerceIn(0L, MAX_DELAY_MS)
+
+    private const val MIN_STEP_TIMEOUT_MS = 100L
+}
+
+/**
  * 脚本静态校验（运行前必须全绿）：模式约束、动作必填参数、双模式双写、
  * 视觉模板/区域合法性、变量引用完整性。
  */
@@ -276,9 +313,16 @@ object RpaValidator {
     fun validateStep(script: RpaScript, step: RpaStep): List<RpaIssue> = buildList {
         if (step.timeoutMs <= 0) {
             add(RpaIssue("step_timeout_invalid", step.id, RpaIssueSeverity.WARNING))
+        } else if (step.timeoutMs > RpaLimits.MAX_STEP_TIMEOUT_MS) {
+            add(RpaIssue("step_timeout_over_limit", step.id, RpaIssueSeverity.WARNING))
         }
         if (step.retries < 0) {
             add(RpaIssue("step_retries_invalid", step.id))
+        } else if (step.retries > RpaLimits.MAX_RETRIES) {
+            add(RpaIssue("step_retries_over_limit", step.id, RpaIssueSeverity.WARNING))
+        }
+        if (step.delayBeforeMs > RpaLimits.MAX_DELAY_MS || step.delayAfterMs > RpaLimits.MAX_DELAY_MS) {
+            add(RpaIssue("step_delay_over_limit", step.id, RpaIssueSeverity.WARNING))
         }
         val target = step.target
         when (step.action) {
@@ -293,8 +337,13 @@ object RpaValidator {
                     add(RpaIssue("param_contact_missing", step.id))
                 }
             }
-            RpaAction.WAIT -> if ((step.params.waitMs ?: 0) <= 0) {
-                add(RpaIssue("param_wait_missing", step.id))
+            RpaAction.WAIT -> {
+                val wait = step.params.waitMs ?: 0
+                if (wait <= 0) {
+                    add(RpaIssue("param_wait_missing", step.id))
+                } else if (wait > RpaLimits.MAX_WAIT_MS) {
+                    add(RpaIssue("param_wait_over_limit", step.id, RpaIssueSeverity.WARNING))
+                }
             }
             RpaAction.INPUT_TEXT -> if (step.params.text.isNullOrEmpty()) {
                 add(RpaIssue("param_text_missing", step.id))
@@ -449,13 +498,17 @@ object RpaReadiness {
                 }
             }
         }
-        script.steps.filter { it.enabled }.forEach { step ->
-            val vision = step.target?.vision ?: return@forEach
-            listOfNotNull(vision.primary, vision.fallback).forEach { locator ->
-                if (locator.kind == RpaVisionKind.TEMPLATE) {
-                    val templateId = locator.templateId
-                    if (!templateId.isNullOrBlank() && !templateExists(script.id, templateId)) {
-                        add(RpaIssue("ready_template_missing", step.id))
+        // A11Y 模式根本不会走视觉线路：残留的 vision 定位不得阻止运行
+        // （用户从 DUAL 切到 A11Y 后删除模板是合法操作）。
+        if (RpaModePolicy.visionEnabled(script.mode)) {
+            script.steps.filter { it.enabled }.forEach { step ->
+                val vision = step.target?.vision ?: return@forEach
+                listOfNotNull(vision.primary, vision.fallback).forEach { locator ->
+                    if (locator.kind == RpaVisionKind.TEMPLATE) {
+                        val templateId = locator.templateId
+                        if (!templateId.isNullOrBlank() && !templateExists(script.id, templateId)) {
+                            add(RpaIssue("ready_template_missing", step.id))
+                        }
                     }
                 }
             }

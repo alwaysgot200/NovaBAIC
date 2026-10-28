@@ -261,12 +261,7 @@ data class RpaVisionSpec(
 data class RpaTarget(
     val a11y: RpaA11ySpec? = null,
     val vision: RpaVisionSpec? = null,
-) {
-    fun specFor(line: RpaLine): Any? = when (line) {
-        RpaLine.A11Y -> a11y
-        RpaLine.VISION -> vision
-    }
-}
+)
 
 /** 动作参数（按动作取用其中一部分；未使用字段保持 null）。 */
 @Serializable

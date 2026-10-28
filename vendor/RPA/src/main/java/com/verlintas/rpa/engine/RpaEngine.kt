@@ -22,8 +22,10 @@ package com.verlintas.rpa.engine
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaCapabilities
 import com.verlintas.rpa.model.RpaDirection
+import com.verlintas.rpa.model.RpaExpect
 import com.verlintas.rpa.model.RpaFailurePolicy
 import com.verlintas.rpa.model.RpaHit
+import com.verlintas.rpa.model.RpaLimits
 import com.verlintas.rpa.model.RpaLine
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaReadiness
@@ -86,6 +88,8 @@ interface RpaDevice {
 class RpaRunner(
     private val device: RpaDevice,
     private val templateExists: (scriptId: String, templateId: String) -> Boolean = { _, _ -> true },
+    /** 单次运行总预算：防止 WAIT / 重试把任务无限拖长。 */
+    private val totalTimeoutMs: Long = RpaLimits.DEFAULT_RUN_TIMEOUT_MS,
 ) {
 
     suspend fun run(
@@ -119,11 +123,14 @@ class RpaRunner(
 
         private var line: RpaLine? = initialLine()
 
+        private val deadline: Long = System.currentTimeMillis() +
+            totalTimeoutMs.coerceIn(1L, RpaLimits.MAX_RUN_TIMEOUT_MS)
+
         suspend fun run(): RpaRunResult {
             emit(RpaRunEvent.ScriptStarted(script, line))
             script.steps.forEachIndexed { index, step ->
                 if (!step.enabled) return@forEachIndexed
-                if (step.delayBeforeMs > 0) delay(step.delayBeforeMs)
+                if (!pause(RpaLimits.delayMs(step.delayBeforeMs))) return finishTimeout(index)
                 emit(RpaRunEvent.StepStarted(index, step, line))
                 val outcome = executeWithRetry(index, step)
                 emit(
@@ -134,12 +141,20 @@ class RpaRunner(
                         detail = outcome.detail,
                     ),
                 )
+                // 总预算耗尽优先于步骤失败策略：继续执行只会让后续步骤瞬间失败。
+                if (!outcome.ok && outcome.detail == "run_timeout") {
+                    return finishTimeout(index)
+                }
                 if (!outcome.ok && step.onFailure == RpaFailurePolicy.STOP) {
                     emit(RpaRunEvent.ScriptFinished(false, index, outcome.detail))
                     return RpaRunResult(false, index, outcome.detail)
                 }
                 // 执行后等待只在动作最终成功后生效：失败 / 重试 / CONTINUE 都不等。
-                if (outcome.ok && step.delayAfterMs > 0) delay(step.delayAfterMs)
+                if (outcome.ok && step.delayAfterMs > 0 &&
+                    !pause(RpaLimits.delayMs(step.delayAfterMs))
+                ) {
+                    return finishTimeout(index)
+                }
                 if (!outcome.ok) {
                     emit(RpaRunEvent.Log("continue_after_failure step=${step.id}"))
                 }
@@ -148,19 +163,37 @@ class RpaRunner(
             return RpaRunResult(true)
         }
 
+        private suspend fun finishTimeout(index: Int?): RpaRunResult {
+            emit(RpaRunEvent.Log("run_timeout budget_ms=$totalTimeoutMs"))
+            emit(RpaRunEvent.ScriptFinished(false, index, "run_timeout"))
+            return RpaRunResult(false, index, "run_timeout")
+        }
+
+        /** 在总预算内等待；预算耗尽返回 false（由调用方收口为 run_timeout）。 */
+        private suspend fun pause(ms: Long): Boolean {
+            if (ms <= 0) return remainingMs() > 0
+            val remaining = remainingMs()
+            if (remaining <= 0) return false
+            delay(ms.coerceAtMost(remaining))
+            return remainingMs() > 0
+        }
+
+        private fun remainingMs(): Long = deadline - System.currentTimeMillis()
+
         private suspend fun executeWithRetry(index: Int, step: RpaStep): StepOutcome {
-            val attempts = step.retries.coerceAtLeast(0) + 1
+            val attempts = RpaLimits.retries(step.retries) + 1
             var last = StepOutcome(false, "not_executed")
             for (attempt in 1..attempts) {
                 last = executeOnce(index, step)
                 if (last.ok) return last
+                if (remainingMs() <= 0) return StepOutcome(false, "run_timeout")
                 if (attempt < attempts) {
                     emit(
                         RpaRunEvent.Log(
                             "retry step=${step.id} attempt=${attempt + 1} reason=${last.detail}",
                         ),
                     )
-                    delay(RETRY_DELAY_MS)
+                    if (!pause(RETRY_DELAY_MS)) return StepOutcome(false, "run_timeout")
                 }
             }
             return last
@@ -180,12 +213,11 @@ class RpaRunner(
                 }
                 RpaAction.OPEN_CHAT -> openChat(index, step)
                 RpaAction.WAIT -> {
-                    val wait = step.params.waitMs ?: 0
-                    if (wait <= 0) {
-                        StepOutcome(false, "param_wait_missing")
-                    } else {
-                        delay(wait)
-                        StepOutcome(true, "waited ${wait}ms")
+                    val wait = RpaLimits.waitMs(step.params.waitMs ?: 0)
+                    when {
+                        wait <= 0 -> StepOutcome(false, "param_wait_missing")
+                        !pause(wait) -> StepOutcome(false, "run_timeout")
+                        else -> StepOutcome(true, "waited ${wait}ms")
                     }
                 }
                 RpaAction.WAIT_FOR_TARGET -> waitForTarget(index, step)
@@ -264,7 +296,10 @@ class RpaRunner(
             val (w, h) = size
             if (w <= 0 || h <= 0) return StepOutcome(false, "screen_size_unknown")
             val ratio = (step.params.distanceRatio ?: 0.5f).coerceIn(0.05f, 0.9f)
-            val duration = (step.params.durationMs ?: 300).coerceIn(50, 3_000)
+            val duration = (step.params.durationMs ?: 300).coerceIn(
+                RpaLimits.MIN_SWIPE_DURATION_MS,
+                RpaLimits.MAX_SWIPE_DURATION_MS,
+            )
             val cx = w / 2
             val cy = h / 2
             val dx = (w * ratio / 2f).toInt()
@@ -284,65 +319,87 @@ class RpaRunner(
             val target = step.target?.resolve(script.variables)
                 ?: return StepOutcome(false, "target_missing")
             val primary = line ?: return StepOutcome(false, "no_active_line")
-            val timeout = step.timeoutMs.coerceAtLeast(100)
-            val deadline = System.currentTimeMillis() + timeout
-            var hit: RpaHit? = null
-            while (hit == null && System.currentTimeMillis() < deadline) {
-                hit = device.locate(script.id, target, primary)
-                if (hit == null) delay(POLL_INTERVAL_MS)
-            }
+            val timeout = RpaLimits.stepTimeout(step.timeoutMs)
+            val now = System.currentTimeMillis()
+            val stepDeadline = now + timeout
+            val alt = primary.other().takeIf { script.mode == RpaMode.DUAL && lineReady(it) }
+            // 双模式先给主线路留出时间，再预留兜底轮询窗口；总预算始终优先。
+            val reserve = if (alt != null) DUAL_FALLBACK_WINDOW_MS else 0L
+            val primaryDeadline = minOf(
+                stepDeadline,
+                (deadline - reserve).coerceAtLeast(now + MIN_PRIMARY_WINDOW_MS),
+            )
+            var hit = pollLocate(target, primary, primaryDeadline)
             if (hit != null) {
                 return StepOutcome(true, "target_ready (${hit.x},${hit.y}) line=$primary")
             }
-            if (script.mode == RpaMode.DUAL) {
-                val alt = primary.other()
-                if (lineReady(alt)) {
-                    emit(RpaRunEvent.LineFallback(index, step, primary, alt, "wait_target_miss"))
-                    val second = device.locate(script.id, target, alt)
-                    if (second != null) {
-                        line = alt
-                        return StepOutcome(
-                            true,
-                            "target_ready fallback (${second.x},${second.y}) line=$alt",
-                        )
-                    }
+            if (alt != null) {
+                emit(RpaRunEvent.LineFallback(index, step, primary, alt, "wait_target_miss"))
+                val altDeadline = minOf(stepDeadline + DUAL_FALLBACK_WINDOW_MS, deadline)
+                hit = pollLocate(target, alt, altDeadline)
+                if (hit != null) {
+                    line = alt
+                    return StepOutcome(
+                        true,
+                        "target_ready fallback (${hit.x},${hit.y}) line=$alt",
+                    )
                 }
             }
             return StepOutcome(false, "target_timeout")
         }
 
+        private suspend fun pollLocate(
+            target: RpaTarget,
+            line: RpaLine,
+            until: Long,
+        ): RpaHit? {
+            var hit: RpaHit? = null
+            while (hit == null && System.currentTimeMillis() < until) {
+                hit = device.locate(script.id, target, line)
+                if (hit == null) {
+                    val remaining = until - System.currentTimeMillis()
+                    if (remaining > 0) delay(minOf(POLL_INTERVAL_MS, remaining))
+                }
+            }
+            return hit
+        }
+
         private suspend fun assertText(index: Int, step: RpaStep): StepOutcome {
             val expect = step.expect ?: return StepOutcome(false, "param_expect_missing")
             val primary = line ?: return StepOutcome(false, "no_active_line")
-            val timeout = expect.timeoutMs.coerceAtLeast(100)
-            val deadline = System.currentTimeMillis() + timeout
-            var found = false
-            while (!found && System.currentTimeMillis() < deadline) {
-                found = device.textLines(primary).any { text ->
-                    RpaTextMatch.matches(text, expect.text, expect.match, ignoreWhitespace = true)
-                }
-                if (!found) delay(POLL_INTERVAL_MS)
+            val timeout = RpaLimits.stepTimeout(expect.timeoutMs)
+            val now = System.currentTimeMillis()
+            val stepDeadline = now + timeout
+            val alt = primary.other().takeIf { script.mode == RpaMode.DUAL && lineReady(it) }
+            val reserve = if (alt != null) DUAL_FALLBACK_WINDOW_MS else 0L
+            val primaryDeadline = minOf(
+                stepDeadline,
+                (deadline - reserve).coerceAtLeast(now + MIN_PRIMARY_WINDOW_MS),
+            )
+            if (pollText(expect, primary, primaryDeadline)) {
+                return StepOutcome(true, "assert_ok line=$primary")
             }
-            if (found) return StepOutcome(true, "assert_ok line=$primary")
-            if (script.mode == RpaMode.DUAL) {
-                val alt = primary.other()
-                if (lineReady(alt)) {
-                    emit(RpaRunEvent.LineFallback(index, step, primary, alt, "assert_miss"))
-                    val second = device.textLines(alt).any { text ->
-                        RpaTextMatch.matches(
-                            text,
-                            expect.text,
-                            expect.match,
-                            ignoreWhitespace = true,
-                        )
-                    }
-                    if (second) {
-                        line = alt
-                        return StepOutcome(true, "assert_ok fallback line=$alt")
-                    }
+            if (alt != null) {
+                emit(RpaRunEvent.LineFallback(index, step, primary, alt, "assert_miss"))
+                val altDeadline = minOf(stepDeadline + DUAL_FALLBACK_WINDOW_MS, deadline)
+                if (pollText(expect, alt, altDeadline)) {
+                    line = alt
+                    return StepOutcome(true, "assert_ok fallback line=$alt")
                 }
             }
             return StepOutcome(false, "assert_text_missing: ${expect.text}")
+        }
+
+        private suspend fun pollText(expect: RpaExpect, line: RpaLine, until: Long): Boolean {
+            while (System.currentTimeMillis() < until) {
+                val found = device.textLines(line).any { text ->
+                    RpaTextMatch.matches(text, expect.text, expect.match, ignoreWhitespace = true)
+                }
+                if (found) return true
+                val remaining = until - System.currentTimeMillis()
+                if (remaining > 0) delay(minOf(POLL_INTERVAL_MS, remaining))
+            }
+            return false
         }
 
         // ---------------------------- 线路 ----------------------------
@@ -414,7 +471,9 @@ class RpaRunner(
                 return null
             }
             val active = line ?: return "no_active_line"
-            val fg = device.foregroundPackage(active) ?: return null
+            // 探针失败必须 fail-closed：宁可本步失败，也不能在未知前台里点击 / 输入。
+            val fg = device.foregroundPackage(active)
+                ?: return "foreground_unknown: expected=${script.appPackage} line=$active"
             return if (fg == script.appPackage) {
                 null
             } else {
@@ -438,5 +497,11 @@ class RpaRunner(
     private companion object {
         const val POLL_INTERVAL_MS = 300L
         const val RETRY_DELAY_MS = 400L
+
+        /** 双模式兜底线路的轮询窗口（不是「只试一次」）。 */
+        const val DUAL_FALLBACK_WINDOW_MS = 2_000L
+
+        /** 主线路至少保留的探测时间，避免总预算把主线路压成 0。 */
+        const val MIN_PRIMARY_WINDOW_MS = 200L
     }
 }

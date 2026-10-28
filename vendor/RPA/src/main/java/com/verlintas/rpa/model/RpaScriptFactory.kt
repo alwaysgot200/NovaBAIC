@@ -60,6 +60,9 @@ object RpaScriptFactory {
                 step(
                     action = RpaAction.TAP,
                     label = "点击目标元素",
+                    // 新建脚本还没有真实定位：默认禁用，避免首帧校验报 target_missing，
+                    // 也避免 DUAL 预填的比例点误点屏幕中心。
+                    enabled = false,
                     target = if (mode == RpaMode.DUAL) {
                         RpaTarget(
                             a11y = RpaA11ySpec(
@@ -78,7 +81,7 @@ object RpaScriptFactory {
                         null
                     },
                     timeoutMs = 5_000,
-                    note = "用属性面板的「布局分析器 / 以图找图」生成定位",
+                    note = "用属性面板的「在目标应用拾取 / 以图找图」生成定位后再启用",
                 ),
             ),
             createdAt = now,
@@ -94,6 +97,7 @@ object RpaScriptFactory {
         expect: RpaExpect? = null,
         timeoutMs: Long = 5_000,
         delayBeforeMs: Long = 0,
+        enabled: Boolean = true,
         note: String = "",
     ): RpaStep = RpaStep(
         id = RpaIds.newId("step"),
@@ -104,6 +108,7 @@ object RpaScriptFactory {
         expect = expect,
         timeoutMs = timeoutMs,
         delayBeforeMs = delayBeforeMs,
+        enabled = enabled,
         note = note,
     )
 }

@@ -9,9 +9,9 @@
  * Foundation, either version 3 of the License, or (at your option) any later
  * version.
  *
- * BetterAIChat2 is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
- * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ * BetterAIChat2 is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along with
  * BetterAIChat2. If not, see <https://www.gnu.org/licenses/>.
@@ -19,15 +19,24 @@
 
 package com.verlintas.rpa.store
 
+import com.verlintas.rpa.model.RpaIds
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaScript
 import com.verlintas.rpa.model.RpaStep
-import com.verlintas.rpa.model.RpaIds
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.serialization.json.Json
 
+/** 一次列表扫描的结果：可用脚本 + 解析失败的文件名（损坏的文档不静默消失）。 */
+data class ScriptListReport(
+    val scripts: List<RpaScript>,
+    val failed: List<String> = emptyList(),
+)
+
 /**
- * RPA 文档式存储（与数据库解耦，脚本可导出 / 导入 / 版本管理）：
+ * RPA 文档式存储（与数据库解耦，脚本可备份 / 版本管理）：
  *
  * ```
  * filesDir/rpa/
@@ -37,7 +46,8 @@ import kotlinx.serialization.json.Json
  *
  * - JSON 是唯一事实源：动作顺序即 `steps` 数组顺序，拖拽只改数组；
  * - 模板与脚本按 `scriptId` 分区：删脚本即删模板目录，不会误伤其他脚本；
- * - id 全部做文件名白名单化（防导入文档路径穿越）。
+ * - id 全部做文件名白名单化（防路径穿越）；
+ * - 所有读写串行化：编辑器保存与运行服务读盘可能并发，绝不允许读到写了一半的文件。
  */
 class RpaScriptStore(root: File) {
 
@@ -55,15 +65,29 @@ class RpaScriptStore(root: File) {
         runCatching { templatesDir.mkdirs() }
     }
 
-    fun list(): List<RpaScript> {
+    /**
+     * 扫描脚本目录。解析失败的文档单独汇报给 UI，避免「脚本凭空消失」。
+     */
+    @Synchronized
+    fun listReport(): ScriptListReport {
         val files = runCatching {
             scriptsDir.listFiles { file -> file.isFile && file.extension == "json" }
         }.getOrDefault(emptyArray()) ?: emptyArray()
-        return files.mapNotNull { file ->
-            runCatching { json.decodeFromString(RpaScript.serializer(), file.readText()) }.getOrNull()
+        val failed = mutableListOf<String>()
+        val scripts = files.mapNotNull { file ->
+            runCatching {
+                json.decodeFromString(RpaScript.serializer(), file.readText())
+            }.getOrElse {
+                failed += file.name
+                null
+            }
         }.sortedByDescending { it.updatedAt }
+        return ScriptListReport(scripts = scripts, failed = failed.sorted())
     }
 
+    fun list(): List<RpaScript> = listReport().scripts
+
+    @Synchronized
     fun load(id: String): RpaScript? {
         val file = scriptFile(id)
         if (!file.isFile) return null
@@ -73,6 +97,7 @@ class RpaScriptStore(root: File) {
     }
 
     /** 保存（新建 / 覆盖）。返回带最新时间戳的脚本。 */
+    @Synchronized
     fun save(script: RpaScript): Result<RpaScript> = runCatching {
         require(script.id.isNotBlank()) { "script_id_blank" }
         val now = System.currentTimeMillis()
@@ -85,27 +110,36 @@ class RpaScriptStore(root: File) {
         stamped
     }
 
+    @Synchronized
     fun delete(id: String): Boolean {
         val removedDoc = runCatching { scriptFile(id).delete() }.getOrDefault(false)
         runCatching { templateDir(id).deleteRecursively() }
         return removedDoc
     }
 
-    fun duplicate(script: RpaScript, newName: String = script.name + " copy"): RpaScript {
-        val newId = RpaIds.newId("script")
-        val copy = script.copy(
-            id = newId,
-            name = newName,
-            createdAt = System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis(),
-            steps = script.steps.map { step ->
-                step.copy(id = RpaIds.newId("step"))
-            },
-        )
-        copyTemplates(script.id, newId)
-        save(copy)
-        return copy
-    }
+    /**
+     * 复制脚本 + 模板。模板先复制、再落 JSON；JSON 落盘失败时回收新模板目录，
+     * 绝不留下「有模板没有脚本」的孤儿数据。
+     */
+    @Synchronized
+    fun duplicate(script: RpaScript, newName: String = script.name + " copy"): Result<RpaScript> =
+        runCatching {
+            val newId = RpaIds.newId("script")
+            val now = System.currentTimeMillis()
+            val copy = script.copy(
+                id = newId,
+                name = newName,
+                createdAt = now,
+                updatedAt = now,
+                steps = script.steps.map { step -> step.copy(id = RpaIds.newId("step")) },
+            )
+            copyTemplates(script.id, newId)
+            runCatching { save(copy).getOrThrow() }.getOrElse { failure ->
+                runCatching { templateDir(newId).deleteRecursively() }
+                throw failure
+            }
+            copy
+        }
 
     fun newScript(
         name: String,
@@ -125,22 +159,6 @@ class RpaScriptStore(root: File) {
         )
     }
 
-    fun exportJson(script: RpaScript): String =
-        json.encodeToString(RpaScript.serializer(), script)
-
-    /** 导入：一律分配新 id（避免覆盖本机脚本），模板不随 JSON 迁移。 */
-    fun importJson(text: String): Result<RpaScript> = runCatching {
-        val parsed = json.decodeFromString(RpaScript.serializer(), text)
-        require(parsed.name.isNotBlank()) { "script_name_missing" }
-        val imported = parsed.copy(
-            id = RpaIds.newId("script"),
-            createdAt = System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis(),
-        )
-        save(imported).getOrThrow()
-        imported
-    }
-
     // ------------------------------ 模板 ------------------------------
 
     fun templateDir(scriptId: String): File =
@@ -149,9 +167,11 @@ class RpaScriptStore(root: File) {
     fun templateFile(scriptId: String, templateId: String): File =
         File(templateDir(scriptId), "${safeSegment(templateId)}.png")
 
+    @Synchronized
     fun templateExists(scriptId: String, templateId: String): Boolean =
         templateFile(scriptId, templateId).isFile
 
+    @Synchronized
     fun listTemplateIds(scriptId: String): List<String> =
         runCatching {
             templateDir(scriptId).listFiles { file -> file.isFile && file.extension == "png" }
@@ -159,6 +179,7 @@ class RpaScriptStore(root: File) {
                 ?.sorted()
         }.getOrNull() ?: emptyList()
 
+    @Synchronized
     fun saveTemplate(scriptId: String, templateId: String, png: ByteArray): Result<File> =
         runCatching {
             require(png.isNotEmpty()) { "template_empty" }
@@ -169,6 +190,7 @@ class RpaScriptStore(root: File) {
             file
         }
 
+    @Synchronized
     fun deleteTemplate(scriptId: String, templateId: String): Boolean =
         runCatching { templateFile(scriptId, templateId).delete() }.getOrDefault(false)
 
@@ -176,11 +198,9 @@ class RpaScriptStore(root: File) {
         val from = templateDir(fromScriptId)
         if (!from.isDirectory) return
         val to = templateDir(toScriptId)
-        runCatching { to.mkdirs() }
-        runCatching {
-            from.listFiles { file -> file.isFile }?.forEach { file ->
-                file.copyTo(File(to, file.name), overwrite = true)
-            }
+        require(to.exists() || to.mkdirs()) { "template_dir_unavailable" }
+        from.listFiles { file -> file.isFile }?.forEach { file ->
+            file.copyTo(File(to, file.name), overwrite = true)
         }
     }
 
@@ -189,16 +209,33 @@ class RpaScriptStore(root: File) {
     private fun scriptFile(id: String): File =
         File(scriptsDir, "${safeSegment(id)}.json")
 
+    /**
+     * 原子写：先写 `.tmp`，再 `ATOMIC_MOVE` 覆盖目标。
+     * 文件系统不支持原子移动时退回普通覆盖，失败一律清掉临时文件。
+     */
     private fun atomicWrite(target: File, bytes: ByteArray) {
         val parent = target.parentFile
         require(parent != null && (parent.exists() || parent.mkdirs())) {
             "parent_dir_unavailable: ${target.absolutePath}"
         }
         val temp = File(parent, target.name + ".tmp")
-        temp.writeBytes(bytes)
-        if (!temp.renameTo(target)) {
-            target.writeBytes(bytes)
-            temp.delete()
+        try {
+            temp.writeBytes(bytes)
+            val source = temp.toPath()
+            val destination = target.toPath()
+            try {
+                Files.move(
+                    source,
+                    destination,
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } catch (failure: Throwable) {
+            runCatching { temp.delete() }
+            throw failure
         }
     }
 
