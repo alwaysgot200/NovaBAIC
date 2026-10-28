@@ -80,14 +80,14 @@ vendor/RPA/src/main/java/com/verlintas/rpa/
 
 ```
 app/src/main/java/com/verlintas/baic2/floatball/rpa/
-├── RpaActivity.kt         # 全屏容器：LIBRARY / EDITOR / INSPECTOR / VISION 状态机
+├── RpaActivity.kt         # 全屏容器：LIBRARY / EDITOR / VISION 状态机
 ├── RpaLibraryScreen.kt    # 脚本库、能力卡、新建/复制/删除（无 Demo 入口）
 ├── RpaEditorScreen.kt     # 双 Tab：动作流程（拖拽）/ 动作属性（参数 + 定位 + 变量 + 运行）
-├── RpaInspectorScreen.kt  # Android 界面布局分析器（a11y）
 ├── RpaVisionScreen.kt     # 以图找图 / OCR / 比例坐标交互配置（无 a11y）
-├── RpaComponents.kt       # 文案映射、卡片、模式徽标、帧画布、节点扁平化 / 命中测试
+├── RpaComponents.kt       # 文案映射、卡片、模式徽标、帧画布、选择器摘要
 ├── RpaAndroidDevice.kt    # RpaDevice 的 Android 实现（双线路严格分流）
 ├── RpaTemplateMatcher.kt  # OpenCV 多尺度 / 灰度 / 掩膜模板匹配 + 缓存
+├── analyze/               # 悬浮球「布局分析」覆盖层（全局工具，不在编辑器内跑）
 └── RpaModule.kt           # Hilt：RpaScriptStore（filesDir/rpa）
 ```
 
@@ -421,34 +421,38 @@ drag = null                                         // 取消
 
 ---
 
-## 7. Android 界面布局分析器（a11y）
+## 7. Android 界面布局分析器（a11y，悬浮球覆盖层）
 
 > 目标：达到 AutoJs6 / AutoJs「布局工具」的效果——看到截图 + 节点框，点一下就能生成选择器。
+> 2026-10-28 起分析器**只在目标 App 前台**从悬浮球「更多 → 布局分析」进入
+> （`app/.../rpa/analyze/`，`TYPE_ACCESSIBILITY_OVERLAY`），编辑器内不再内置分析器：
+> 在编辑器里抓帧抓树必然截到编辑器自身，入口改为「提示 + 在目标应用拾取」。
 
 ### 7.1 数据来源
 
 | 数据 | 来源 | 说明 |
 |---|---|---|
-| 截图 | `FrameSource.grabFrame()` | 仅用于配置展示，不参与 VISION 执行 |
+| 截图 | `RpaAnalyzeCapture`（`FrameSource.grabFrameWithFreshness()`） | 仅用于配置展示，不参与 VISION 执行 |
 | 节点树 | `AssistsCore.getRootNodeTree()` | 复用 Assists 的 a11y 树 |
-| 可编辑性 | `AccessibilityNodeInfo.isEditable` | `NodeTree` 没有 `isEditable`，通过 `getAllNodes()` 关联补全 |
+| 可编辑性 | `AccessibilityNodeInfo.isEditable` | 通过 `getAllNodes()` 关联补全 |
 
 ### 7.2 交互流程
 
-1. 进入页面自动抓帧 + 取树；失败时区分「没有 a11y」与「抓帧失败」；
+1. 打开覆盖层自动抓帧 + 取树；失败时区分「没有 a11y」与「抓帧失败」；
 2. 画面叠加节点框：
    - 选中节点 → 高亮色；
    - 可编辑节点 → 可编辑色；
    - 可点击节点 → 可点击色；
    - 其他 → 普通描边；
    - 最多绘制 300 个框，避免大页面卡顿；
-3. 点击画面 → `hitTestNode(flat, x, y)` 命中**面积最小**的节点（最具体元素）；
+3. 点击画面 → `RpaNodeIndex.hitTest(x, y)` 命中**面积最小**的节点（最具体元素）；
 4. 节点列表按层级缩进，可按 `ALL / 可点击 / 可编辑 / 有文本` 过滤；
 5. 选中节点后展示：text、description、viewId、className、clickable、editable、scrollable、
    visibleToUser、bounds；
 6. 勾选要纳入选择器的条件（文本 / 描述 / id / 类名 / 可点击 / 可编辑），选择匹配口径与
    `pick` 策略，实时预览选择器摘要；
-7. 「生成定位」→ `onApply(RpaA11ySpec)` 回填编辑器当前步骤，并附带 `RpaNodeSnapshot`。
+7. 「应用到当前步骤」→ 写 `cacheDir/rpa/pick/request.json`，经 `RpaPickCoordinator`
+   回填编辑器当前步骤，并附带 `RpaNodeSnapshot`。
 
 ### 7.3 生成的定位表达式
 
@@ -601,8 +605,10 @@ delayBeforeMs
 
 ### 10.1 定位
 
-- 夹具代码：`app/src/test/java/com/verlintas/baic2/floatball/rpa/RpaWechatHelloFixture.kt`
-- 单测：`app/src/test/java/com/verlintas/baic2/floatball/rpa/RpaWechatHelloFixtureTest.kt`
+- 夹具代码：`app/src/sharedTest/java/com/verlintas/baic2/floatball/rpa/RpaWechatHelloFixture.kt`
+  （同时挂给 `test` 与 `androidTest` 源集）
+- JVM 单测：`app/src/test/java/com/verlintas/baic2/floatball/rpa/RpaWechatHelloFixtureTest.kt`
+- 真机仪器测试：`app/src/androidTest/java/com/verlintas/baic2/floatball/rpa/RpaWechatHelloDeviceTest.kt`
 - **不进入发行版**：没有 Demo 卡片、生成按钮、菜单、示例资源或联系人预填；
   发行版新建脚本只调用 `RpaScriptFactory.starter()`。
 - 画像 / 联系对话页的「RPA」按钮只预填 `EXTRA_IM_PACKAGE`，不生成脚本。
@@ -624,12 +630,20 @@ delayBeforeMs
 ### 10.3 跑法
 
 ```powershell
+# JVM：结构与 FakeRpaDevice 执行
 .\gradlew.bat :app:testDebugUnitTest --tests "*RpaWechatHelloFixtureTest*"
+
+# 真机：7 步实跑（微信已登录、已解锁、无障碍或 Shizuku 就绪）
+adb -s <serial> shell am instrument -w `
+  -e class com.verlintas.baic2.floatball.rpa.RpaWechatHelloDeviceTest `
+  -e contactName "吴瑞曦topwayricky" `
+  com.verlintas.baic2.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice` 跑完整脚本，
+JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice` 跑完整脚本，
 断言 7 次 `StepStarted`、7 次 `StepFinished(ok=true)`、最终 `ScriptFinished(ok=true)`。
-真机联调后续走 `androidTest` 或 debug-only 通道，仍不进 main source set。
+真机用例断言脚本成功后聊天页出现「你好」；微信未安装 / 未解锁 / 两条线路都不可用时
+`assume` 跳过（模拟器无微信即为跳过路径，已实测）。
 
 ### 10.4 预期行为（夹具）
 
@@ -663,7 +677,7 @@ delayBeforeMs
 
 - [ ] 画面点击命中最小节点；
 - [ ] 过滤「可点击 / 可编辑 / 有文本」生效；
-- [ ] 生成的选择器能在运行中命中同一元素；
+- [ ] 应用当前节点的选择器能在运行中命中同一元素；
 - [ ] 无 a11y 时给出明确提示而不是空白页；
 - [ ] 快照 bounds 与画面位置一致（含状态栏偏移）。
 
@@ -728,10 +742,11 @@ delayBeforeMs
 | 存储 / 模板 / 导入导出 | `vendor/RPA/.../store/RpaScriptStore.kt` |
 | 执行顺序 / 换线 / 前台守卫 | `vendor/RPA/.../engine/RpaEngine.kt` |
 | 新建脚本骨架 | `vendor/RPA/.../model/RpaScriptFactory.kt` |
-| 微信 7 步夹具（test） | `app/src/test/.../rpa/RpaWechatHelloFixture.kt` |
+| 微信 7 步夹具（test/androidTest） | `app/src/sharedTest/.../rpa/RpaWechatHelloFixture.kt` |
+| 真机 7 步仪器测试 | `app/src/androidTest/.../rpa/RpaWechatHelloDeviceTest.kt` |
 | 双线路 Android 实现 | `app/.../rpa/RpaAndroidDevice.kt` |
 | 拖拽编排 / 属性面板 | `app/.../rpa/RpaEditorScreen.kt` |
-| 布局分析器 | `app/.../rpa/RpaInspectorScreen.kt` |
+| 布局分析覆盖层 | `app/.../rpa/analyze/RpaAnalyzeOverlayController.kt` |
 | 以图找图 | `app/.../rpa/RpaVisionScreen.kt` |
 | 模板匹配 | `app/.../rpa/RpaTemplateMatcher.kt` |
 | 入口 / 页面状态机 | `app/.../rpa/RpaActivity.kt` |
