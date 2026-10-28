@@ -71,7 +71,7 @@ vendor/RPA/src/main/java/com/verlintas/rpa/
 │   ├── RpaTextMatch.kt   # EXACT / CONTAINS / PREFIX / REGEX 共用匹配
 │   └── RpaScriptFactory.kt # 发行版新建脚本空白骨架（无 Demo 数据）
 ├── store/
-│   └── RpaScriptStore.kt # JSON 文档存储 + PNG 模板 + 导入导出 + 原子写
+│   └── RpaScriptStore.kt # JSON 文档存储 + PNG 模板 + 原子写 + 坏文档汇报
 └── engine/
     └── RpaEngine.kt      # RpaDevice 端口 + RpaRunner 解释器
 ```
@@ -123,12 +123,25 @@ filesDir/rpa/
 - **JSON 是唯一事实源**：动作顺序就是 `steps` 数组顺序，拖拽只改数组，不存额外 sort 字段。
 - **模板按 `scriptId` 分区**：删除脚本时 `deleteRecursively()` 只清自己的模板目录。
 - **文件名白名单化**：`safeSegment()` 只保留字母数字与 `._-`，防导入文档路径穿越。
-- **原子写**：先写 `<name>.tmp` 再 `renameTo`，失败时回退覆盖写。
-- **导入**：一律分配新 `id`，避免覆盖本机脚本；PNG 模板不随 JSON 迁移（需要单独导出）。
-- **复制**：`duplicate()` 生成新脚本 id / 新步骤 id，并复制模板目录。
+- **原子写**：先写 `<name>.tmp`，再 `Files.move(ATOMIC_MOVE + REPLACE_EXISTING)`；
+  文件系统不支持原子移动时退回普通覆盖，失败一律清理临时文件。
+- **坏文档可见**：`listReport()` 把解析失败的 JSON 文件名交给 UI 提示，不静默丢弃。
+- **复制**：`duplicate()` 生成新脚本 id / 新步骤 id，并复制模板目录；JSON 落盘失败会
+  回收新模板目录，不留「有模板没有脚本」的孤儿数据。
 - **版本**：`schemaVersion` 当前为 `1`，读取时 `ignoreUnknownKeys=true`，新增可选字段可向前兼容。
 
-### 3.2 脚本 JSON 示例（节选）
+### 3.2 运行安全与预算
+
+- **总预算**：`RpaRunner(totalTimeoutMs)` 默认 `RpaLimits.DEFAULT_RUN_TIMEOUT_MS`；
+  `WAIT` / 重试 / `delayBefore` / `delayAfter` 都受预算约束，耗尽统一以
+  `run_timeout` 收口（事件与日志同因）。
+- **前台守卫 fail-closed**：脚本声明 `appPackage` 时，点击 / 输入 / 断言前必须确认前台
+  包名；探针返回 `null` 直接失败，绝不在未知前台执行。
+- **就绪门**：运行前 `RpaReadiness` 按模式只校验本线路所需能力；A11Y 模式不查 vision 模板。
+- **模板缓存**：LRU 16，淘汰即 `release()` native `Mat`；模板覆盖 / 删除后
+  `RpaAndroidDevice.invalidateTemplate()` 立即失效。
+
+### 3.3 脚本 JSON 示例（节选）
 
 ```json
 {
@@ -662,7 +675,8 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 - [ ] 拖动步骤后重新打开脚本，顺序保持；
 - [ ] 复制脚本：新 id、新步骤 id、模板目录被复制；
 - [ ] 删除脚本：JSON 与模板目录同时删除；
-- [ ] 导入异常 JSON 不崩溃（返回失败），导入成功分配新 id；
+- [ ] 损坏 JSON 出现在「坏脚本」提示里，不崩溃、不静默消失；
+- [ ] 复制失败（磁盘不可写）时列表不出现半成品脚本、模板目录无孤儿；
 - [ ] 模板保存后 `templates/<scriptId>/<templateId>.png` 存在，重启 App 仍可匹配。
 
 ### 11.2 三模式
@@ -697,7 +711,9 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 - [ ] 两条线路都失败时按 `onFailure` 停止/继续；
 - [ ] 前台守卫能阻止在错误 App 内点击/输入；
 - [ ] 重试次数、超时、`delayBeforeMs`、`delayAfterMs` 均按配置生效；
-- [ ] `delayAfterMs` 只在最终成功后等待，失败 / 重试期间不等待。
+- [ ] `delayAfterMs` 只在最终成功后等待，失败 / 重试期间不等待；
+- [ ] `WAIT` / 重试超过总预算时以 `run_timeout` 结束，最后事件与日志同因；
+- [ ] 前台探针取不到包名（如系统限制）时本步失败，而不是放行执行。
 
 ---
 
@@ -711,7 +727,7 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 | 视觉能力 | 增加 `FEATURE_MATCH`（ORB）/ `COLOR` 定位；模板缩略图管理页 |
 | 断言增强 | 节点属性断言（存在/文本/checked）、图像区域断言 |
 | 录制回放 | 监听 a11y 事件生成草稿步骤，再人工补双线路 |
-| 脚本市场 | JSON 导出/导入已有基础；补模板打包（zip）与签名校验 |
+| 脚本市场 | JSON 文档可直接备份；补模板打包（zip）、导入与签名校验 |
 
 ---
 
@@ -727,9 +743,7 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 4. **OCR 延迟**：抽帧 + OCR 比 a11y 节点查询慢，`WAIT_FOR_TARGET` 的超时需适当放宽。
 5. **`RpaA11ySpec.snapshot` 是坐标兜底**：跨分辨率不可靠，只作为选择器全 miss 时的最后手段；
    校验器会给出 WARNING。
-6. **导入不携带模板**：JSON 可跨设备迁移，但 PNG 模板需要单独复制到
-   `filesDir/rpa/templates/<newScriptId>/`。
-7. **脚本暂不支持并行 / 条件分支**：当前解释器是严格顺序执行，复杂流程需要拆成多个脚本。
+6. **脚本暂不支持并行 / 条件分支**：当前解释器是严格顺序执行，复杂流程需要拆成多个脚本。
 
 ---
 
@@ -739,7 +753,7 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 |---|---|
 | 动作种类 / 参数 / 校验 / 就绪门 | `vendor/RPA/.../model/RpaCatalog.kt` |
 | 数据结构 / 事件 / 变量 | `vendor/RPA/.../model/RpaModels.kt` |
-| 存储 / 模板 / 导入导出 | `vendor/RPA/.../store/RpaScriptStore.kt` |
+| 存储 / 模板 / 复制 / 坏文档 | `vendor/RPA/.../store/RpaScriptStore.kt` |
 | 执行顺序 / 换线 / 前台守卫 | `vendor/RPA/.../engine/RpaEngine.kt` |
 | 新建脚本骨架 | `vendor/RPA/.../model/RpaScriptFactory.kt` |
 | 微信 7 步夹具（test/androidTest） | `app/src/sharedTest/.../rpa/RpaWechatHelloFixture.kt` |
