@@ -59,7 +59,6 @@ import com.verlintas.rpa.model.RpaIssue
 import com.verlintas.rpa.model.RpaIssueSeverity
 import com.verlintas.rpa.model.RpaReadiness
 import com.verlintas.rpa.model.RpaScriptFactory
-import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaCapabilities
 import com.verlintas.rpa.model.RpaIds
 import com.verlintas.rpa.model.RpaMode
@@ -188,7 +187,6 @@ private fun Context.withRpaLocale(locale: Locale): Context {
 private enum class RpaScreen {
     LIBRARY,
     EDITOR,
-    INSPECTOR,
     VISION,
 }
 
@@ -250,6 +248,17 @@ private fun RpaApp(
         screen = RpaScreen.EDITOR
     }
 
+    /**
+     * 从布局分析器 / 以图找图返回：选中被编辑的步骤并打开其属性页。
+     * 分析器与以图找图的入口都在步骤属性里，返回时不能落到脚本级设置或流程页，
+     * 否则用户会误以为刚生成的选择器/模板没有落到该动作上。
+     */
+    fun returnToStepProps() {
+        selectedStepId = editingStepId ?: selectedStepId
+        pendingOpenProps = true
+        screen = RpaScreen.EDITOR
+    }
+
     fun persist(target: RpaScript?): RpaScript? {
         val value = target ?: return null
         val saved = store.save(value).getOrNull() ?: value
@@ -286,7 +295,6 @@ private fun RpaApp(
 
     LaunchedEffect(screen) {
         refreshCapabilities()
-        if (screen == RpaScreen.EDITOR) pendingOpenProps = false
     }
 
     /**
@@ -325,11 +333,7 @@ private fun RpaApp(
     BackHandler(enabled = screen != RpaScreen.LIBRARY) {
         when (screen) {
             RpaScreen.EDITOR -> leaveEditor()
-            RpaScreen.INSPECTOR,
-            RpaScreen.VISION,
-            -> {
-                screen = RpaScreen.EDITOR
-            }
+            RpaScreen.VISION -> returnToStepProps()
             RpaScreen.LIBRARY -> Unit
         }
     }
@@ -405,10 +409,6 @@ private fun RpaApp(
                         }
                     },
                     onOpenShizuku = onOpenShizuku,
-                    onOpenInspector = { stepId ->
-                        editingStepId = stepId
-                        screen = RpaScreen.INSPECTOR
-                    },
                     onOpenVision = { stepId ->
                         editingStepId = stepId
                         screen = RpaScreen.VISION
@@ -416,24 +416,6 @@ private fun RpaApp(
                     onStartPick = { kind -> startPick(kind) },
                     onRun = { requestRun(active) },
                     onStopRun = onStopRun,
-                )
-            }
-        }
-
-        RpaScreen.INSPECTOR -> {
-            val active = script
-            if (active == null || editingStepId == null) {
-                LaunchedEffect(active, editingStepId) {
-                    screen = if (active == null) RpaScreen.LIBRARY else RpaScreen.EDITOR
-                }
-            } else {
-                RpaInspectorScreen(
-                    device = device,
-                    onBack = { screen = RpaScreen.EDITOR },
-                    onApply = { spec: RpaA11ySpec ->
-                        script = active.withA11ySpec(editingStepId, spec)
-                        screen = RpaScreen.EDITOR
-                    },
                 )
             }
         }
@@ -453,10 +435,10 @@ private fun RpaApp(
                         .firstOrNull { it.id == editingStepId }
                         ?.target
                         ?.vision,
-                    onBack = { screen = RpaScreen.EDITOR },
+                    onBack = { returnToStepProps() },
                     onApply = { spec: RpaVisionSpec ->
                         script = active.withVisionSpec(editingStepId, spec)
-                        screen = RpaScreen.EDITOR
+                        returnToStepProps()
                     },
                 )
             }

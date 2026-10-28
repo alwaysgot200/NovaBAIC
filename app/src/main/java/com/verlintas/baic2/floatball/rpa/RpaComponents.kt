@@ -534,54 +534,7 @@ private fun selectionOf(
     bitmap: Bitmap,
 ): RpaRect? = liveSelection(start, end, fit, bitmap)?.takeIf { it.isValid() }
 
-/** 把整棵节点树拍平成有序列表（父 → 子），供分析器列表面板使用。 */
-internal data class FlatRpaNode(
-    val node: com.ven.assists.AssistsCore.NodeTree,
-    val depth: Int,
-)
-
-internal fun flattenNodeTree(
-    root: com.ven.assists.AssistsCore.NodeTree,
-    maxNodes: Int = 600,
-): List<FlatRpaNode> {
-    val out = ArrayList<FlatRpaNode>()
-    fun walk(node: com.ven.assists.AssistsCore.NodeTree, depth: Int) {
-        if (out.size >= maxNodes) return
-        out += FlatRpaNode(node, depth)
-        node.children.forEach { child -> walk(child, depth + 1) }
-    }
-    walk(root, 0)
-    return out
-}
-
-/** 点击截图时命中「面积最小」的节点（最具体的元素）。 */
-internal fun hitTestNode(
-    nodes: List<FlatRpaNode>,
-    x: Int,
-    y: Int,
-): com.ven.assists.AssistsCore.NodeTree? = nodes.asSequence()
-    .map { it.node }
-    .filter { node ->
-        val b = node.boundsInScreen
-        b.width > 0 && b.height > 0 && x in b.left..b.right && y in b.top..b.bottom
-    }
-    .minByOrNull { node ->
-        node.boundsInScreen.width.toLong() * node.boundsInScreen.height
-    }
-
-internal fun isNodeEditable(node: com.ven.assists.AssistsCore.NodeTree): Boolean =
-    node.className.contains("EditText", ignoreCase = true) ||
-        node.className.contains("AutoCompleteTextView", ignoreCase = true) ||
-        node.hintText.isNotBlank()
-
-internal fun nodeBounds(node: com.ven.assists.AssistsCore.NodeTree): RpaBounds = RpaBounds(
-    left = node.boundsInScreen.left,
-    top = node.boundsInScreen.top,
-    right = node.boundsInScreen.right,
-    bottom = node.boundsInScreen.bottom,
-)
-
-/** 选择器摘要：编辑器属性面板与布局分析器共用同一展示口径。 */
+/** 选择器摘要：编辑器属性面板的展示口径。 */
 internal fun rpaSelectorSummary(selector: RpaSelector): String = buildList {
     selector.text?.takeIf { it.isNotBlank() }?.let { add("text=\"$it\"") }
     selector.description?.takeIf { it.isNotBlank() }?.let { add("desc=\"$it\"") }

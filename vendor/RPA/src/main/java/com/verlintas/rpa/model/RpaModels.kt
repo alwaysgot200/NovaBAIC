@@ -367,9 +367,41 @@ fun RpaStep.referencedVariables(): Set<String> = buildSet {
             locator.ocrText?.let(::add)
         }
     }
-    val regex = Regex("""\$\{([A-Za-z0-9_.-]+)}""")
-    texts.forEach { value -> regex.findAll(value).forEach { add(it.groupValues[1]) } }
+    // Android 的 ICU 正则不接受转义花括号 `\{`（桌面 JVM 可以），用 `Regex`
+    // 会在设备上抛 PatternSyntaxException，直接击穿编辑器首帧。这里改为纯字符串
+    // 扫描，两端行为一致，也避免把用户输入交给正则编译。
+    texts.forEach { value -> addAll(value.extractVariableNames()) }
 }
+
+/** 扫描 `${name}`，名称字符集与校验器约定一致：`A-Z a-z 0-9 _ . -`。 */
+private fun String.extractVariableNames(): List<String> {
+    // buildList 的隐式接收者是 MutableList，不能在其作用域内裸调 indexOf，
+    // 否则会按「列表元素查找」解析而永远返回 -1；先绑定源字符串。
+    val value = this
+    if (!value.contains("\${")) return emptyList()
+    return buildList {
+        var index = value.indexOf("\${")
+        while (index >= 0) {
+            val start = index + 2
+            val end = value.indexOf('}', start)
+            if (end < 0) break
+            val name = value.substring(start, end)
+            val nested = name.indexOf("\${")
+            if (nested >= 0) {
+                // 外层未闭合的 `${` 里又出现了新占位符：从内层重新扫描，
+                // 不能把内层一起当成非法名扔掉。
+                index = start + nested
+                continue
+            }
+            if (name.isNotEmpty() && name.all { it.isVariableNameChar() }) add(name)
+            index = value.indexOf("\${", end + 1)
+        }
+    }
+}
+
+private fun Char.isVariableNameChar(): Boolean =
+    this in 'A'..'Z' || this in 'a'..'z' || this in '0'..'9' ||
+        this == '_' || this == '.' || this == '-'
 
 /** 变量替换；未定义的变量保留原样（校验器会先给出警告）。 */
 fun resolveVariables(value: String?, variables: Map<String, String>): String? {

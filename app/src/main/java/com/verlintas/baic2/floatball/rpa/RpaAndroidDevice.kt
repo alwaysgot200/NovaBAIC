@@ -28,7 +28,6 @@ import com.verlintas.baic2.device.api.OcrLine
 import com.verlintas.baic2.device.api.OcrProvider
 import com.verlintas.baic2.floatball.auto.AssistsA11yBridge
 import com.verlintas.baic2.floatball.auto.CvMatch
-import com.verlintas.baic2.floatball.auto.FrameSource
 import com.verlintas.baic2.floatball.auto.ImChatNavigator
 import com.verlintas.baic2.floatball.auto.ScreenCapture
 import com.verlintas.baic2.floatball.auto.ShizukuInjector
@@ -74,7 +73,6 @@ import kotlinx.coroutines.withContext
 class RpaAndroidDevice @Inject constructor(
     private val bridge: AssistsA11yBridge,
     private val shizuku: ShizukuInjector,
-    private val frameSource: FrameSource,
     private val screenCapture: ScreenCapture,
     private val ocr: OcrProvider,
     private val templateMatcher: RpaTemplateMatcher,
@@ -232,23 +230,11 @@ class RpaAndroidDevice @Inject constructor(
 
     // ------------------------- 配置页 / 就绪门辅助 -------------------------
 
-    /** 布局分析器帧源：优先 a11y 截图，其次 Shizuku / 投影（仅用于编辑，不参与执行分流）。 */
-    suspend fun inspectorFrame(): Bitmap? = frameSource.grabFrame().getOrNull()
-
     /**
      * 「以图找图」配置页帧源：与 VISION 执行线路同源（Shizuku / 投影），
      * 即使本机开着 a11y 也不借用 a11y 截图，确保配置出来的模板所见即所得。
      */
     suspend fun visionConfigFrame(): Bitmap? = visionFrame()
-
-    /** 布局分析器节点树（AssistsCore 原始 NodeTree）。 */
-    suspend fun inspectorNodeTree(): AssistsCore.NodeTree? = withContext(Dispatchers.Main) {
-        runCatching { AssistsCore.getRootNodeTree() }.getOrNull()
-    }
-
-    suspend fun inspectorNodeTreeJson(): String = withContext(Dispatchers.Main) {
-        runCatching { AssistsCore.getRootNodeTreeJson(prettyPrint = true) }.getOrDefault("")
-    }
 
     /** 以图找图配置页：对保存的模板做即时匹配测试。 */
     suspend fun testTemplate(

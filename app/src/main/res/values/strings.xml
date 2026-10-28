@@ -1432,7 +1432,7 @@
     <string name="float_rpa_a11y_disabled">当前模式未启用 a11y 线路</string>
     <string name="float_rpa_a11y_empty">尚未配置 a11y 定位</string>
     <string name="float_rpa_a11y_configured">已配置 %1$d 个选择器条件</string>
-    <string name="float_rpa_a11y_open_inspector">打开布局分析器</string>
+    <string name="float_rpa_a11y_external_hint">要分析目标 App：请切到目标 App，从悬浮球「更多 → 布局分析」打开分析器，选中节点后点「应用到当前步骤」；也可直接点下方「在目标应用拾取」。</string>
     <string name="float_rpa_a11y_clear">清除</string>
     <string name="float_rpa_a11y_selector_n">选择器 %1$d</string>
     <string name="float_rpa_a11y_pick">多个匹配时</string>
@@ -1445,6 +1445,7 @@
     <string name="float_rpa_vision_configured">主定位：%1$s</string>
     <string name="float_rpa_vision_fallback_configured">兜底：%1$s</string>
     <string name="float_rpa_vision_open">打开以图找图</string>
+    <string name="float_rpa_vision_refresh">刷新</string>
     <string name="float_rpa_vision_clear">清除</string>
     <string name="float_rpa_vision_primary">主定位</string>
     <string name="float_rpa_vision_fallback">兜底定位</string>
@@ -1605,36 +1606,6 @@
     <string name="float_rpa_quickfind_error_too_large">图片比当前画面大，无法匹配</string>
     <string name="float_rpa_quickfind_idle_only">以图找图仅在空闲状态可用</string>
     <string name="float_rpa_quickfind_open_failed">无法打开以图找图，请稍后重试</string>
-
-    <!-- RPA 自动化：Android 界面布局分析器 -->
-    <string name="float_rpa_inspector_title">布局分析器</string>
-    <string name="float_rpa_inspector_capture">抓取界面</string>
-    <string name="float_rpa_inspector_refresh">刷新</string>
-    <string name="float_rpa_inspector_loading">正在抓取界面…</string>
-    <string name="float_rpa_inspector_need_a11y">需要开启无障碍服务才能分析界面布局</string>
-    <string name="float_rpa_inspector_error">分析失败：%1$s</string>
-    <string name="float_rpa_inspector_no_frame">暂无界面快照</string>
-    <string name="float_rpa_inspector_frame_hint">点击画面中的元素框选中节点；点击下方列表也可选中。</string>
-    <string name="float_rpa_inspector_nodes">节点 %1$d 个</string>
-    <string name="float_rpa_inspector_filters">过滤</string>
-    <string name="float_rpa_inspector_filter_all">全部</string>
-    <string name="float_rpa_inspector_filter_clickable">可点击</string>
-    <string name="float_rpa_inspector_filter_editable">可编辑</string>
-    <string name="float_rpa_inspector_filter_text">有文本</string>
-    <string name="float_rpa_inspector_selected">选中节点</string>
-    <string name="float_rpa_inspector_attrs">文本 %1$s · 描述 %2$s · id %3$s · 类 %4$s</string>
-    <string name="float_rpa_inspector_flags">可点击 %1$s · 可编辑 %2$s · 可滚动 %3$s · 可见 %4$s</string>
-    <string name="float_rpa_inspector_bounds">坐标 %1$s</string>
-    <string name="float_rpa_inspector_selector">生成选择器条件</string>
-    <string name="float_rpa_inspector_include_text">文本</string>
-    <string name="float_rpa_inspector_include_desc">描述</string>
-    <string name="float_rpa_inspector_include_id">viewId</string>
-    <string name="float_rpa_inspector_include_class">类名</string>
-    <string name="float_rpa_inspector_include_clickable">仅可点击</string>
-    <string name="float_rpa_inspector_include_editable">仅可编辑</string>
-    <string name="float_rpa_inspector_generate">应用到当前动作</string>
-    <string name="float_rpa_inspector_tag_clickable">可点击</string>
-    <string name="float_rpa_inspector_tag_editable">可编辑</string>
 
     <!-- RPA 自动化：以图找图 -->
     <string name="float_rpa_vision_title">以图找图</string>

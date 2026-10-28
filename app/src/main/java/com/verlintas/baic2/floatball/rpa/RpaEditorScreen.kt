@@ -71,6 +71,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -115,6 +116,7 @@ import com.verlintas.rpa.store.RpaScriptStore
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
@@ -201,7 +203,6 @@ internal fun RpaEditorScreen(
     onRefreshCapabilities: () -> Unit,
     onGrantProjection: () -> Unit,
     onOpenShizuku: () -> Unit,
-    onOpenInspector: (String) -> Unit,
     onOpenVision: (String) -> Unit,
     onStartPick: (RpaPickKind) -> Unit,
     onRun: () -> Unit,
@@ -222,6 +223,11 @@ internal fun RpaEditorScreen(
     }
 
     val selectedStep = script.steps.firstOrNull { it.id == selectedStepId }
+    // 拾取 / 分析器 / 以图找图回跳：属性页首帧把该步骤滚到视口顶部，
+    // 否则视口停在脚本设置卡，用户看不到刚写入该动作的定位结果。
+    var focusStepOnce by remember {
+        mutableStateOf(openPropsInitially && selectedStep != null)
+    }
     val issues: List<RpaIssue> = remember(script, capabilities) {
         RpaValidator.validate(script) +
             RpaReadiness.check(script, capabilities) { sid, tid -> store.templateExists(sid, tid) }
@@ -288,8 +294,8 @@ internal fun RpaEditorScreen(
                         step = selectedStep,
                         capabilities = capabilities,
                         running = running,
+                        scrollToStep = focusStepOnce,
                         onScriptChange = onScriptChange,
-                        onOpenInspector = onOpenInspector,
                         onOpenVision = onOpenVision,
                         onStartPick = onStartPick,
                         onBackToFlow = { tab = EditorTab.FLOW },
@@ -1127,14 +1133,26 @@ private fun PropertiesPane(
     step: RpaStep?,
     capabilities: RpaCapabilities,
     running: Boolean,
+    scrollToStep: Boolean,
     onScriptChange: (RpaScript) -> Unit,
-    onOpenInspector: (String) -> Unit,
     onOpenVision: (String) -> Unit,
     onStartPick: (RpaPickKind) -> Unit,
     onBackToFlow: () -> Unit,
 ) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(scrollToStep, step?.id) {
+        if (scrollToStep && step != null) {
+            // 等首帧布局完成再滚：否则滚动请求会早于 LazyColumn 首次 measure
+            // 被忽略，视口仍停在脚本设置卡。第 0 项恒为脚本设置卡，步骤
+            // 属性从第 1 项开始。
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { it > 1 }
+            listState.scrollToItem(1)
+        }
+    }
     LazyColumn(
         modifier = modifier.fillMaxSize(),
+        state = listState,
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
     ) {
         item {
@@ -1202,7 +1220,6 @@ private fun PropertiesPane(
                                 ),
                             )
                         },
-                        onOpenInspector = { onOpenInspector(step.id) },
                         onOpenVision = { onOpenVision(step.id) },
                         onPickA11y = { onStartPick(RpaPickKind.A11Y) },
                         onPickVision = { onStartPick(RpaPickKind.VISION) },
@@ -1804,7 +1821,6 @@ private fun TargetCards(
     step: RpaStep,
     enabled: Boolean,
     onStepChange: (RpaStep) -> Unit,
-    onOpenInspector: () -> Unit,
     onOpenVision: () -> Unit,
     onPickA11y: () -> Unit,
     onPickVision: () -> Unit,
@@ -1824,18 +1840,13 @@ private fun TargetCards(
     val vision = step.target?.vision
 
     RpaCard(modifier = Modifier.padding(top = 8.dp).alpha(if (a11yEnabled) 1f else 0.55f)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RpaSectionTitle(
-                text = stringResource(R.string.float_rpa_a11y_section),
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(
-                onClick = onOpenInspector,
-                enabled = enabled && a11yEnabled,
-            ) {
-                Text(stringResource(R.string.float_rpa_a11y_open_inspector))
-            }
-        }
+        RpaSectionTitle(text = stringResource(R.string.float_rpa_a11y_section))
+        Text(
+            text = stringResource(R.string.float_rpa_a11y_external_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
         OutlinedButton(
             onClick = onPickA11y,
             enabled = enabled && a11yEnabled,

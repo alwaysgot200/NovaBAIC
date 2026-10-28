@@ -1336,7 +1336,7 @@
     <string name="float_rpa_a11y_disabled">The a11y line is disabled in the current mode</string>
     <string name="float_rpa_a11y_empty">No a11y target configured</string>
     <string name="float_rpa_a11y_configured">%1$d selector conditions configured</string>
-    <string name="float_rpa_a11y_open_inspector">Open layout inspector</string>
+    <string name="float_rpa_a11y_external_hint">To analyse a target app, switch to it and open the inspector from the floating ball menu (More → Layout analysis), then apply the selected node to this step; or use the pick button below.</string>
     <string name="float_rpa_a11y_clear">Clear</string>
     <string name="float_rpa_a11y_selector_n">Selector %1$d</string>
     <string name="float_rpa_a11y_pick">When multiple match</string>
@@ -1349,6 +1349,7 @@
     <string name="float_rpa_vision_configured">Primary: %1$s</string>
     <string name="float_rpa_vision_fallback_configured">Fallback: %1$s</string>
     <string name="float_rpa_vision_open">Open image search</string>
+    <string name="float_rpa_vision_refresh">Refresh</string>
     <string name="float_rpa_vision_clear">Clear</string>
     <string name="float_rpa_vision_primary">Primary target</string>
     <string name="float_rpa_vision_fallback">Fallback target</string>
@@ -1506,35 +1507,6 @@
     <string name="float_rpa_quickfind_error_too_large">The image is larger than the current screen and cannot be matched</string>
     <string name="float_rpa_quickfind_idle_only">Image search is only available when idle</string>
     <string name="float_rpa_quickfind_open_failed">Could not open image search; try again later</string>
-
-    <string name="float_rpa_inspector_title">Layout inspector</string>
-    <string name="float_rpa_inspector_capture">Capture UI</string>
-    <string name="float_rpa_inspector_refresh">Refresh</string>
-    <string name="float_rpa_inspector_loading">Capturing UI…</string>
-    <string name="float_rpa_inspector_need_a11y">Enable the accessibility service to inspect the UI layout</string>
-    <string name="float_rpa_inspector_error">Inspection failed: %1$s</string>
-    <string name="float_rpa_inspector_no_frame">No UI snapshot yet</string>
-    <string name="float_rpa_inspector_frame_hint">Tap an element box to select a node; you can also select from the list below.</string>
-    <string name="float_rpa_inspector_nodes">%1$d nodes</string>
-    <string name="float_rpa_inspector_filters">Filters</string>
-    <string name="float_rpa_inspector_filter_all">All</string>
-    <string name="float_rpa_inspector_filter_clickable">Clickable</string>
-    <string name="float_rpa_inspector_filter_editable">Editable</string>
-    <string name="float_rpa_inspector_filter_text">Has text</string>
-    <string name="float_rpa_inspector_selected">Selected node</string>
-    <string name="float_rpa_inspector_attrs">Text %1$s · Description %2$s · id %3$s · Class %4$s</string>
-    <string name="float_rpa_inspector_flags">Clickable %1$s · Editable %2$s · Scrollable %3$s · Visible %4$s</string>
-    <string name="float_rpa_inspector_bounds">Bounds %1$s</string>
-    <string name="float_rpa_inspector_selector">Generate selector conditions</string>
-    <string name="float_rpa_inspector_include_text">Text</string>
-    <string name="float_rpa_inspector_include_desc">Description</string>
-    <string name="float_rpa_inspector_include_id">viewId</string>
-    <string name="float_rpa_inspector_include_class">Class name</string>
-    <string name="float_rpa_inspector_include_clickable">Clickable only</string>
-    <string name="float_rpa_inspector_include_editable">Editable only</string>
-    <string name="float_rpa_inspector_generate">Apply to current action</string>
-    <string name="float_rpa_inspector_tag_clickable">Clickable</string>
-    <string name="float_rpa_inspector_tag_editable">Editable</string>
 
     <string name="float_rpa_vision_title">Image search</string>
     <string name="float_rpa_vision_capture">Capture screen</string>

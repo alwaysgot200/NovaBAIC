@@ -219,7 +219,7 @@ internal fun RpaVisionScreen(
                                 onClick = { scope.launch { reload() } },
                                 enabled = !loading,
                             ) {
-                                Text(stringResource(R.string.float_rpa_inspector_refresh))
+                                Text(stringResource(R.string.float_rpa_vision_refresh))
                             }
                         }
                         Text(
