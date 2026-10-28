@@ -299,6 +299,12 @@ class FloatBallService : Service() {
     private var ballTuckAnimator: ValueAnimator? = null
     private val ballTuckRunnable = Runnable { tuckBallIfIdle() }
 
+    /**
+     * 最近一次布局的屏幕宽：[onConfigurationChanged] 触发时 [ballX] 仍是旧屏
+     * 逻辑坐标，用它回算旋转前的贴边侧，再把球映射到新屏同侧。
+     */
+    private var lastScreenWidth = 0
+
     private var askJob: Job? = null
 
     /** 输入行手动发送的回合（区别于长按单次 askJob / 连续模式 diffEngine）。 */
@@ -331,10 +337,28 @@ class FloatBallService : Service() {
         }
         val params = ballParams ?: return
         val view = ball?.root ?: return
+        val oldScreenWidth = lastScreenWidth
+        val ballSize = dp(FloatUi.BALL_SIZE_DP)
+        val screen = screenSize()
         // 收起态下 params.x 是屏外可视值，必须用逻辑坐标重钳，否则旋转后跑位。
         val logicalX = if (ballX != Int.MIN_VALUE) ballX else params.x
         val logicalY = if (ballY != Int.MIN_VALUE) ballY else params.y
-        moveBallWithFollow(view, params, logicalX, logicalY)
+        // 旧屏逻辑坐标在新屏没有意义：贴边球（已收起，或按旧屏宽仍贴边）回同侧
+        // 完整可见位置再重新计时；中间球维持原 x 交给边界钳制。
+        val side = ballTuckSide ?: if (oldScreenWidth > 0) {
+            FloatEdgeTuck.sideFor(
+                logicalX = logicalX,
+                screenWidth = oldScreenWidth,
+                ballSize = ballSize,
+                proximity = dp(FloatEdgeTuck.EDGE_PROXIMITY_DP),
+            )
+        } else {
+            null
+        }
+        val targetX = side?.let {
+            FloatEdgeTuck.edgeX(it, screen.x, ballSize)
+        } ?: logicalX
+        moveBallWithFollow(view, params, targetX, logicalY)
     }
 
     override fun onCreate() {
@@ -919,6 +943,7 @@ class FloatBallService : Service() {
         // 用 ballX/ballY 重建球，不同步会把球瞬移回旧位。
         ballX = params.x
         ballY = params.y
+        lastScreenWidth = screen.x
         followMenu(params)
         // 拖动/旋转结束后重新计时；连续 MOVE 会不断重置，不会提前收起。
         scheduleEdgeTuck()
@@ -1888,6 +1913,7 @@ class FloatBallService : Service() {
     private fun showBall() {
         if (ball != null || analyze != null || rpaChromeGate.isHidden) return
         val screen = screenSize()
+        lastScreenWidth = screen.x
         if (ballX == Int.MIN_VALUE) {
             ballX = screen.x - dp(FloatUi.BALL_SIZE_DP + FloatUi.MARGIN_DP)
             ballY = screen.y / 3

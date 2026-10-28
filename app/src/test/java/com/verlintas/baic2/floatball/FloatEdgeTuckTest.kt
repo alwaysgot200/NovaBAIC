@@ -121,6 +121,49 @@ class FloatEdgeTuckTest {
     }
 
     @Test
+    fun `edge x keeps the ball fully visible on the same side`() {
+        assertEquals(
+            0,
+            FloatEdgeTuck.edgeX(FloatEdgeTuck.Side.LEFT, screenWidth, ballSize),
+        )
+        assertEquals(
+            screenWidth - ballSize,
+            FloatEdgeTuck.edgeX(FloatEdgeTuck.Side.RIGHT, screenWidth, ballSize),
+        )
+    }
+
+    @Test
+    fun `portrait tucked ball maps onto the same landscape edge`() {
+        // 竖屏 720 宽收起在右缘：逻辑 x=616 距右缘 16dp，旋转后应落到 1280-88。
+        val portraitWidth = 720
+        val landscapeWidth = 1280
+        val ball = 88
+        val side = FloatEdgeTuck.sideFor(
+            logicalX = portraitWidth - ball - 16,
+            screenWidth = portraitWidth,
+            ballSize = ball,
+            proximity = 16,
+        )
+        assertEquals(FloatEdgeTuck.Side.RIGHT, side)
+        assertEquals(
+            1192,
+            FloatEdgeTuck.edgeX(requireNotNull(side), landscapeWidth, ball),
+        )
+        assertEquals(
+            0,
+            FloatEdgeTuck.edgeX(FloatEdgeTuck.Side.LEFT, landscapeWidth, ball),
+        )
+    }
+
+    @Test
+    fun `edge x never leaves the screen narrower than the ball`() {
+        assertEquals(
+            0,
+            FloatEdgeTuck.edgeX(FloatEdgeTuck.Side.RIGHT, 40, ballSize),
+        )
+    }
+
+    @Test
     fun `degenerate geometry never identifies a side`() {
         assertNull(FloatEdgeTuck.sideFor(0, 0, ballSize, proximity))
         assertNull(FloatEdgeTuck.sideFor(0, -1, ballSize, proximity))

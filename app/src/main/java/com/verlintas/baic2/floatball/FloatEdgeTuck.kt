@@ -81,4 +81,15 @@ internal object FloatEdgeTuck {
             Side.RIGHT -> screenWidth - visible
         }
     }
+
+    /**
+     * 贴边侧在新屏幕上的**完全可见**落点：左 0，右 `screenWidth - ballSize`。
+     *
+     * 旋转/分屏后旧屏的逻辑 x 已失去意义；贴边球应回到新屏同一侧贴边，
+     * 再交给 [sideFor] 重新计时收起，而不是停在屏幕中间。
+     */
+    fun edgeX(side: Side, screenWidth: Int, ballSize: Int): Int = when (side) {
+        Side.LEFT -> 0
+        Side.RIGHT -> (screenWidth - ballSize).coerceAtLeast(0)
+    }
 }
