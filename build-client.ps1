@@ -909,8 +909,8 @@ function Test-SplitVisible {
     return $false
 }
 
-# 扇形菜单窗口是否可见 (App overlay 中大于悬浮球的竖形块: 实测 frame 约 196x351)。
-# 球=88x88、分屏=屏宽，均不会误命中；优先 frame，回退 mAttrs。
+# 扇形菜单窗口是否可见 (App overlay 中的方形菜单: 实测 360x360, 旧版约 196x351)。
+# 球=88x88、分屏=屏宽 (fillx)，均不会误命中；优先 frame，回退 mAttrs。
 function Test-FanMenuVisible {
     param([Parameter(Mandatory = $true)][string] $Device)
 
@@ -927,7 +927,7 @@ function Test-FanMenuVisible {
             $m = [regex]::Match($block, 'mAttrs=\{\(\d+,\d+\)\((\d+)x(\d+)\)')
             if ($m.Success) { $w = [int] $m.Groups[1].Value; $h = [int] $m.Groups[2].Value }
         }
-        if ($w -ge 150 -and $w -le 320 -and $h -ge 250 -and $h -le 600) { return $true }
+        if ($w -ge 150 -and $w -le 480 -and $h -ge 250 -and $h -le 620) { return $true }
     }
     return $false
 }
@@ -1013,6 +1013,10 @@ function Do-AdvisorSmoke {
     Start-App $Device
     Start-Sleep -Seconds 3
     Grant-DevicePermissions -Device $Device | Out-Null
+    # MANAGE_EXTERNAL_STORAGE 首次由 deny 切到 allow 时系统会直接杀进程（Android 16 实测），
+    # 杀完只会有广播拉起进程，不会启动悬浮球服务 —— 必须再主动冷启动一次。
+    Start-App $Device
+    Start-Sleep -Seconds 2
     if (-not (Wait-A11yBound -Device $Device)) {
         Write-Host '警告: 无障碍服务 15s 内未绑定, 长按将走投影授权路径。' -ForegroundColor Yellow
     }
