@@ -168,9 +168,12 @@ android {
         // 共享测试夹具：JVM 单测与真机 androidTest 复用同一份 7 步微信脚本。
         // 只存在于测试源集，不进入 release / 发行包。
         val sharedTestSources = file("src/sharedTest/java")
+        val rpaTestSources = rootProject.file("vendor/RPA/src/test/java")
         getByName("test") {
             java.srcDir(sharedTestSources)
             kotlin.srcDir(sharedTestSources)
+            java.srcDir(rpaTestSources)
+            kotlin.srcDir(rpaTestSources)
         }
         getByName("androidTest") {
             java.srcDir(sharedTestSources)

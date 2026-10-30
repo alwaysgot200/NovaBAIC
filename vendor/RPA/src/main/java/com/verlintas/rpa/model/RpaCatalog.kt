@@ -38,6 +38,10 @@ enum class RpaParamKind {
     RATIO,
     ENUM,
     BOOLEAN,
+    URL,
+    TARGET_STEP,
+    VAR_LIST,
+    CUSTOM_ACTION,
 }
 
 data class RpaParamSpec(
@@ -158,6 +162,51 @@ object RpaCatalog {
             category = RpaActionCategory.FLOW,
             needsTarget = false,
         ),
+        RpaActionSpec(
+            action = RpaAction.OPEN_LINK,
+            category = RpaActionCategory.APP,
+            needsTarget = false,
+            params = listOf(RpaParamSpec("url", RpaParamKind.URL, required = true)),
+        ),
+        RpaActionSpec(
+            action = RpaAction.SET_VARIABLE,
+            category = RpaActionCategory.INPUT,
+            needsTarget = false,
+            params = listOf(RpaParamSpec("assignments", RpaParamKind.VAR_LIST, required = true)),
+        ),
+        RpaActionSpec(
+            action = RpaAction.CONTROL_FLOW,
+            category = RpaActionCategory.FLOW,
+            needsTarget = false,
+            params = listOf(
+                RpaParamSpec(
+                    key = "flowKind",
+                    kind = RpaParamKind.ENUM,
+                    required = true,
+                    enumValues = RpaFlowKind.entries.map { it.name },
+                ),
+                RpaParamSpec("gotoStepId", RpaParamKind.TARGET_STEP),
+            ),
+        ),
+        RpaActionSpec(
+            action = RpaAction.COMPOSITE,
+            category = RpaActionCategory.FLOW,
+            needsTarget = false,
+            params = listOf(
+                RpaParamSpec("customActionId", RpaParamKind.CUSTOM_ACTION, required = true),
+            ),
+        ),
+        // P2 占位（裁定③）：目录可见、UI 置灰标「规划中」，运行显式报 unsupported_action。
+        RpaActionSpec(
+            action = RpaAction.TAP_COLOR,
+            category = RpaActionCategory.TARGET,
+            needsTarget = true,
+        ),
+        RpaActionSpec(
+            action = RpaAction.GESTURE_MULTI,
+            category = RpaActionCategory.GESTURE,
+            needsTarget = false,
+        ),
     )
 
     private val byAction: Map<RpaAction, RpaActionSpec> = actions.associateBy { it.action }
@@ -201,6 +250,19 @@ object RpaCatalog {
             RpaAction.TAP,
             RpaAction.LONG_PRESS,
             RpaAction.COMMENT,
+            -> base
+            RpaAction.OPEN_LINK -> base.copy(params = RpaParams(url = "https://"))
+            RpaAction.SET_VARIABLE -> base.copy(
+                params = RpaParams(
+                    assignments = listOf(RpaVarAssign(variableName = "var1")),
+                ),
+            )
+            RpaAction.CONTROL_FLOW -> base.copy(
+                params = RpaParams(flowKind = RpaFlowKind.STOP),
+            )
+            RpaAction.COMPOSITE -> base
+            RpaAction.TAP_COLOR,
+            RpaAction.GESTURE_MULTI,
             -> base
         }
     }
@@ -261,6 +323,22 @@ object RpaLimits {
     const val MIN_SWIPE_DURATION_MS = 50
     const val MAX_SWIPE_DURATION_MS = 3_000
 
+    /** 百分比坐标允许越界区间（图6「100.9%」、图11 ROI「103%」）。 */
+    const val RATIO_MIN = -0.2f
+    const val RATIO_MAX = 1.2f
+
+    /** 跳转次数上限（PC 循环双保险之一，超限 jump_limit_exceeded）。 */
+    const val MAX_JUMPS = 1000
+
+    /** 重复次数上限（步骤 repeat 与整脚本 global.repeat 共用）。 */
+    const val MAX_REPEAT = 999
+
+    /** 复合动作递归展开深度上限。 */
+    const val MAX_CUSTOM_DEPTH = 3
+
+    /** 打开链接的 scheme 白名单。 */
+    val URL_SCHEMES = setOf("http", "https", "mailto", "tel", "sms")
+
     fun stepTimeout(value: Long): Long =
         if (value <= 0) MIN_STEP_TIMEOUT_MS else value.coerceAtMost(MAX_STEP_TIMEOUT_MS)
 
@@ -269,6 +347,12 @@ object RpaLimits {
     fun retries(value: Int): Int = value.coerceIn(0, MAX_RETRIES)
 
     fun delayMs(value: Long): Long = value.coerceIn(0L, MAX_DELAY_MS)
+
+    /** 步骤 repeat：总执行次数（≥1）。 */
+    fun repeat(value: Int): Int = value.coerceIn(1, MAX_REPEAT)
+
+    /** 整脚本循环次数（0/1 = 跑一遍）。 */
+    fun scriptRepeat(value: Int): Int = if (value <= 0) 1 else value.coerceAtMost(MAX_REPEAT)
 
     private const val MIN_STEP_TIMEOUT_MS = 100L
 }
@@ -293,9 +377,13 @@ object RpaValidator {
         }
         val duplicateIds = script.steps.groupBy { it.id }.filterValues { it.size > 1 }.keys
         duplicateIds.forEach { id -> add(RpaIssue("step_id_duplicate", id)) }
+        val duplicateCustomIds =
+            script.customActions.groupBy { it.id }.filterValues { it.size > 1 }.keys
+        duplicateCustomIds.forEach { id -> add(RpaIssue("custom_action_id_duplicate", id)) }
 
-        val declared = script.variables.keys
-        script.steps.forEach { step ->
+        // 变量声明：脚本级 variables + SET_VARIABLE（声明语义，消除误报）。
+        val declared = script.declaredVariableKeys()
+        (script.steps + script.customActions.flatMap { it.steps }).forEach { step ->
             if (step.enabled) addAll(validateStep(script, step))
             step.referencedVariables().filterNot { it in declared }.forEach { name ->
                 add(
@@ -306,6 +394,75 @@ object RpaValidator {
                         detail = name,
                     ),
                 )
+            }
+        }
+
+        // 复合动作内部也要过校验（跳转范围只在本动作内）。
+        script.customActions.forEach { custom ->
+            val ids = custom.steps.map { it.id }.toSet()
+            custom.steps.forEach { step ->
+                addAll(validateJump(script, step, ids, scopeDetail = custom.id))
+            }
+            custom.steps.groupBy { it.id }.filterValues { it.size > 1 }.keys.forEach { id ->
+                add(RpaIssue("step_id_duplicate", id, detail = custom.id))
+            }
+        }
+
+        // 跳转图校验（顶层范围）+ 复合展开深度。
+        val topLevelIds = script.steps.map { it.id }.toSet()
+        script.steps.forEach { step -> addAll(validateJump(script, step, topLevelIds)) }
+        addAll(validateCompositeGraph(script))
+    }
+
+    /** 跳转目标必须存在于同一作用域（顶层 / 同一复合动作内），禁止跨边界（§五）。 */
+    private fun validateJump(
+        script: RpaScript,
+        step: RpaStep,
+        scopeIds: Set<String>,
+        scopeDetail: String = "",
+    ): List<RpaIssue> = buildList {
+        if (step.action != RpaAction.CONTROL_FLOW) return@buildList
+        if (step.params.flowKind != RpaFlowKind.GOTO) return@buildList
+        val targetId = step.params.gotoStepId
+        if (targetId.isNullOrBlank()) {
+            add(RpaIssue("param_goto_missing", step.id, detail = scopeDetail))
+            return@buildList
+        }
+        if (targetId !in scopeIds) {
+            add(RpaIssue("jump_target_missing", step.id, detail = targetId))
+            return@buildList
+        }
+        // 无条件自跳转 = 死循环（条件自环留给用户表达「重试直到」）。
+        if (targetId == step.id && step.runCondition == RpaStepCondition.None) {
+            add(RpaIssue("jump_self_unconditional", step.id))
+        }
+    }
+
+    /** 复合动作引用图：悬空引用 / 循环引用 / 展开深度超限。 */
+    private fun validateCompositeGraph(script: RpaScript): List<RpaIssue> = buildList {
+        val customById = script.customActions.associateBy { it.id }
+
+        fun depthOf(id: String, seen: Set<String>): Int {
+            if (id in seen) return RpaLimits.MAX_CUSTOM_DEPTH + 1
+            val custom = customById[id] ?: return 0
+            val nested = custom.steps.filter { it.action == RpaAction.COMPOSITE }
+            return 1 + (nested.mapNotNull { it.params.customActionId }
+                .maxOfOrNull { depthOf(it, seen + id) } ?: 0)
+        }
+
+        (script.steps + script.customActions.flatMap { it.steps }).forEach { step ->
+            if (step.action != RpaAction.COMPOSITE) return@forEach
+            val id = step.params.customActionId
+            if (id.isNullOrBlank()) {
+                add(RpaIssue("param_custom_action_missing", step.id))
+                return@forEach
+            }
+            if (id !in customById) {
+                add(RpaIssue("custom_action_unknown", step.id, detail = id))
+                return@forEach
+            }
+            if (depthOf(id, emptySet()) > RpaLimits.MAX_CUSTOM_DEPTH) {
+                add(RpaIssue("composite_depth_exceeded", step.id, detail = id))
             }
         }
     }
@@ -324,6 +481,10 @@ object RpaValidator {
         if (step.delayBeforeMs > RpaLimits.MAX_DELAY_MS || step.delayAfterMs > RpaLimits.MAX_DELAY_MS) {
             add(RpaIssue("step_delay_over_limit", step.id, RpaIssueSeverity.WARNING))
         }
+        if (step.repeat < 1 || step.repeat > RpaLimits.MAX_REPEAT) {
+            add(RpaIssue("step_repeat_invalid", step.id, RpaIssueSeverity.WARNING))
+        }
+        addAll(validateCondition(step))
         val target = step.target
         when (step.action) {
             RpaAction.LAUNCH_APP -> if (step.params.packageName.isNullOrBlank()) {
@@ -361,6 +522,67 @@ object RpaValidator {
             RpaAction.LONG_PRESS,
             RpaAction.WAIT_FOR_TARGET,
             -> if (target == null) add(RpaIssue("target_missing", step.id))
+            RpaAction.OPEN_LINK -> {
+                val url = step.params.url
+                if (url.isNullOrBlank()) {
+                    add(RpaIssue("param_url_missing", step.id))
+                } else {
+                    val scheme = url.substringBefore(':', missingDelimiterValue = "").lowercase()
+                    if (scheme !in RpaLimits.URL_SCHEMES) {
+                        add(RpaIssue("param_url_scheme_invalid", step.id, detail = scheme))
+                    }
+                }
+            }
+            RpaAction.SET_VARIABLE -> {
+                if (step.params.assignments.isEmpty()) {
+                    add(RpaIssue("param_assignments_missing", step.id))
+                }
+                step.params.assignments.forEach { assign ->
+                    if (assign.variableName.isBlank() ||
+                        !assign.variableName.all { it.isVariableNameChar() }
+                    ) {
+                        add(RpaIssue("param_variable_name_invalid", step.id, detail = assign.variableName))
+                    }
+                    if (assign.source == RpaVarSource.VARIABLE_REF && assign.value.isBlank()) {
+                        add(RpaIssue("param_variable_ref_missing", step.id, detail = assign.variableName))
+                    }
+                    if (assign.source == RpaVarSource.INCREMENT &&
+                        assign.value.isNotBlank() &&
+                        assign.value.toDoubleOrNull() == null
+                    ) {
+                        add(
+                            RpaIssue(
+                                "param_variable_increment_invalid",
+                                step.id,
+                                RpaIssueSeverity.WARNING,
+                                detail = assign.variableName,
+                            ),
+                        )
+                    }
+                }
+            }
+            RpaAction.CONTROL_FLOW -> {
+                when (step.params.flowKind) {
+                    null -> add(RpaIssue("param_flow_kind_missing", step.id))
+                    RpaFlowKind.GOTO -> if (step.params.gotoStepId.isNullOrBlank()) {
+                        add(RpaIssue("param_goto_missing", step.id))
+                    }
+                    RpaFlowKind.STOP -> Unit
+                }
+            }
+            RpaAction.COMPOSITE -> if (step.params.customActionId.isNullOrBlank()) {
+                add(RpaIssue("param_custom_action_missing", step.id))
+            }
+            RpaAction.TAP_COLOR,
+            RpaAction.GESTURE_MULTI,
+            -> add(
+                RpaIssue(
+                    "action_unsupported_p2",
+                    step.id,
+                    RpaIssueSeverity.WARNING,
+                    step.action.name,
+                ),
+            )
             RpaAction.SCROLL,
             RpaAction.COMMENT,
             -> Unit
@@ -368,6 +590,40 @@ object RpaValidator {
 
         if (target != null) {
             addAll(validateTarget(script, step, target))
+        }
+    }
+
+    /** 运行条件载荷校验（公式表达式只做静态解析，无副作用）。 */
+    private fun validateCondition(step: RpaStep): List<RpaIssue> = buildList {
+        when (val condition = step.runCondition) {
+            RpaStepCondition.None -> Unit
+            is RpaStepCondition.Variable -> {
+                if (condition.lhs.isBlank()) {
+                    add(RpaIssue("condition_variable_lhs_missing", step.id))
+                }
+                if (condition.rhs.isBlank()) {
+                    add(RpaIssue("condition_variable_rhs_missing", step.id))
+                }
+            }
+            is RpaStepCondition.ImageVisible -> if (condition.templateId.isBlank()) {
+                add(RpaIssue("condition_template_missing", step.id))
+            }
+            is RpaStepCondition.TextVisible -> if (condition.text.isBlank()) {
+                add(RpaIssue("condition_text_missing", step.id))
+            }
+            RpaStepCondition.PrevOk,
+            RpaStepCondition.PrevFail,
+            -> Unit
+            is RpaStepCondition.Expr -> {
+                if (condition.expression.isBlank()) {
+                    add(RpaIssue("condition_expr_missing", step.id))
+                } else {
+                    val detail = RpaConditionDsl.validate(condition.expression)
+                    if (detail != null) {
+                        add(RpaIssue("condition_expr_invalid", step.id, detail = detail))
+                    }
+                }
+            }
         }
     }
 
@@ -436,11 +692,15 @@ object RpaValidator {
             RpaVisionKind.OCR_TEXT -> if (locator.ocrText.isNullOrBlank()) {
                 add(RpaIssue("vision_ocr_text_missing", step.id))
             }
-            RpaVisionKind.RATIO -> if (locator.ratioX !in 0f..1f || locator.ratioY !in 0f..1f) {
+            RpaVisionKind.RATIO -> if (
+                locator.ratioX !in RpaLimits.RATIO_MIN..RpaLimits.RATIO_MAX ||
+                locator.ratioY !in RpaLimits.RATIO_MIN..RpaLimits.RATIO_MAX
+            ) {
                 add(RpaIssue("vision_ratio_invalid", step.id))
             }
         }
-        if (locator.threshold !in 0.1..0.99) {
+        // 相似度滑块口径 = 图11 的 50%–99%。
+        if (locator.threshold !in 0.5..0.99) {
             add(RpaIssue("vision_threshold_invalid", step.id, RpaIssueSeverity.WARNING))
         }
         if (locator.region != null && !locator.region.isValid()) {
@@ -502,14 +762,21 @@ object RpaReadiness {
         // （用户从 DUAL 切到 A11Y 后删除模板是合法操作）。
         if (RpaModePolicy.visionEnabled(script.mode)) {
             script.steps.filter { it.enabled }.forEach { step ->
-                val vision = step.target?.vision ?: return@forEach
-                listOfNotNull(vision.primary, vision.fallback).forEach { locator ->
+                val vision = step.target?.vision
+                listOfNotNull(vision?.primary, vision?.fallback).forEach { locator ->
                     if (locator.kind == RpaVisionKind.TEMPLATE) {
                         val templateId = locator.templateId
                         if (!templateId.isNullOrBlank() && !templateExists(script.id, templateId)) {
                             add(RpaIssue("ready_template_missing", step.id))
                         }
                     }
+                }
+                // 运行条件「出现图片」的模板同样要就绪（图7 条件自带模板）。
+                val condition = step.runCondition
+                if (condition is RpaStepCondition.ImageVisible &&
+                    !templateExists(script.id, condition.templateId)
+                ) {
+                    add(RpaIssue("ready_template_missing", step.id, detail = condition.templateId))
                 }
             }
         }

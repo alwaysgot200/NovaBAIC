@@ -90,8 +90,12 @@ object RpaWechatHelloFixture {
                     vision = RpaVisionSpec(
                         primary = RpaVisionLocator(
                             kind = RpaVisionKind.RATIO,
-                            ratioX = 0.88f,
-                            ratioY = 0.075f,
+                            // 2026-10-28 真机（1080×2460）实测：微信 8.0.79 主页
+                            // 右上角是「+」在 x≈971，搜索放大镜在 x≈870；旧值
+                            // 0.88,0.075 → (950,184) 点到「+」展开菜单，后续步骤
+                            // 全部跑偏（真机日志 ok=true 但落到「发现/附近的人」）。
+                            ratioX = 0.806f,
+                            ratioY = 0.058f,
                             pick = RpaPick.FIRST,
                         ),
                         note = "右上角搜索图标；微信版本变化时用布局分析 / 以图找图校准",
@@ -192,19 +196,22 @@ object RpaWechatHelloFixture {
                             kind = RpaVisionKind.OCR_TEXT,
                             ocrText = "发送",
                             ocrMatch = RpaMatchMode.CONTAINS,
-                            region = RpaRect(0.5f, 0.55f, 1f, 1f),
+                            // 键盘弹起后「发送」文本中心 y≈1358；区域上界取 0.5
+                            // （y=1230）才能完整框住字，旧值 0.55（y=1353）把字
+                            // 上缘切掉，OCR 恒 miss 只剩比例兜底。
+                            region = RpaRect(0.5f, 0.5f, 1f, 1f),
                             pick = RpaPick.BOTTOM_MOST,
                         ),
                         fallback = RpaVisionLocator(
                             kind = RpaVisionKind.RATIO,
-                            ratioX = 0.91f,
+                            ratioX = 0.87f,
                             // 键盘弹出后输入栏上移到 y≈1340–1440，绿色「发送」按钮
-                            // 中心≈(980,1390)，真机 ratio≈(0.907,0.565)；
+                            // 中心≈(941,1358)，真机 ratio≈(0.871,0.552)；
                             // 旧的 0.88 落在键盘键位区，会点空。
-                            ratioY = 0.565f,
+                            ratioY = 0.552f,
                             pick = RpaPick.BOTTOM_MOST,
                         ),
-                        note = "底部右侧 OCR「发送」，失败用比例兜底（键盘弹出后 ratio≈0.565）",
+                        note = "底部右侧 OCR「发送」，失败用比例兜底（键盘弹出后 ratio≈0.552）",
                     ),
                 ),
                 timeoutMs = 6_000,

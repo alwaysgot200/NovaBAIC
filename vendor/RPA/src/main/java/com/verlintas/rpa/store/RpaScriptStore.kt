@@ -35,6 +35,14 @@ data class ScriptListReport(
     val failed: List<String> = emptyList(),
 )
 
+/** 导出三选一（决策①）：`.json` / `.xml` / `.rpa`（完整包）。 */
+enum class RpaExportFormat(val fileExtension: String) {
+    JSON("json"),
+    XML("xml"),
+    PACKAGE("rpa"),
+    ;
+}
+
 /**
  * RPA 文档式存储（与数据库解耦，脚本可备份 / 版本管理）：
  *
@@ -158,6 +166,56 @@ class RpaScriptStore(root: File) {
             updatedAt = now,
         )
     }
+
+    // ------------------------------ 导入导出 ------------------------------
+
+    /**
+     * 导出（决策① 三选一）。PACKAGE 连模板一起打包；单文件 JSON / XML 不含模板，
+     * 导入时引用模板的步骤给警告不阻断（§八）。
+     */
+    @Synchronized
+    fun exportBytes(script: RpaScript, format: RpaExportFormat): ByteArray = when (format) {
+        RpaExportFormat.JSON -> RpaJsonCodec.encode(script)
+        RpaExportFormat.XML -> RpaXmlCodec.encode(script)
+        RpaExportFormat.PACKAGE -> RpaScriptPackage.pack(script, readTemplates(script.id))
+    }
+
+    /**
+     * 导入：按内容自动识别 `.json` / `.xml` / `.rpa`（§八）。
+     * 语义 = **新建脚本文档**（id 冲突自动取新 id，不做合并）；模板先落、脚本后落、
+     * 失败回收，复用 [duplicate] 的防孤儿策略。返回带最新时间戳的入库脚本。
+     */
+    @Synchronized
+    fun importBytes(bytes: ByteArray): Result<RpaScript> = runCatching {
+        require(bytes.isNotEmpty()) { "import_empty" }
+        val isZip = bytes.size >= 4 &&
+            bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
+        val imported: Pair<RpaScript, Map<String, ByteArray>> = when {
+            isZip -> RpaScriptPackage.unpack(bytes).let { it.script to it.templates }
+            looksLikeXml(bytes) -> RpaXmlCodec.decode(bytes) to emptyMap()
+            else -> RpaJsonCodec.decode(bytes) to emptyMap()
+        }
+        var script = imported.first
+        if (script.id.isBlank() || scriptFile(script.id).isFile) {
+            script = script.copy(id = RpaIds.newId("script"))
+        }
+        val templates = imported.second
+        try {
+            templates.forEach { (templateId, png) ->
+                saveTemplate(script.id, templateId, png).getOrThrow()
+            }
+            save(script).getOrThrow()
+        } catch (failure: Throwable) {
+            runCatching { templateDir(script.id).deleteRecursively() }
+            throw failure
+        }
+    }
+
+    private fun readTemplates(scriptId: String): Map<String, ByteArray> =
+        listTemplateIds(scriptId).mapNotNull { templateId ->
+            val file = templateFile(scriptId, templateId)
+            if (file.isFile) runCatching { templateId to file.readBytes() }.getOrNull() else null
+        }.toMap()
 
     // ------------------------------ 模板 ------------------------------
 

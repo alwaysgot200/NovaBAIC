@@ -20,8 +20,12 @@
 package com.verlintas.baic2.floatball.rpa
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -29,10 +33,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -49,12 +55,23 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.verlintas.baic2.R
 import com.verlintas.baic2.device.api.OcrLine
@@ -62,6 +79,7 @@ import com.verlintas.baic2.floatball.AdvisorPage
 import com.verlintas.baic2.floatball.auto.CvMatch
 import com.verlintas.rpa.model.RpaBounds
 import com.verlintas.rpa.model.RpaIds
+import com.verlintas.rpa.model.RpaLimits
 import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaPick
 import com.verlintas.rpa.model.RpaRect
@@ -70,6 +88,9 @@ import com.verlintas.rpa.model.RpaVisionLocator
 import com.verlintas.rpa.model.RpaVisionSpec
 import com.verlintas.rpa.store.RpaScriptStore
 import java.io.ByteArrayOutputStream
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -441,6 +462,7 @@ internal fun RpaVisionScreen(
                         locator = primary,
                         templates = templates,
                         selection = selection,
+                        frame = frame,
                         ratioPicking = ratioPickTarget == false,
                         onChange = { updated ->
                             primary = updated
@@ -584,6 +606,7 @@ internal fun RpaVisionScreen(
                             locator = currentFallback,
                             templates = templates,
                             selection = selection,
+                            frame = frame,
                             ratioPicking = ratioPickTarget == true,
                             onChange = { fallback = it },
                             onRatioPick = {
@@ -639,6 +662,7 @@ private fun LocatorEditorCard(
     locator: RpaVisionLocator,
     templates: List<String>,
     selection: RpaRect?,
+    frame: Bitmap?,
     ratioPicking: Boolean,
     onChange: (RpaVisionLocator) -> Unit,
     onRatioPick: () -> Unit,
@@ -697,20 +721,25 @@ private fun LocatorEditorCard(
                         }
                     }
                 }
+                // 图11 相似度：整数百分比 50–99%，显示当前值；阈值内部仍是 0..1 双精度。
                 Text(
                     text = stringResource(
                         R.string.float_rpa_vision_threshold,
-                        "%.2f".format(locator.threshold),
+                        "${(locator.threshold * 100).roundToInt()}%",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),
                 )
                 Slider(
-                    value = locator.threshold.toFloat(),
-                    onValueChange = {
-                        onChange(locator.copy(threshold = it.toDouble()))
+                    value = ((locator.threshold * 100).roundToInt().coerceIn(50, 99)).toFloat(),
+                    onValueChange = { percent ->
+                        onChange(
+                            locator.copy(
+                                threshold = percent.roundToInt().coerceIn(50, 99) / 100.0,
+                            ),
+                        )
                     },
-                    valueRange = 0.5f..0.99f,
+                    valueRange = 50f..99f,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -721,6 +750,60 @@ private fun LocatorEditorCard(
                     Switch(
                         checked = locator.grayscale,
                         onCheckedChange = { onChange(locator.copy(grayscale = it)) },
+                    )
+                }
+                // 图11 匹配第几（选填，1 起）：多命中时取第 N 个；留空 = 不指定。
+                var matchIndexText by remember(locator.matchIndex) {
+                    mutableStateOf(locator.matchIndex?.toString().orEmpty())
+                }
+                OutlinedTextField(
+                    value = matchIndexText,
+                    onValueChange = { raw ->
+                        matchIndexText = raw
+                        val parsed = raw.trim().toIntOrNull()
+                        onChange(
+                            locator.copy(
+                                matchIndex = when {
+                                    raw.isBlank() -> null
+                                    parsed != null -> parsed.coerceAtLeast(1)
+                                    else -> locator.matchIndex
+                                },
+                            ),
+                        )
+                    },
+                    label = { Text(stringResource(R.string.float_rpa_vision_match_index)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                )
+                // 图11 ☐快速搜图
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = locator.quickSearch,
+                        onCheckedChange = { onChange(locator.copy(quickSearch = it)) },
+                    )
+                    Text(
+                        text = stringResource(R.string.float_rpa_vision_quick_search),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                // 图11「埋图模式」截图截断、语义待确认（P2 待确认）：只落模型默认值字段占位，
+                // 禁用 + 「即将开放」，不做假入口。
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = locator.embedMode,
+                        onValueChange = {},
+                        label = { Text(stringResource(R.string.float_rpa_vision_embed_mode)) },
+                        enabled = false,
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = stringResource(R.string.float_rpa_property_coming_soon),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 8.dp),
                     )
                 }
             }
@@ -843,11 +926,15 @@ private fun LocatorEditorCard(
                     onCheckedChange = { checked ->
                         onChange(
                             locator.copy(
-                                region = if (checked) selection else null,
+                                // 无选区时给整屏默认框，方便直接拖框调整（图11）
+                                region = if (checked) {
+                                    selection ?: RpaRect(0f, 0f, 1f, 1f)
+                                } else {
+                                    null
+                                },
                             ),
                         )
                     },
-                    enabled = selection != null || locator.region != null,
                 )
             }
             Text(
@@ -857,6 +944,61 @@ private fun LocatorEditorCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            val roi = locator.region
+            if (roi != null) {
+                Text(
+                    text = stringResource(R.string.float_rpa_vision_roi_hint),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+                RoiDragBox(
+                    region = roi,
+                    frame = frame,
+                    onChange = { onChange(locator.copy(region = it)) },
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    RoiPercentField(
+                        label = stringResource(R.string.float_rpa_vision_roi_left),
+                        value = roi.left,
+                        range = RpaLimits.RATIO_MIN..(roi.right - ROI_MIN_SIZE),
+                        onChange = { left ->
+                            onChange(locator.copy(region = roi.copy(left = left)))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    RoiPercentField(
+                        label = stringResource(R.string.float_rpa_vision_roi_top),
+                        value = roi.top,
+                        range = RpaLimits.RATIO_MIN..(roi.bottom - ROI_MIN_SIZE),
+                        onChange = { top ->
+                            onChange(locator.copy(region = roi.copy(top = top)))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    RoiPercentField(
+                        label = stringResource(R.string.float_rpa_vision_roi_right),
+                        value = roi.right,
+                        range = (roi.left + ROI_MIN_SIZE)..RpaLimits.RATIO_MAX,
+                        onChange = { right ->
+                            onChange(locator.copy(region = roi.copy(right = right)))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    RoiPercentField(
+                        label = stringResource(R.string.float_rpa_vision_roi_bottom),
+                        value = roi.bottom,
+                        range = (roi.top + ROI_MIN_SIZE)..RpaLimits.RATIO_MAX,
+                        onChange = { bottom ->
+                            onChange(locator.copy(region = roi.copy(bottom = bottom)))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
             if (selection != null) {
                 TextButton(
                     onClick = { onChange(locator.copy(region = selection)) },
@@ -895,15 +1037,242 @@ private fun cropBitmap(bitmap: Bitmap, rect: RpaRect): Bitmap? {
 }
 
 private fun rectSummary(rect: RpaRect): String {
-    val normalized = rect.normalized()
+    // 取原值不钳 0..1：限制区域允许越界（图11），摘要须与四值输入一致。
     return buildString {
-        append((normalized.left * 100).roundToInt())
+        append((rect.left * 100).roundToInt())
         append("%,")
-        append((normalized.top * 100).roundToInt())
+        append((rect.top * 100).roundToInt())
         append("% → ")
-        append((normalized.right * 100).roundToInt())
+        append((rect.right * 100).roundToInt())
         append("%,")
-        append((normalized.bottom * 100).roundToInt())
+        append((rect.bottom * 100).roundToInt())
         append('%')
+    }
+}
+
+// ---------------------------- 图11 限制区域（ROI）编辑 ----------------------------
+
+/** ROI 最小边长（比例），保证拖框 / 改值后仍是有效矩形。 */
+private const val ROI_MIN_SIZE = 0.01f
+
+/** 图11 限制区域单值输入：% 整数、可越界；文本与数值双向同步（拖框改数值即回显）。 */
+@Composable
+private fun RoiPercentField(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var text by remember(value) { mutableStateOf((value * 100).roundToInt().toString()) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { raw ->
+            text = raw
+            raw.trim().toIntOrNull()?.let { percent ->
+                onChange(
+                    (percent / 100f)
+                        .coerceAtLeast(range.start)
+                        .coerceAtMost(range.endInclusive),
+                )
+            }
+        },
+        label = { Text(label) },
+        singleLine = true,
+        modifier = modifier,
+    )
+}
+
+/** 拖框手势：框内拖动平移，四角拖动改大小。 */
+private enum class RoiDrag {
+    MOVE,
+    LEFT_TOP,
+    RIGHT_TOP,
+    LEFT_BOTTOM,
+    RIGHT_BOTTOM,
+}
+
+/** 拖框画布的映射几何：单位方形（0..1）→ 画布像素矩形。 */
+private data class RoiFit(
+    val left: Float,
+    val top: Float,
+    val width: Float,
+    val height: Float,
+)
+
+private fun roiFit(canvas: IntSize, frame: Bitmap?): RoiFit {
+    if (canvas.width <= 0 || canvas.height <= 0) return RoiFit(0f, 0f, 0f, 0f)
+    if (frame == null) {
+        // 无帧时整块画布当单位方形，拖框仍可用（纯比例坐标）。
+        return RoiFit(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat())
+    }
+    val scale = min(
+        canvas.width.toFloat() / frame.width.coerceAtLeast(1),
+        canvas.height.toFloat() / frame.height.coerceAtLeast(1),
+    )
+    val width = frame.width * scale
+    val height = frame.height * scale
+    return RoiFit(
+        left = (canvas.width - width) / 2f,
+        top = (canvas.height - height) / 2f,
+        width = width,
+        height = height,
+    )
+}
+
+private fun roiDragAt(offset: Offset, region: RpaRect, fit: RoiFit, handlePx: Float): RoiDrag? {
+    if (fit.width <= 0f || fit.height <= 0f) return null
+    val left = fit.left + region.left * fit.width
+    val top = fit.top + region.top * fit.height
+    val right = fit.left + region.right * fit.width
+    val bottom = fit.top + region.bottom * fit.height
+    fun near(x: Float, y: Float): Boolean =
+        abs(offset.x - x) <= handlePx && abs(offset.y - y) <= handlePx
+    return when {
+        near(left, top) -> RoiDrag.LEFT_TOP
+        near(right, top) -> RoiDrag.RIGHT_TOP
+        near(left, bottom) -> RoiDrag.LEFT_BOTTOM
+        near(right, bottom) -> RoiDrag.RIGHT_BOTTOM
+        offset.x in min(left, right)..max(left, right) &&
+            offset.y in min(top, bottom)..max(top, bottom) -> RoiDrag.MOVE
+        else -> null
+    }
+}
+
+/** 拖框增量 → 新 ROI（比例值可越界，钳在 [RpaLimits] 允许区间并保持最小框）。 */
+private fun RpaRect.shiftRoi(drag: RoiDrag, du: Float, dv: Float): RpaRect {
+    val lo = RpaLimits.RATIO_MIN
+    val hi = RpaLimits.RATIO_MAX
+    return when (drag) {
+        RoiDrag.MOVE -> {
+            val width = right - left
+            val height = bottom - top
+            val newLeft = (left + du)
+                .coerceAtLeast(lo)
+                .coerceAtMost((hi - width).coerceAtLeast(lo))
+            val newTop = (top + dv)
+                .coerceAtLeast(lo)
+                .coerceAtMost((hi - height).coerceAtLeast(lo))
+            RpaRect(newLeft, newTop, newLeft + width, newTop + height)
+        }
+        RoiDrag.LEFT_TOP -> copy(
+            left = (left + du).coerceAtLeast(lo).coerceAtMost(right - ROI_MIN_SIZE),
+            top = (top + dv).coerceAtLeast(lo).coerceAtMost(bottom - ROI_MIN_SIZE),
+        )
+        RoiDrag.RIGHT_TOP -> copy(
+            right = (right + du).coerceAtLeast(left + ROI_MIN_SIZE).coerceAtMost(hi),
+            top = (top + dv).coerceAtLeast(lo).coerceAtMost(bottom - ROI_MIN_SIZE),
+        )
+        RoiDrag.LEFT_BOTTOM -> copy(
+            left = (left + du).coerceAtLeast(lo).coerceAtMost(right - ROI_MIN_SIZE),
+            bottom = (bottom + dv).coerceAtLeast(top + ROI_MIN_SIZE).coerceAtMost(hi),
+        )
+        RoiDrag.RIGHT_BOTTOM -> copy(
+            right = (right + du).coerceAtLeast(left + ROI_MIN_SIZE).coerceAtMost(hi),
+            bottom = (bottom + dv).coerceAtLeast(top + ROI_MIN_SIZE).coerceAtMost(hi),
+        )
+    }
+}
+
+/**
+ * 图11 限制区域拖框：框内拖动平移、四角拖动改大小，与四值输入双向同步。
+ * 底图取当前帧（无帧时用占位底色）；越界值仅作示意绘制，最终以数值为准。
+ */
+@Composable
+private fun RoiDragBox(
+    region: RpaRect,
+    frame: Bitmap?,
+    onChange: (RpaRect) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val image = remember(frame) { frame?.asImageBitmap() }
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    val fit = remember(canvasSize, frame) { roiFit(canvasSize, frame) }
+    // 手势回调跨多次拖动持有引用：读最新状态，pointerInput 键稳定不重启手势。
+    val currentRegion by rememberUpdatedState(region)
+    val currentFit by rememberUpdatedState(fit)
+    val currentChange by rememberUpdatedState(onChange)
+    var dragMode by remember { mutableStateOf<RoiDrag?>(null) }
+    val density = LocalDensity.current
+    val handlePx = with(density) { 12.dp.toPx() }
+    val strokeWidth = with(density) { 2.dp.toPx() }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(160.dp)
+            .background(Color(0x22000000)),
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .onSizeChanged { canvasSize = it }
+                .pointerInput(frame) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            dragMode = roiDragAt(offset, currentRegion, currentFit, handlePx)
+                        },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            val mode = dragMode ?: return@detectDragGestures
+                            val geometry = currentFit
+                            if (geometry.width <= 0f || geometry.height <= 0f) {
+                                return@detectDragGestures
+                            }
+                            currentChange(
+                                currentRegion.shiftRoi(
+                                    mode,
+                                    amount.x / geometry.width,
+                                    amount.y / geometry.height,
+                                ),
+                            )
+                        },
+                        onDragEnd = { dragMode = null },
+                        onDragCancel = { dragMode = null },
+                    )
+                },
+        ) {
+            if (fit.width > 0f && fit.height > 0f) {
+                val frameImage = image
+                if (frameImage != null && frame != null) {
+                    drawImage(
+                        image = frameImage,
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(frame.width, frame.height),
+                        dstOffset = IntOffset(fit.left.roundToInt(), fit.top.roundToInt()),
+                        dstSize = IntSize(fit.width.roundToInt(), fit.height.roundToInt()),
+                    )
+                }
+                val left = fit.left + region.left * fit.width
+                val top = fit.top + region.top * fit.height
+                val width = max((region.right - region.left) * fit.width, 1f)
+                val height = max((region.bottom - region.top) * fit.height, 1f)
+                val color = Color(0xFFFF3D71)
+                drawRect(
+                    color = Color(0x33FF3D71),
+                    topLeft = Offset(left, top),
+                    size = Size(width, height),
+                )
+                drawRect(
+                    color = color,
+                    topLeft = Offset(left, top),
+                    size = Size(width, height),
+                    style = Stroke(width = strokeWidth),
+                )
+                // 四角手柄：拖拽改大小的抓取点
+                listOf(
+                    Offset(left, top),
+                    Offset(left + width, top),
+                    Offset(left, top + height),
+                    Offset(left + width, top + height),
+                ).forEach { corner ->
+                    drawRect(
+                        color = color,
+                        topLeft = Offset(corner.x - handlePx / 2, corner.y - handlePx / 2),
+                        size = Size(handlePx, handlePx),
+                    )
+                }
+            }
+        }
     }
 }

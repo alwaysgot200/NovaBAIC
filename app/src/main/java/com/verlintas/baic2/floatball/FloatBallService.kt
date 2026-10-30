@@ -31,6 +31,7 @@ import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -72,11 +73,17 @@ import com.verlintas.baic2.EXTRA_OPEN_TAB
 import com.verlintas.baic2.MainActivity
 import com.verlintas.baic2.R
 import com.verlintas.baic2.TAB_SETTINGS
+import com.verlintas.baic2.device.api.ShellBridge
+import com.verlintas.baic2.device.api.ShellResult
+import com.verlintas.baic2.device.api.ShellState
+import com.verlintas.baic2.device.impl.a11y.Baic2AccessibilityService
 import com.verlintas.baic2.floatball.director.AdvisorNotificationListener
 import com.verlintas.baic2.floatball.auto.AssistsA11yBridge
 import com.verlintas.baic2.floatball.auto.AutoSelectionStore
 import com.verlintas.baic2.floatball.auto.AutoSessionScheduler
 import com.verlintas.baic2.floatball.auto.CompanionWindowController
+import com.verlintas.baic2.floatball.auto.ShizukuInjector
+import com.verlintas.baic2.floatball.auto.WechatTreeUnlock
 import com.verlintas.baic2.floatball.home.AdvisorRunState
 import com.verlintas.baic2.floatball.home.AdvisorSelfWindowGate
 import com.verlintas.baic2.floatball.notify.EscalationNotifier
@@ -182,6 +189,10 @@ class FloatBallService : Service() {
     /** a11y 连接状态：分析器打开期间断开即自动收起，恢复悬浮球。 */
     @Inject
     lateinit var a11yBridge: AssistsA11yBridge
+
+    /** Shizuku shell 通道：无障碍「已启用但未绑定」死状态的自愈重绑（可选，不阻断主流程）。 */
+    @Inject
+    lateinit var shellBridge: ShellBridge
 
     /** RPA 全屏工具 / 后台运行的悬浮球隐藏闸门（原因集合，服务侧统一裁决）。 */
     @Inject
@@ -2951,10 +2962,42 @@ class FloatBallService : Service() {
             return
         }
         if (analyze != null) return
-        if (AssistsService.getOrNull() == null || !a11yBridge.connected.value) {
-            showAnalyzeA11yNotice()
+        if (!a11yReady()) {
+            // 服务绑定是异步的（进程刚拉起 / 系统重绑中），先给一小段就绪窗口；
+            // 超时且设置里已开启 = 「已启用但未绑定」死状态，自动自愈重绑再等一轮，
+            // 仍缺才报因引导——系统重绑不该先弹窗要用户兜底（2026-10-29 反馈）。
+            scope.launch {
+                var ready = pollA11yReady(A11Y_REBIND_WAIT_MS)
+                if (!ready && a11yEnabledInSettings()) {
+                    rebindA11yService()
+                    ready = pollA11yReady(A11Y_REBIND_WAIT_MS)
+                }
+                if (ready && mode == Mode.IDLE && analyze == null) {
+                    openAnalyzeWithUnlock()
+                } else {
+                    showAnalyzeA11yNotice()
+                }
+            }
             return
         }
+        scope.launch { openAnalyzeWithUnlock() }
+    }
+
+    /** 无障碍就绪口径：服务实例已活（[AssistsService.getOrNull]）且桥接已 attach。 */
+    private fun a11yReady(): Boolean =
+        AssistsService.getOrNull() != null && a11yBridge.connected.value
+
+    /** 轮询等待无障碍就绪（绑定/重绑窗口期）；超时返回最终状态。 */
+    private suspend fun pollA11yReady(timeoutMs: Long): Boolean {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (a11yReady()) return true
+            delay(A11Y_REBIND_POLL_MS)
+        }
+        return a11yReady()
+    }
+
+    private fun startAnalyzeOverlay() {
         val foreground = runCatching {
             AssistsCore.getPackageName(AssistsCore.NodeLookupScope.ActiveWindow)
         }.getOrDefault("")
@@ -2978,6 +3021,8 @@ class FloatBallService : Service() {
                 analyze = null
                 analyzeA11yJob?.cancel()
                 analyzeA11yJob = null
+                // 微信树解锁的配对还原（release 幂等，非 Held 时零动作）。
+                scope.launch { WechatTreeUnlock.release(this@FloatBallService, shellBridge) }
                 restoreBall()
             },
             onFailure = { toast(R.string.float_rpa_analyze_start_failed) },
@@ -3005,6 +3050,42 @@ class FloatBallService : Service() {
                     analyze?.close()
                 }
             }
+        }
+    }
+
+    /**
+     * 打开分析器前的微信节点树解锁（2026-10-29 真机取证）：微信 8.x 在启用的
+     * 无障碍服务列表里没有 TalkBack 家族服务时会摘空自身控件树（381 字节空根），
+     * 布局分析只能拿到空根。[WechatTreeUnlock] 在分析会话级临时启用「随选朗读」
+     * 解锁，覆盖层关闭（[startAnalyzeOverlay] 的 onClosed）时配对还原；树本就
+     * 可读或用户已开 TalkBack 家族服务时零改动。自动通道不可用时不阻断打开
+     * （仍可走以图找图 / OCR），但必须 toast 报因，不静默失效。
+     */
+    private suspend fun openAnalyzeWithUnlock() {
+        when (WechatTreeUnlock.acquire(this, shellBridge)) {
+            is WechatTreeUnlock.Outcome.Held -> {
+                toast(R.string.float_rpa_analyze_unlock_held)
+                // 写 enabled_accessibility_services 会触发全部 a11y 服务解绑重绑，
+                // 先等自身服务回归再开覆盖层，否则采集直接失败。
+                if (!pollA11yReady(A11Y_REBIND_WAIT_MS)) {
+                    WechatTreeUnlock.release(this, shellBridge)
+                    showAnalyzeA11yNotice()
+                    return
+                }
+            }
+            is WechatTreeUnlock.Outcome.Failed ->
+                toast(R.string.float_rpa_analyze_unlock_failed)
+            else -> Unit
+        }
+        if (mode != Mode.IDLE || analyze != null) {
+            // 解锁等待窗口内状态已变（任务启动/分析器已开）：配对还原不留残留。
+            WechatTreeUnlock.release(this, shellBridge)
+            return
+        }
+        startAnalyzeOverlay()
+        if (analyze == null) {
+            // 门禁未放行（前台是本 App 等）：就地还原。
+            WechatTreeUnlock.release(this, shellBridge)
         }
     }
 
@@ -3054,36 +3135,126 @@ class FloatBallService : Service() {
         }
     }
 
-    /** 无障碍未开启：贴球卡片给出「去开启 / 取消」，不启动任何分析窗口。 */
+    /**
+     * 无障碍未就绪：贴球卡片给出缺项与操作指引，不启动任何分析窗口。
+     * 区分两种缺项（2026-10-28 用户反馈：开关明明开着却提示「需要开启」）：
+     * 系统设置里未开启 → 「去开启」；已开启但服务未连接（进程被杀后的
+     * 「已启用但未绑定」死状态）→ 「重试连接」自愈重绑 + 「去设置」手动兜底。
+     */
     private fun showAnalyzeA11yNotice() {
         if (cardMenuView != null || ball == null) return
         revealBall(restartTimer = false)
         val params = ballParams ?: return
         val screen = screenSize()
+        val unbound = a11yEnabledInSettings()
+        val items = buildList {
+            if (unbound) {
+                add(FloatUi.ListMenuItem(R.string.float_rpa_analyze_rebind) { retryAnalyzeA11y() })
+            }
+            add(
+                FloatUi.ListMenuItem(R.string.float_rpa_analyze_open_a11y) {
+                    startActivity(
+                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                },
+            )
+            add(FloatUi.ListMenuItem(R.string.float_rpa_analyze_cancel) {})
+        }
         val menu = FloatUi.buildGroupedListMenu(
             this,
-            groups = listOf(
-                FloatUi.ListMenuGroup(
-                    items = listOf(
-                        FloatUi.ListMenuItem(R.string.float_rpa_analyze_open_a11y) {
-                            startActivity(
-                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        },
-                        FloatUi.ListMenuItem(R.string.float_rpa_analyze_cancel) {},
-                    ),
-                ),
-            ),
+            groups = listOf(FloatUi.ListMenuGroup(items = items)),
             ballCenterX = params.x + dp(FloatUi.BALL_SIZE_DP) / 2,
             ballCenterY = params.y + dp(FloatUi.BALL_SIZE_DP) / 2,
             screenWidth = screen.x,
             screenHeight = screen.y,
-            titleRes = R.string.float_rpa_analyze_need_a11y,
+            titleRes = if (unbound) {
+                R.string.float_rpa_analyze_a11y_unbound
+            } else {
+                R.string.float_rpa_analyze_need_a11y
+            },
             onDismiss = { dismissCardMenu() },
         )
         attachCardMenu(menu)
     }
+
+    /**
+     * 「重试连接」：先自愈重绑（[rebindA11yService]），再等绑定就绪后重开分析器；
+     * 仍失败报因并引导手动开关，不静默吞掉。
+     */
+    private fun retryAnalyzeA11y() {
+        dismissCardMenu()
+        scope.launch {
+            rebindA11yService()
+            if (pollA11yReady(A11Y_REBIND_WAIT_MS) && mode == Mode.IDLE && analyze == null) {
+                openAnalyzeWithUnlock()
+            } else {
+                toast(R.string.float_rpa_analyze_rebind_failed)
+            }
+        }
+    }
+
+    private var lastRebindAt = 0L
+
+    /**
+     * 自愈重绑（best-effort）：系统偶发「已启用但未绑定」死状态（设置开关在、
+     * Bound services 为空），重写 `enabled_accessibility_services` 触发系统重绑
+     * （adb 侧 delete/put 已证可即刻救活，2026-10-28 真机验证）。需要 shell
+     * 通道（Shizuku）；不可用时静默返回，由「去设置」手动兜底。
+     */
+    private suspend fun rebindA11yService() {
+        if (shellBridge.state.value != ShellState.Ready) return
+        // 冷却节流（2026-10-29 性能事故）：settings delete/put 会迫使系统全部
+        // 无障碍服务解绑重绑，高频触发时整机明显卡顿；冷却窗口内重复调用
+        // 直接跳过（调用方随后的 pollA11yReady 仍会复检绑定结果）。
+        val now = SystemClock.uptimeMillis()
+        if (now - lastRebindAt < REBIND_COOLDOWN_MS) return
+        lastRebindAt = now
+        runCatching {
+            val current = runCatching {
+                when (
+                    val result = shellBridge.exec(
+                        "settings get secure enabled_accessibility_services",
+                        timeoutMs = SHELL_REBIND_TIMEOUT_MS,
+                        maxOutputChars = 2_000,
+                    )
+                ) {
+                    is ShellResult.Output -> result.stdout.trim()
+                    else -> ""
+                }
+            }.getOrDefault("")
+            if (current.isEmpty() || current == "null") return
+            shellBridge.exec(
+                "settings delete secure enabled_accessibility_services",
+                timeoutMs = SHELL_REBIND_TIMEOUT_MS,
+                maxOutputChars = 200,
+            )
+            shellBridge.exec(
+                "settings put secure enabled_accessibility_services " +
+                    ShizukuInjector.shellQuote(current),
+                timeoutMs = SHELL_REBIND_TIMEOUT_MS,
+                maxOutputChars = 200,
+            )
+            shellBridge.exec(
+                "settings put secure accessibility_enabled 1",
+                timeoutMs = SHELL_REBIND_TIMEOUT_MS,
+                maxOutputChars = 200,
+            )
+        }
+    }
+
+    /** 无障碍开关在系统设置里是否已启用本服务（区分「未开启」与「已开启未连接」）。 */
+    private fun a11yEnabledInSettings(): Boolean = runCatching {
+        val enabled = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        ).orEmpty()
+        val self = ComponentName(this, Baic2AccessibilityService::class.java)
+        enabled.split(':').any {
+            it.equals(self.flattenToString(), ignoreCase = true) ||
+                it.equals(self.flattenToShortString(), ignoreCase = true)
+        }
+    }.getOrDefault(false)
 
     /** 「好参谋设置」：好参谋专属设置页（抓帧节奏/权限直达/会话管理等）。 */
     private fun openAdvisorSettings() {
@@ -3487,6 +3658,16 @@ class FloatBallService : Service() {
 
         /** 确认不可见后的退场稳定时间（方案 §5.1 第 2 条）。 */
         const val SELF_HIDE_SETTLE_MS = 250L
+
+        /** 无障碍就绪门的重绑等待窗口与轮询间隔（绑定是异步的，先等再判缺项）。 */
+        const val A11Y_REBIND_WAIT_MS = 2_000L
+        const val A11Y_REBIND_POLL_MS = 200L
+
+        /** 自愈重绑的 shell 命令超时（settings 读写是轻操作）。 */
+        const val SHELL_REBIND_TIMEOUT_MS = 3_000L
+
+        /** 自愈重绑冷却窗口：settings delete/put 引发全局无障碍重绑风暴，禁止高频触发。 */
+        const val REBIND_COOLDOWN_MS = 10_000L
 
         const val CONSENT_SETTLE_MS = 350L
 

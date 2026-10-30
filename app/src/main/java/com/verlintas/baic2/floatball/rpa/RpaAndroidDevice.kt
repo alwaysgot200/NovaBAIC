@@ -19,10 +19,12 @@
 
 package com.verlintas.baic2.floatball.rpa
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.net.Uri
 import android.view.accessibility.AccessibilityNodeInfo
 import com.verlintas.baic2.device.api.OcrLine
 import com.verlintas.baic2.device.api.OcrProvider
@@ -100,8 +102,19 @@ class RpaAndroidDevice @Inject constructor(
             )
         }
 
-    override suspend fun launchApp(packageName: String, line: RpaLine): Result<Unit> =
+    override suspend fun launchApp(
+        packageName: String,
+        line: RpaLine,
+        restart: Boolean,
+        closeOnly: Boolean,
+    ): Result<Unit> =
         withContext(Dispatchers.IO) {
+            // 图5「仅关闭应用 / 重新打开(重启)」：关闭相先行；仅关闭到此为止
+            if (closeOnly) return@withContext closeApp(packageName, line)
+            if (restart) {
+                val closed = closeApp(packageName, line)
+                if (closed.isFailure) return@withContext closed
+            }
             val launch = runCatching {
                 context.packageManager.getLaunchIntentForPackage(packageName)
             }.getOrNull() ?: return@withContext Result.failure(
@@ -147,10 +160,16 @@ class RpaAndroidDevice @Inject constructor(
         }
     }
 
-    override suspend fun tap(x: Int, y: Int, line: RpaLine): Result<Unit> = when (line) {
-        RpaLine.A11Y -> bridge.tap(x, y)
-        RpaLine.VISION -> shizuku.tap(x, y)
-    }
+    override suspend fun tap(x: Int, y: Int, line: RpaLine, holdMs: Int): Result<Unit> =
+        if (holdMs > 0) {
+            // 图6「按下时间」：同点滑动 = 按住该毫秒再抬起；两线各走本线滑动通道
+            swipe(x, y, x, y, holdMs, line)
+        } else {
+            when (line) {
+                RpaLine.A11Y -> bridge.tap(x, y)
+                RpaLine.VISION -> shizuku.tap(x, y)
+            }
+        }
 
     override suspend fun longPress(x: Int, y: Int, line: RpaLine): Result<Unit> = when (line) {
         RpaLine.A11Y -> bridge.longPress(x, y)
@@ -195,6 +214,17 @@ class RpaAndroidDevice @Inject constructor(
         RpaLine.A11Y -> bridge.pressKey(key)
         RpaLine.VISION -> shizuku.pressKey(key)
     }
+
+    override suspend fun openLink(url: String, line: RpaLine): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            // scheme 白名单由校验器 / 引擎把关；平台级 startActivity 与线路无关
+            //（与 launchApp 同口径），无处理应用时异常如实带回，不吞错。
+            runCatching {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }
+        }
 
     override suspend fun locate(
         scriptId: String,
@@ -491,6 +521,43 @@ class RpaAndroidDevice @Inject constructor(
         return false
     }
 
+    /**
+     * 关闭应用（图5「仅关闭应用 / 重新打开(重启)」的关闭相）：
+     * 平台级 [ActivityManager.killBackgroundProcesses]（与 startActivity 同级、
+     * 线路中立）先杀后台进程；VISION 线另有本线 Shizuku `am force-stop` 强杀通道；
+     * A11Y 线没有 shell 强杀通道——前台进程杀不掉时显式报 `close_app_failed`，
+     * 绝不静默假装关闭成功。
+     */
+    private suspend fun closeApp(packageName: String, line: RpaLine): Result<Unit> {
+        runCatching {
+            context.getSystemService(ActivityManager::class.java)
+                ?.killBackgroundProcesses(packageName)
+        }
+        if (line == RpaLine.VISION && shizuku.available) {
+            val stopped = shizuku.forceStop(packageName)
+            if (stopped.isFailure) {
+                return Result.failure(
+                    IllegalStateException(
+                        "close_app_failed: ${stopped.exceptionOrNull()?.message}",
+                    ),
+                )
+            }
+        }
+        if (!foregroundProbeAvailable(line)) {
+            // 与 launchApp 同口径：纯投影视觉线无前台探针只能尽力关闭；
+            // A11Y 线探针缺失必须报因，不许静默。
+            if (line == RpaLine.A11Y) {
+                return Result.failure(IllegalStateException("a11y_not_ready"))
+            }
+            return Result.success(Unit)
+        }
+        repeat(CLOSE_POLLS) {
+            if (foregroundPackage(line) != packageName) return Result.success(Unit)
+            delay(CLOSE_POLL_MS)
+        }
+        return Result.failure(IllegalStateException("close_app_failed: $packageName"))
+    }
+
     private fun Bitmap.toJpegBytes(): ByteArray? = runCatching {
         ByteArrayOutputStream().use { sink ->
             if (compress(Bitmap.CompressFormat.JPEG, OCR_JPEG_QUALITY, sink)) {
@@ -520,6 +587,8 @@ class RpaAndroidDevice @Inject constructor(
     private companion object {
         const val FOREGROUND_POLLS = 20
         const val FOREGROUND_POLL_MS = 250L
+        const val CLOSE_POLLS = 10
+        const val CLOSE_POLL_MS = 200L
         const val LAUNCH_SETTLE_MS = 1_200L
         const val OCR_JPEG_QUALITY = 90
     }

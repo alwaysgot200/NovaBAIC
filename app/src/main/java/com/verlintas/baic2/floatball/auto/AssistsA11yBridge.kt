@@ -261,6 +261,73 @@ class AssistsA11yBridge @Inject constructor(
         return results.values.toList()
     }
 
+    // ── 微信对象操作（照搬 Assists Simple 的 ScrollContacts / GestureBottomTab） ──
+
+    /**
+     * 按文本定位并点击对象——Simple「手势点击微信主页底部Tab」的对象链：
+     * 节点自身 ACTION_CLICK → 首个可点击父级 ACTION_CLICK（OpenWechat/ScrollContacts
+     * 对底部 tab 的做法）→ 节点中心手势点击兜底（nodeGestureClick 等价，走已验证的
+     * legacy 手势通道）。微信对象树需触摸探索解锁，[TouchExplorationGate] 自动脉冲并恢复。
+     */
+    suspend fun clickText(query: String): Result<Unit> = withContext(Dispatchers.Main) {
+        val needle = query.trim()
+        if (needle.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("click_text_empty_query"))
+        }
+        AssistsService.getOrNull() ?: return@withContext notEnabled()
+        TouchExplorationGate.acquire()
+        try {
+            TouchExplorationGate.awaitTreeSettled()
+            val clicked = with(AssistsCore) {
+                findByText(needle).any { node ->
+                    node.click() ||
+                        node.findFirstParentClickable()?.click() == true ||
+                        run {
+                            val bounds = node.getBoundsInScreen()
+                            !bounds.isEmpty &&
+                                legacy.tap(bounds.centerX(), bounds.centerY()).isSuccess
+                        }
+                }
+            }
+            if (clicked) {
+                Result.success(Unit)
+            } else {
+                Result.failure(IllegalStateException("click_text_miss: no node matched \"$query\""))
+            }
+        } finally {
+            TouchExplorationGate.release()
+        }
+    }
+
+    /**
+     * 列表滚动——Simple「自动滚动微信通讯录」的对象链：对
+     * ListView/RecyclerView 容器执行 ACTION_SCROLL_FORWARD/BACKWARD；节点滚动
+     * 全 miss 时回退屏幕中线 1/3 幅手势滑动。自带触摸探索脉冲。
+     */
+    suspend fun scrollList(forward: Boolean): Result<Unit> = withContext(Dispatchers.Main) {
+        val service = AssistsService.getOrNull() ?: return@withContext notEnabled()
+        TouchExplorationGate.acquire()
+        try {
+            TouchExplorationGate.awaitTreeSettled()
+            val moved = with(AssistsCore) {
+                SCROLL_TAGS.any { tag ->
+                    findByTags(tag).any { node ->
+                        if (forward) node.scrollForward() else node.scrollBackward()
+                    }
+                }
+            }
+            if (moved) return@withContext Result.success(Unit)
+            val metrics = service.resources.displayMetrics
+            val x = metrics.widthPixels / 2
+            val top = metrics.heightPixels / 3
+            val bottom = metrics.heightPixels * 2 / 3
+            val (y1, y2) = if (forward) bottom to top else top to bottom
+            legacy.swipe(x, y1, x, y2, SCROLL_SWIPE_MS)
+        } finally {
+            TouchExplorationGate.release()
+        }
+    }
+
     override fun screenText(maxNodes: Int): String {
         if (maxNodes <= 0) return ""
         val lines = mutableListOf<String>()
@@ -345,6 +412,15 @@ class AssistsA11yBridge @Inject constructor(
 
         /** typeText 多候选注入的最多可编辑节点数（防大列表全扫）。 */
         const val EDITABLE_CANDIDATE_MAX = 5
+
+        /** scrollList 的容器标签（照搬 Simple ScrollContacts 的口径）。 */
+        val SCROLL_TAGS = listOf(
+            "android.widget.ListView",
+            "androidx.recyclerview.widget.RecyclerView",
+        )
+
+        /** scrollList 手势兜底的滑动时长。 */
+        const val SCROLL_SWIPE_MS = 400
 
         const val TAG = "AssistsA11yBridge"
     }

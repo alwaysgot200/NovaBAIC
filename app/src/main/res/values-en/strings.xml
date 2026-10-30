@@ -1484,7 +1484,9 @@
     <string name="float_rpa_analyze_window_foreground">(Foreground)</string>
     <string name="float_rpa_analyze_window_background">(Background)</string>
     <!-- Target apps that hide accessibility nodes (WeChat 8.x) expose only the window root -->
-    <string name="float_rpa_analyze_empty_tree_notice">Only the window root was read: the target app may mark its views as not important for accessibility (e.g. WeChat 8.x). Toggle the accessibility service off and on, then refresh; if it is still empty, use template matching / OCR instead.</string>
+    <string name="float_rpa_analyze_empty_tree_notice">Only the window root was read: the target app may mark its views as not important for accessibility (e.g. WeChat 8.x). Enable \"Select to Speak\" (TalkBack suite) in system accessibility settings, then return and refresh to unlock; if it is still empty, use template matching / OCR instead.</string>
+    <string name="float_rpa_analyze_unlock_held">Temporarily enabled \"Select to Speak\" to unlock the target app\'s view tree (e.g. WeChat 8.x); it turns off automatically when the inspector closes</string>
+    <string name="float_rpa_analyze_unlock_failed">Could not unlock the target app\'s view tree automatically (auto channel unavailable). Enable \"Select to Speak\" in system accessibility settings and analyze again</string>
     <!-- Overlapping-region inspection: tap to cycle / long-press for the full stack -->
     <string name="float_rpa_analyze_stack_cycle">Overlap %1$d/%2$d · tap to cycle</string>
     <string name="float_rpa_analyze_stack_list">List overlapping views (%1$d)</string>

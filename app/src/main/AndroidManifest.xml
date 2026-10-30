@@ -88,6 +88,17 @@
                 android:resource="@xml/shizuku_installer_paths" />
         </provider>
 
+        <!-- RPA 脚本导出分享：cacheDir/rpa_export/ 下的 .json/.xml/.rpa 以 content:// 分享 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.rpaexport"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/rpa_export_paths" />
+        </provider>
+
         <!-- 好参谋自更新：系统 PackageInstaller 会话安装结果回调 -->
         <receiver
             android:name=".floatball.update.UpdateInstallReceiver"

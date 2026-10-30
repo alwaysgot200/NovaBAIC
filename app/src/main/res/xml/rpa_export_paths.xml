@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RPA 脚本导出分享（方案 §九）：只暴露 cacheDir/rpa_export/ 下的导出文件。 -->
+<paths>
+    <cache-path name="rpa_export" path="rpa_export/" />
+</paths>

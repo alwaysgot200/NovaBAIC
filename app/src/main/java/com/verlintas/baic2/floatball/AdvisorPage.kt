@@ -21,6 +21,7 @@ package com.verlintas.baic2.floatball
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -56,21 +57,23 @@ import com.verlintas.baic2.designsystem.Baic2Spacing
 internal fun AdvisorPage(
     title: String,
     onBack: () -> Unit,
+    actions: @Composable RowScope.() -> Unit = {},
     content: @Composable (PaddingValues) -> Unit,
 ) {
     Scaffold(
-        topBar = { AdvisorTopBar(title = title, onBack = onBack) },
+        topBar = { AdvisorTopBar(title = title, onBack = onBack, actions = actions) },
         containerColor = Color.Transparent,
     ) { innerPadding ->
         content(innerPadding)
     }
 }
 
-/** 统一顶栏：返回图标 + 加粗标题，避让节奏与主框架 DockAnchor 一致。 */
+/** 统一顶栏：返回图标 + 加粗标题，避让节奏与主框架 DockAnchor 一致；[actions] 为页面级操作位。 */
 @Composable
 private fun AdvisorTopBar(
     title: String,
     onBack: () -> Unit,
+    actions: @Composable RowScope.() -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -95,6 +98,7 @@ private fun AdvisorTopBar(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        actions()
     }
 }
 

@@ -25,6 +25,7 @@ import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.verlintas.baic2.floatball.auto.FrameSource
+import com.verlintas.baic2.floatball.auto.TouchExplorationGate
 import com.ven.assists.AssistsCore
 import com.ven.assists.service.AssistsService
 import javax.inject.Inject
@@ -80,12 +81,34 @@ class RpaAnalyzeCapture @Inject constructor(
             }
         }
 
-        val collected = withContext(Dispatchers.Main) {
+        var collected = withContext(Dispatchers.Main) {
             runCatching { collectWindows(selfPackage) }
                 .getOrElse { t ->
                     android.util.Log.w(TAG, "collect windows failed", t)
                     Collected(emptyList(), 0, ERROR_NODE_TREE, 0)
                 }
+        }
+        // 微信等反自动化 App 会把自身进程的无障碍树摘空（根节点无子节点，整树
+        // 只剩 1 个空节点）。真机取证（2026-10-28）：触摸探索打开后微信秒级
+        // 重建全树、关闭后秒级再摘空，故采集退化时脉冲一次触摸探索再重采，
+        // 用完即由 TouchExplorationGate 恢复原状，不影响用户触摸习惯。
+        if (collected.windows.isEmpty() || collected.nodeCount < MIN_REAL_NODES) {
+            TouchExplorationGate.acquire()
+            try {
+                TouchExplorationGate.awaitTreeSettled()
+                val retry = withContext(Dispatchers.Main) {
+                    runCatching { collectWindows(selfPackage) }
+                        .getOrElse { t ->
+                            android.util.Log.w(TAG, "retry collect windows failed", t)
+                            collected
+                        }
+                }
+                if (retry.windows.isNotEmpty() && retry.nodeCount > collected.nodeCount) {
+                    collected = retry
+                }
+            } finally {
+                TouchExplorationGate.release()
+            }
         }
         if (collected.windows.isEmpty()) {
             val error = collected.errorCode ?: ERROR_NO_WINDOWS
@@ -134,19 +157,24 @@ class RpaAnalyzeCapture @Inject constructor(
             return Collected(listOf(window), 0, null, budget.used)
         }
 
-        var focusedIndex = -1
         val windows = ArrayList<RpaAnalyzeWindow>(infoList.size)
+        val appFlags = ArrayList<Boolean>(infoList.size)
         val focusedFlags = ArrayList<Boolean>(infoList.size)
+        val activeFlags = ArrayList<Boolean>(infoList.size)
+        val nodeCounts = ArrayList<Int>(infoList.size)
         val budget = Budget(MAX_RAW_NODES)
         for (info in infoList) {
             try {
                 val root = runCatching { info.root }.getOrNull() ?: continue
                 val packageName = root.packageName?.toString().orEmpty()
                 if (packageName.isBlank() || packageName == selfPackage) continue
+                val usedBefore = budget.used
                 val raw = runCatching { readNode(root, budget, 0) }.getOrNull() ?: continue
                 val index = windows.size
-                if (info.isFocused) focusedIndex = index
+                appFlags.add(info.type == AccessibilityWindowInfo.TYPE_APPLICATION)
                 focusedFlags.add(info.isFocused)
+                activeFlags.add(info.isActive)
+                nodeCounts.add(budget.used - usedBefore)
                 windows.add(
                     RpaAnalyzeWindow(
                         index = index,
@@ -165,30 +193,69 @@ class RpaAnalyzeCapture @Inject constructor(
             return Collected(emptyList(), 0, ERROR_NO_WINDOWS, budget.used)
         }
 
-        val focusedPosition = if (focusedIndex >= 0) focusedIndex else 0
-        val foregroundPosition = windows.indexOfFirst { it.packageName == foregroundPackage }
-        val activeBeforeReorder = when {
-            foregroundPosition >= 0 -> foregroundPosition
-            focusedIndex >= 0 -> focusedIndex
-            else -> 0
-        }
-
+        val activeBeforeReorder = pickActiveWindow(
+            windows = windows,
+            appFlags = appFlags,
+            focusedFlags = focusedFlags,
+            activeFlags = activeFlags,
+            nodeCounts = nodeCounts,
+            foregroundPackage = foregroundPackage,
+        )
         val reordered = ArrayList<RpaAnalyzeWindow>(windows.size)
         val order = ArrayList<Int>(windows.size)
-        order.add(focusedPosition)
-        for (i in windows.indices) if (i != focusedPosition) order.add(i)
+        order.add(activeBeforeReorder)
+        for (i in windows.indices) if (i != activeBeforeReorder) order.add(i)
         order.forEachIndexed { newIndex, oldIndex ->
             val window = windows[oldIndex]
             reordered.add(window.copy(index = newIndex))
         }
-        val activeAfterReorder = order.indexOf(activeBeforeReorder).coerceAtLeast(0)
 
         return Collected(
             windows = reordered,
-            activeWindowIndex = activeAfterReorder,
+            activeWindowIndex = 0,
             errorCode = null,
             nodeCount = budget.used,
         )
+    }
+
+    /**
+     * 选出画布默认展示的「当前窗口」。
+     *
+     * 不能只按包名匹配：MIUI 桌面的手势/导航条窗口同样属于 `com.miui.home`，
+     * 且在 [AccessibilityService.getWindows] 中排在应用窗口之前。取第一个
+     * 同包名窗口会把只含根节点的系统窗口当成当前窗口，画布上只剩一条贴着
+     * 屏幕底边的绿框（真机 2026-10-28 复现）。
+     *
+     * 依次优先：活动/聚焦的应用窗口 → 前台包名的应用窗口 → 任意应用窗口。
+     * 系统窗口（状态栏/导航条/输入法）只在没有任何应用窗口时兜底。
+     */
+    private fun pickActiveWindow(
+        windows: List<RpaAnalyzeWindow>,
+        appFlags: List<Boolean>,
+        focusedFlags: List<Boolean>,
+        activeFlags: List<Boolean>,
+        nodeCounts: List<Int>,
+        foregroundPackage: String,
+    ): Int {
+        fun best(predicate: (Int) -> Boolean): Int =
+            windows.indices.filter(predicate).maxByOrNull { nodeCounts[it] } ?: -1
+
+        val isApp = { i: Int -> appFlags.getOrNull(i) == true }
+        val isFocused = { i: Int -> focusedFlags.getOrNull(i) == true }
+        val isActive = { i: Int -> activeFlags.getOrNull(i) == true }
+        val isForeground = { i: Int -> windows[i].packageName == foregroundPackage }
+        val candidates = listOf(
+            best { isApp(it) && isActive(it) && isForeground(it) },
+            best { isApp(it) && isActive(it) },
+            best { isApp(it) && isFocused(it) && isForeground(it) },
+            best { isApp(it) && isFocused(it) },
+            best { isApp(it) && isForeground(it) },
+            best { isApp(it) },
+            best { isActive(it) },
+            best { isFocused(it) },
+            best { true },
+        )
+        return candidates.firstOrNull { it >= 0 } ?: 0
     }
 
     private fun readNode(
@@ -271,5 +338,8 @@ class RpaAnalyzeCapture @Inject constructor(
         /** 单次采集的原始节点预算；800 个框已足够覆盖一屏，避免 WebView 拖死主线程。 */
         const val MAX_RAW_NODES = 1200
         private const val MAX_RAW_DEPTH = 64
+
+        /** 判定「节点树退化」的下限：真实应用根节点至少带 1 个子节点（≥2 个节点）。 */
+        private const val MIN_REAL_NODES = 2
     }
 }

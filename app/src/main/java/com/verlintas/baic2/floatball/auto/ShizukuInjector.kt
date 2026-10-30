@@ -94,6 +94,10 @@ class ShizukuInjector @Inject constructor(
     /** 系统返回键（KEYCODE_BACK=4）：页面回退（如聊天页→IM 主列表）。 */
     suspend fun back(): Result<Unit> = exec("input keyevent $KEYCODE_BACK")
 
+    /** RPA「仅关闭应用 / 重新打开(重启)」强杀通道（图5）：`am force-stop`（shell 本线能力）。 */
+    suspend fun forceStop(packageName: String): Result<Unit> =
+        exec("am force-stop ${shellQuote(packageName)}")
+
     /**
      * 输入法是否已展开（dumpsys input_method 的 mInputShown 口径，单次 shell
      * 调用 ~115ms 真机实测）。2026-10-27 回复慢归因新增：IME 已弹起 ⇒ 聊天页

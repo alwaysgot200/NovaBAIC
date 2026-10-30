@@ -674,9 +674,11 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 - a11y 可用：全程 `line=A11Y`；
 - 仅 vision 可用：`DUAL` 起始线路为 `VISION`（`initialLine()` 先看 a11y，再 vision）；
 - a11y 某步定位失败但 vision 可用：日志出现 `LineFallback(A11Y→VISION, locate_miss)`，之后粘性走 vision；
-- **微信 8.0.79（2026-10-28 真机实测）**：微信对无障碍完全不可见（`uiautomator dump`
-  只有 381 字节空根，连输入法窗口也 dump 不到），`DUAL` 会在第一步定位 miss 后
-  粘性切到 `VISION`，后续全部走 Shizuku 注入 + OCR；
+- **微信 8.0.79（2026-10-28 真机实测）**：微信 `smartDisableAccessibility` 会在
+  「无白名单服务且触摸探索关闭」时摘空自身节点树（381 字节空根）；本项目已用
+  `TouchExplorationGate` 在采集/执行短窗口脉冲解锁（详见 §13.1），a11y 线可读
+  微信全树；脉冲不可用时 `DUAL` 仍会在第一步定位 miss 后粘性切到 `VISION`，
+  不会静默换线；
 - 真机实测坐标（1080×2460、dpi 440、HyperOS/Android 16）：聊天页输入栏
   `y≈2280–2400`，点击 `y=2320`（ratio≈0.94）才会弹键盘；键盘弹出后输入栏上移到
   `y≈1340–1440`，绿色「发送」按钮中心≈`(980,1390)`（ratio≈0.907/0.565）。
@@ -753,13 +755,19 @@ JVM 用例 1 校验结构 / 双线路 / 校验器；用例 2 用 `FakeRpaDevice`
 
 ## 13. 已知限制
 
-1. **微信 a11y 树可能不可见**：8.0.79 真机上 `uiautomator dump` 任意页面
-   （聊天列表 / 聊天页）只有 381 字节空根，输入法窗口也 dump 不到。但 `uiautomator`
-   用的是它自己的服务配置，**不能据此判定本项目也看不到**：本项目已按 Assists 官方
-   配置补上 `flagIncludeNotImportantViews`，重开无障碍后需在真机复核微信节点；
-   若仍为空根，则该版本对 a11y 完全隐身，微信只能走 `VISION`（Shizuku 注入 +
-   截图/OCR），`DUAL` 依赖定位 miss 后显式 `LineFallback` 切到 vision，不会静默换线。
-   微信版本变化后需重新校准比例/OCR 区域。
+1. **微信 a11y 树靠白名单桩解锁（2026-10-29 定版）**：微信 8.0.79 的
+   `smartDisableAccessibility`（`com.tencent.mm.sdk.platformtools.b.c()`）在
+   「启用服务里没有微信可信白名单组件」且「触摸探索关闭」时反射关闭自身进程
+   无障碍，任意页面只剩 381 字节空根；触摸探索打开后全树秒级可读（真机 272
+   节点含「通讯录」），无需重启微信。解锁主路线是**微信可信白名单桩服务**
+   （`org.autojs.autojs/com.stardust.autojs.core.accessibility.AccessibilityService`，
+   `dev/build-a11y-whitelist-stub.ps1` 构建安装并启用）：桩出现在启用服务列表
+   即放行，全程零触摸探索。`TouchExplorationGate` 仅作树退化时的兜底脉冲
+   （树就绪时自动跳过；MIUI/HyperOS 上运行时 setServiceInfo 是空操作，兜底
+   不可用）；**禁止**把 `flagRequestTouchExplorationMode` 静态写进服务 XML——
+   触摸探索随绑定常开会让全设备触摸变「先探索后激活」、悬浮球拖不动
+   （2026-10-29 性能事故）。桩未装的设备走 `VISION`，`DUAL` 依赖定位
+   miss 后显式 `LineFallback` 切线，不会静默换线。微信版本变化后需重新校准。
 2. **无 a11y 的输入依赖 Shizuku**：录屏只能抽帧，不能注入点击 / 输入；没有 Shizuku 时
    `VISION` / `DUAL` 的就绪门会报 `ready_vision_missing` / `ready_vision_injection_missing`
    并拒绝运行。输入法候选、剪贴板 PASTE 行为因机型而异，失败会显式报 `input_failed`。

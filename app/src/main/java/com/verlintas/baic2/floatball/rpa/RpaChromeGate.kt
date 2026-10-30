@@ -60,5 +60,6 @@ class RpaChromeGate @Inject constructor() {
     companion object {
         const val REASON_QUICK_FIND = "quickfind"
         const val REASON_RUN = "run"
+        const val REASON_EDIT = "edit"
     }
 }

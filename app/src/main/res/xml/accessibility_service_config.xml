@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    app 模块同名资源覆盖 device/impl 的服务配置（AGENTS.md §4.2：app 资源合并
+    优先级更高，勿改库文件）。
+
+    【禁止】在此静态写入 flagRequestTouchExplorationMode（2026-10-29 性能事故
+    教训）：该 flag 会让触摸探索随服务绑定常开，全设备触摸变「先探索后激活」、
+    单指拖动被吃掉，系统明显卡顿。微信 8.x 节点树解锁不再依赖触摸探索——
+    主路线是微信可信白名单桩服务（org.autojs.autojs/
+    com.stardust.autojs.core.accessibility.AccessibilityService，见
+    dev/build-a11y-whitelist-stub.ps1）；TouchExplorationGate 脉冲只作为
+    树退化时的兜底，且运行时 setServiceInfo 在 MIUI/HyperOS 上是空操作。
+
+    另对齐官方两项：isAccessibilityTool 声明为无障碍工具（Android 12+ 隐私
+    分类），flagRequestEnhancedWebAccessibility 提升 WebView 内节点可见性。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackSpoken|feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagRequestEnhancedWebAccessibility"
+    android:canPerformGestures="true"
+    android:canRequestEnhancedWebAccessibility="true"
+    android:canRequestTouchExplorationMode="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/a11y_description"
+    android:isAccessibilityTool="true"
+    android:notificationTimeout="100"
+    tools:targetApi="s" />

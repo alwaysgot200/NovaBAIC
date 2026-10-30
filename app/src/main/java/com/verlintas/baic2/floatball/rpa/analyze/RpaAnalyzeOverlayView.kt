@@ -429,7 +429,9 @@ internal class RpaAnalyzeOverlayView(
             backgroundNoticeView.visibility =
                 if (currentWindowIndex == snap.activeWindowIndex) GONE else VISIBLE
             // 根节点之外没有任何子节点 = 目标 App 屏蔽了无障碍内容，提示换通道。
-            val meaningful = idx.nodes.count { it.depth > 0 }
+            // 必须只统计**当前窗口**：多窗口采集时状态栏/输入法可能有子节点，
+            // 按全局统计会把前台 App 的空树提示误吞掉（真机 2026-10-28 复现）。
+            val meaningful = idx.nodesOf(currentWindowIndex).count { it.depth > 0 }
             emptyTreeNoticeView.visibility = if (meaningful == 0) VISIBLE else GONE
         } else {
             subtitleView.text = ""

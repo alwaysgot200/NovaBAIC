@@ -1258,6 +1258,13 @@
     <string name="float_rpa_action_scroll">滚动</string>
     <string name="float_rpa_action_assert_text">断言文本</string>
     <string name="float_rpa_action_comment">注释</string>
+    <string name="float_rpa_action_open_link">打开链接</string>
+    <string name="float_rpa_action_set_variable">设置变量</string>
+    <string name="float_rpa_action_control_flow">流程控制</string>
+    <string name="float_rpa_action_composite">复合动作</string>
+    <string name="float_rpa_action_tap_color">点击颜色</string>
+    <string name="float_rpa_action_gesture_multi">多指手势</string>
+    <string name="float_rpa_param_new_editor_hint">该动作请在新版属性页编辑。</string>
     <string name="float_rpa_category_app">应用</string>
     <string name="float_rpa_category_flow">流程</string>
     <string name="float_rpa_category_target">定位</string>
@@ -1355,6 +1362,61 @@
     <string name="float_rpa_delete_failed">删除脚本失败</string>
     <string name="float_rpa_script_missing">脚本不存在或已损坏</string>
     <string name="float_rpa_broken_scripts">有 %1$d 个脚本文件无法解析，已跳过</string>
+
+    <!-- RPA 自动化：列表页改版（方案 §7.1 / §7.3 / §八） -->
+    <string name="float_rpa_search">搜索</string>
+    <string name="float_rpa_add_menu">新建或导入</string>
+    <string name="float_rpa_import">导入</string>
+    <string name="float_rpa_export">导出</string>
+    <string name="float_rpa_property">属性</string>
+    <string name="float_rpa_property_title">本地脚本详情</string>
+    <string name="float_rpa_property_menu">更多操作</string>
+    <string name="float_rpa_property_env">运行环境</string>
+    <string name="float_rpa_property_basic">基本信息</string>
+    <string name="float_rpa_property_steps">动作数量</string>
+    <string name="float_rpa_property_resolution">分辨率</string>
+    <string name="float_rpa_property_resolution_value">%1$d×%2$d</string>
+    <string name="float_rpa_property_created">创建时间</string>
+    <string name="float_rpa_property_updated">更新时间</string>
+    <string name="float_rpa_property_schema">数据版本</string>
+    <string name="float_rpa_property_market">脚本市场（上传 / 售卖）</string>
+    <string name="float_rpa_property_cloud_backup">云备份</string>
+    <string name="float_rpa_property_coming_soon">即将开放</string>
+    <string name="float_rpa_property_share">分享</string>
+    <string name="float_rpa_property_upload_market">上传市场</string>
+    <string name="float_rpa_description_hint">未填写描述</string>
+    <string name="float_rpa_description_edit">编辑描述</string>
+    <string name="float_rpa_gate_title">编辑前确认：运行模式</string>
+    <string name="float_rpa_gate_ready">就绪状态</string>
+    <string name="float_rpa_gate_a11y_required">选择「无障碍」模式必须先在系统设置中开启无障碍服务，才能进入编辑。</string>
+    <string name="float_rpa_gate_go_a11y">去开启无障碍</string>
+    <string name="float_rpa_gate_refresh">刷新检测</string>
+    <string name="float_rpa_gate_enter">进入编辑</string>
+    <string name="float_rpa_gate_warn_vision">视觉能力（Shizuku / 录屏 / OCR）未就绪：仅影响运行，不影响编辑。</string>
+    <string name="float_rpa_rename">重命名</string>
+    <string name="float_rpa_rename_title">重命名脚本</string>
+    <string name="float_rpa_rename_hint">脚本名称</string>
+    <string name="float_rpa_rename_confirm">保存</string>
+    <string name="float_rpa_rename_failed">重命名失败：%1$s</string>
+    <string name="float_rpa_export_title">选择导出格式</string>
+    <string name="float_rpa_export_json">JSON（仅脚本，不含模板）</string>
+    <string name="float_rpa_export_xml">XML（仅脚本，不含模板）</string>
+    <string name="float_rpa_export_package">完整包 .rpa（脚本 + 模板）</string>
+    <string name="float_rpa_export_confirm">导出</string>
+    <string name="float_rpa_export_failed">导出失败：%1$s</string>
+    <string name="float_rpa_import_title">导入脚本</string>
+    <string name="float_rpa_import_meta">%1$d 个动作 · %2$d 张模板</string>
+    <string name="float_rpa_import_p2_note">含 %1$d 个规划中动作（点击颜色 / 多指手势）。导入后对应步骤标「需升级」，运行到该步会显式报因。</string>
+    <string name="float_rpa_import_no_template_note">单文件导入不含模板；引用模板的步骤运行前需重新配置找图。</string>
+    <string name="float_rpa_import_confirm">导入</string>
+    <string name="float_rpa_import_failed">导入失败：%1$s</string>
+    <string name="float_rpa_import_unreadable">无法识别的脚本文件（支持 .json / .xml / .rpa）</string>
+    <string name="float_rpa_record">录制</string>
+    <string name="float_rpa_record_planned">录制（规划中）</string>
+    <string name="float_rpa_caps_ready">能力就绪：无障碍 / Shizuku / OCR / 录屏</string>
+    <string name="float_rpa_caps_expand">展开能力详情</string>
+    <string name="float_rpa_script_kb">%1$.1f KB</string>
+    <string name="float_rpa_script_meta">%1$s · %2$s</string>
 
     <!-- RPA 自动化：编辑器 -->
     <string name="float_rpa_editor_flow">流程</string>
@@ -1536,6 +1598,9 @@
     <string name="float_rpa_analyze_only_one_window">当前只有一个窗口可分析</string>
     <string name="float_rpa_analyze_background_window">正在查看后台窗口：截图属于前台窗口，控件框仅供层级参考。</string>
     <string name="float_rpa_analyze_need_a11y">需要开启无障碍服务才能分析界面布局</string>
+    <string name="float_rpa_analyze_a11y_unbound">无障碍已开启，但系统的「好参谋界面自动化」服务还没连接上（多为刚升级/重启后的短暂状态）</string>
+    <string name="float_rpa_analyze_rebind">重试连接</string>
+    <string name="float_rpa_analyze_rebind_failed">「好参谋界面自动化」服务仍未连接，请到 设置→无障碍 把它关闭再开启</string>
     <string name="float_rpa_analyze_open_a11y">去开启无障碍</string>
     <string name="float_rpa_analyze_cancel">取消</string>
     <string name="float_rpa_analyze_switch_to_target">请先切换到目标 App，再打开布局分析</string>
@@ -1583,7 +1648,9 @@
     <string name="float_rpa_analyze_window_foreground">（前台）</string>
     <string name="float_rpa_analyze_window_background">（后台）</string>
     <!-- 无障碍节点被目标 App 屏蔽（微信 8.x）时只拿得到窗口根节点 -->
-    <string name="float_rpa_analyze_empty_tree_notice">只读到窗口根节点：目标应用可能把控件标记为无障碍不可见（如微信 8.x）。请关闭再开启无障碍服务后刷新；仍为空请改用「以图找图 / OCR」定位。</string>
+    <string name="float_rpa_analyze_empty_tree_notice">只读到窗口根节点：目标应用可能把控件标记为无障碍不可见（如微信 8.x）。请在系统无障碍设置中开启「随选朗读」（TalkBack 套件）后返回并刷新解锁；仍为空请改用「以图找图 / OCR」定位。</string>
+    <string name="float_rpa_analyze_unlock_held">已临时启用「随选朗读」解锁目标应用的控件树（如微信 8.x），退出分析后自动关闭</string>
+    <string name="float_rpa_analyze_unlock_failed">未能自动解锁目标应用的控件树（自动通道不可用）。可手动开启系统无障碍「随选朗读」后重新分析</string>
     <!-- 重叠区域巡检：点按循环 / 长按整摞列表 -->
     <string name="float_rpa_analyze_stack_cycle">重叠 %1$d/%2$d · 点按切换</string>
     <string name="float_rpa_analyze_stack_list">列出重叠控件（%1$d）</string>
@@ -1659,11 +1726,167 @@
     <string name="float_rpa_vision_apply">应用到当前动作</string>
     <string name="float_rpa_vision_region_use_selection">用选区</string>
     <string name="float_rpa_vision_region_clear">清除区域</string>
+    <string name="float_rpa_vision_roi_hint">拖框调整：框内拖动平移，四角拖动改大小；数值可越界（-20% ~ 120%）</string>
+    <string name="float_rpa_vision_roi_left">左（%）</string>
+    <string name="float_rpa_vision_roi_top">上（%）</string>
+    <string name="float_rpa_vision_roi_right">右（%）</string>
+    <string name="float_rpa_vision_roi_bottom">下（%）</string>
+    <string name="float_rpa_vision_match_index">匹配第几（选填，1 起）</string>
+    <string name="float_rpa_vision_quick_search">快速搜图</string>
+    <string name="float_rpa_vision_embed_mode">埋图模式</string>
 
     <!-- RPA 自动化：入口 -->
     <string name="float_rpa_settings_entry">RPA 自动化</string>
     <string name="float_rpa_settings_hint">可拖拽编排手机 RPA：双线路定位、布局分析器、以图找图与顺序执行。</string>
     <string name="float_rpa_channels_button">RPA</string>
     <string name="float_rpa_channels_button_desc">用 RPA 流程打开该聊天</string>
+
+    <!-- RPA 自动化：浮窗动作列表（P2 §7.5） -->
+    <string name="float_rpa_panel_ball_label">RPA</string>
+    <string name="float_rpa_panel_expand">展开动作面板</string>
+    <string name="float_rpa_panel_collapse">收起</string>
+    <string name="float_rpa_panel_resize">调整面板宽度</string>
+    <string name="float_rpa_panel_drag_reorder">拖动排序</string>
+    <string name="float_rpa_panel_add_step">添加动作</string>
+    <string name="float_rpa_panel_steps_empty">还没有动作，点下方「添加动作」开始编排。</string>
+    <string name="float_rpa_panel_repeat_suffix">×%1$d</string>
+    <string name="float_rpa_panel_step_disable">停用</string>
+    <string name="float_rpa_panel_jump_here">跳转到此步</string>
+    <string name="float_rpa_panel_save_script">保存脚本</string>
+    <string name="float_rpa_panel_remote_edit">远程编辑</string>
+    <string name="float_rpa_panel_clear_steps">清空动作</string>
+    <string name="float_rpa_panel_shrink">缩小面板</string>
+    <string name="float_rpa_panel_logs_on">开启日志</string>
+    <string name="float_rpa_panel_logs_off">关闭日志</string>
+    <string name="float_rpa_panel_view_variables">查看变量</string>
+
+    <!-- p2-6 浮窗回调接线：日志 / 变量 / 清空 / 删除被引用跳转（§六） -->
+    <string name="float_rpa_panel_logs_title">运行日志</string>
+    <string name="float_rpa_panel_logs_empty">暂无运行事件。运行脚本后此处显示进度与失败原因。</string>
+    <string name="float_rpa_panel_vars_title">脚本变量</string>
+    <string name="float_rpa_panel_vars_empty">该脚本未声明变量</string>
+    <string name="float_rpa_panel_var_name">变量名</string>
+    <string name="float_rpa_panel_var_source">来源</string>
+    <string name="float_rpa_panel_var_value">值</string>
+    <string name="float_rpa_panel_var_source_script">脚本默认值</string>
+    <string name="float_rpa_panel_var_from_step">来自第 %1$d 步</string>
+    <string name="float_rpa_panel_clear_title">清空所有动作</string>
+    <string name="float_rpa_panel_clear_message">将移除该脚本的全部 %1$d 个动作，并立即保存。确认清空？</string>
+    <string name="float_rpa_panel_clear_confirm">清空</string>
+    <string name="float_rpa_panel_close">关闭</string>
+    <string name="float_rpa_step_delete_jump_title">该动作被跳转引用</string>
+    <string name="float_rpa_step_delete_jump_message">有 %1$d 个动作的「跳转到」指向该动作，请选择处理方式。</string>
+    <string name="float_rpa_step_delete_clear_jumps">一并清除跳转</string>
+    <string name="float_rpa_step_delete_keep_jumps">删除（跳转悬空标红）</string>
+    <string name="float_rpa_step_delete_cancel">取消删除</string>
+    <string name="float_rpa_jump_here_added">已在末尾添加「跳转到此步」动作</string>
+    <string name="float_rpa_issue_jump_missing">跳转目标不存在（悬空）</string>
+    <string name="float_rpa_issue_goto_missing">跳转未选择目标</string>
+    <string name="float_rpa_log_script_started">脚本开始</string>
+    <string name="float_rpa_log_step_started">第 %1$d 步开始：%2$s</string>
+    <string name="float_rpa_log_step_done">第 %1$d 步完成</string>
+    <string name="float_rpa_log_step_error">第 %1$d 步失败：%2$s</string>
+    <string name="float_rpa_log_line_fallback">第 %1$d 步线路回退：%2$s</string>
+    <string name="float_rpa_log_script_ok">脚本运行完成</string>
+    <string name="float_rpa_log_script_fail">脚本运行失败：%1$s</string>
+    <string name="float_rpa_log_running">运行中：%1$s（第 %2$d/%3$d 步）</string>
+    <string name="float_rpa_log_idle">未在运行。</string>
+
+    <!-- p2-4 步骤编辑弹框（§7.6） -->
+    <string name="float_rpa_stepdlg_title">编辑动作</string>
+    <string name="float_rpa_stepdlg_action_type">动作类型</string>
+    <string name="float_rpa_stepdlg_action_info">动作说明</string>
+    <string name="float_rpa_stepdlg_confirm">确定</string>
+    <string name="float_rpa_stepdlg_wait_after">运行等待</string>
+    <string name="float_rpa_stepdlg_repeat">重复次数</string>
+    <string name="float_rpa_stepdlg_condition">运行条件</string>
+    <string name="float_rpa_stepdlg_unit_sec">秒</string>
+    <string name="float_rpa_stepdlg_unit_ms">毫秒</string>
+    <string name="float_rpa_stepdlg_optional">选填</string>
+    <string name="float_rpa_stepdlg_pick_point">屏幕取点</string>
+    <string name="float_rpa_stepdlg_open_vision">找图面板</string>
+    <string name="float_rpa_stepdlg_concept_launch_app">打开应用</string>
+    <string name="float_rpa_stepdlg_concept_tap_image">点击图片</string>
+    <string name="float_rpa_stepdlg_concept_tap_text">点击文字</string>
+    <string name="float_rpa_stepdlg_concept_control_flow">控制运行</string>
+    <string name="float_rpa_stepdlg_desc_launch_app">拉起或关闭指定应用；可勾选「重新打开（重启）」与「仅关闭应用」。</string>
+    <string name="float_rpa_stepdlg_desc_tap_point">点击屏幕上的比例坐标位置（可越界）；坐标可用「...」在屏幕取点。</string>
+    <string name="float_rpa_stepdlg_desc_tap_image">以图找图命中模板后在命中位置点击；图片位置到找图面板采集模板。</string>
+    <string name="float_rpa_stepdlg_desc_tap_text">点击屏幕上的目标文字（a11y 文本节点优先，OCR 文本兜底）。</string>
+    <string name="float_rpa_stepdlg_desc_set_variable">设置运行变量：变量名 + 类型 + 取值来源 + 值，可一次设置多行。</string>
+    <string name="float_rpa_stepdlg_desc_control_flow">跳转到指定步骤或停止脚本；跳转可用相对步数糖，并实时预览解析结果。</string>
+    <string name="float_rpa_stepdlg_desc_open_link">打开链接（仅支持 http / https）。</string>
+    <string name="float_rpa_stepdlg_desc_composite">引用自定义动作组并传入参数值。</string>
+    <string name="float_rpa_stepdlg_app_field">选择 App</string>
+    <string name="float_rpa_stepdlg_restart">重新打开（重启）</string>
+    <string name="float_rpa_stepdlg_close_only">仅关闭应用</string>
+    <string name="float_rpa_stepdlg_tap_pos">点击位置</string>
+    <string name="float_rpa_stepdlg_axis_x">X%</string>
+    <string name="float_rpa_stepdlg_axis_y">Y%</string>
+    <string name="float_rpa_stepdlg_hold_ms">按下时间</string>
+    <string name="float_rpa_stepdlg_image_pos">图片位置</string>
+    <string name="float_rpa_stepdlg_template_none">未选择模板</string>
+    <string name="float_rpa_stepdlg_text">文本</string>
+    <string name="float_rpa_stepdlg_match_index">匹配第几</string>
+    <string name="float_rpa_stepdlg_var_name">变量名</string>
+    <string name="float_rpa_stepdlg_var_type">类型</string>
+    <string name="float_rpa_stepdlg_var_number">数值</string>
+    <string name="float_rpa_stepdlg_var_string">字符</string>
+    <string name="float_rpa_stepdlg_var_source">取值来源</string>
+    <string name="float_rpa_stepdlg_source_literal">字面量</string>
+    <string name="float_rpa_stepdlg_source_ui_read">界面读取</string>
+    <string name="float_rpa_stepdlg_source_var_ref">变量引用</string>
+    <string name="float_rpa_stepdlg_source_increment">自增</string>
+    <string name="float_rpa_stepdlg_var_value">值</string>
+    <string name="float_rpa_stepdlg_var_add">添加变量</string>
+    <string name="float_rpa_stepdlg_var_remove">删除该行</string>
+    <string name="float_rpa_stepdlg_flow_kind">控制类型</string>
+    <string name="float_rpa_stepdlg_flow_goto">跳转到</string>
+    <string name="float_rpa_stepdlg_flow_stop">停止脚本</string>
+    <string name="float_rpa_stepdlg_goto_target">目标步骤</string>
+    <string name="float_rpa_stepdlg_goto_relative">相对步数</string>
+    <string name="float_rpa_stepdlg_goto_relative_hint">如 +2 / -1</string>
+    <string name="float_rpa_stepdlg_goto_preview">→ 第 %1$d 步 · %2$s</string>
+    <string name="float_rpa_stepdlg_goto_dangling">目标步骤不存在（悬空）</string>
+    <string name="float_rpa_stepdlg_url">链接地址</string>
+    <string name="float_rpa_stepdlg_error_url_scheme">仅支持 http / https 链接</string>
+    <string name="float_rpa_stepdlg_custom_action">自定义动作</string>
+    <string name="float_rpa_stepdlg_custom_args">参数值</string>
+    <string name="float_rpa_stepdlg_error_number">请输入数字</string>
+    <string name="float_rpa_stepdlg_error_ratio">坐标超出允许范围（-20% ~ 120%）</string>
+    <string name="float_rpa_stepdlg_error_var_empty">至少需要一行变量设置</string>
+    <string name="float_rpa_stepdlg_error_var_row">变量名不能为空，且只能含字母数字 _ . -</string>
+    <string name="float_rpa_stepdlg_error_goto_missing">跳转到需要选择目标步骤</string>
+    <string name="float_rpa_stepdlg_error_custom_missing">请选择自定义动作</string>
+
+    <!-- p2-4 运行条件子弹框（§7.6） -->
+    <string name="float_rpa_cond_title">运行条件</string>
+    <string name="float_rpa_cond_none">未设置</string>
+    <string name="float_rpa_cond_variable">变量比较</string>
+    <string name="float_rpa_cond_image">出现图片</string>
+    <string name="float_rpa_cond_text">出现文字</string>
+    <string name="float_rpa_cond_prev_ok">上步成功</string>
+    <string name="float_rpa_cond_prev_fail">上步失败</string>
+    <string name="float_rpa_cond_op">比较符</string>
+    <string name="float_rpa_cond_op_eq">=</string>
+    <string name="float_rpa_cond_op_ne">≠</string>
+    <string name="float_rpa_cond_op_gt">&gt;</string>
+    <string name="float_rpa_cond_op_ge">≥</string>
+    <string name="float_rpa_cond_op_lt">&lt;</string>
+    <string name="float_rpa_cond_op_le">≤</string>
+    <string name="float_rpa_cond_template">条件模板</string>
+    <string name="float_rpa_cond_error_lhs">变量比较需要填写变量名</string>
+    <string name="float_rpa_cond_error_rhs">变量比较需要填写值</string>
+    <string name="float_rpa_cond_error_text">出现文字需要填写文本</string>
+    <string name="float_rpa_cond_error_template">出现图片需要选择条件模板</string>
+
+    <!-- p2-4 全局设置弹框（§7.7） -->
+    <string name="float_rpa_global_title">全局设置</string>
+    <string name="float_rpa_global_default_wait">默认等待</string>
+    <string name="float_rpa_global_repeat">重复次数</string>
+    <string name="float_rpa_global_repeat_hint">整脚本循环次数，0 = 跑一遍</string>
+    <string name="float_rpa_global_stop_on_failure">有动作失败立即暂停</string>
+    <string name="float_rpa_global_listener">全局监听动作</string>
+    <string name="float_rpa_global_gesture">全局手势变形</string>
 
 </resources>

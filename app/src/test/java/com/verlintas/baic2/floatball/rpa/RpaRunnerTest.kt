@@ -218,8 +218,12 @@ class RpaRunnerTest {
 
         val taps = mutableListOf<RpaLine>()
 
-        override suspend fun launchApp(packageName: String, line: RpaLine): Result<Unit> =
-            Result.success(Unit)
+        override suspend fun launchApp(
+            packageName: String,
+            line: RpaLine,
+            restart: Boolean,
+            closeOnly: Boolean,
+        ): Result<Unit> = Result.success(Unit)
 
         override suspend fun openChat(
             imPackage: String,
@@ -227,7 +231,7 @@ class RpaRunnerTest {
             line: RpaLine,
         ): Result<Unit> = Result.success(Unit)
 
-        override suspend fun tap(x: Int, y: Int, line: RpaLine): Result<Unit> {
+        override suspend fun tap(x: Int, y: Int, line: RpaLine, holdMs: Int): Result<Unit> {
             taps += line
             return Result.success(Unit)
         }
@@ -251,6 +255,9 @@ class RpaRunnerTest {
         ): Result<Unit> = Result.success(Unit)
 
         override suspend fun pressKey(key: String, line: RpaLine): Result<Unit> =
+            Result.success(Unit)
+
+        override suspend fun openLink(url: String, line: RpaLine): Result<Unit> =
             Result.success(Unit)
 
         override suspend fun locate(scriptId: String, target: RpaTarget, line: RpaLine): RpaHit? =

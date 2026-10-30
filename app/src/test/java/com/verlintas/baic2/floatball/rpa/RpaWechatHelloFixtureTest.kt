@@ -87,8 +87,12 @@ class RpaWechatHelloFixtureTest {
             screenshotReady = true,
         )
 
-        override suspend fun launchApp(packageName: String, line: RpaLine): Result<Unit> =
-            Result.success(Unit)
+        override suspend fun launchApp(
+            packageName: String,
+            line: RpaLine,
+            restart: Boolean,
+            closeOnly: Boolean,
+        ): Result<Unit> = Result.success(Unit)
 
         override suspend fun openChat(
             imPackage: String,
@@ -96,7 +100,7 @@ class RpaWechatHelloFixtureTest {
             line: RpaLine,
         ): Result<Unit> = Result.success(Unit)
 
-        override suspend fun tap(x: Int, y: Int, line: RpaLine): Result<Unit> =
+        override suspend fun tap(x: Int, y: Int, line: RpaLine, holdMs: Int): Result<Unit> =
             Result.success(Unit)
 
         override suspend fun longPress(x: Int, y: Int, line: RpaLine): Result<Unit> =
@@ -118,6 +122,9 @@ class RpaWechatHelloFixtureTest {
         ): Result<Unit> = Result.success(Unit)
 
         override suspend fun pressKey(key: String, line: RpaLine): Result<Unit> =
+            Result.success(Unit)
+
+        override suspend fun openLink(url: String, line: RpaLine): Result<Unit> =
             Result.success(Unit)
 
         override suspend fun locate(

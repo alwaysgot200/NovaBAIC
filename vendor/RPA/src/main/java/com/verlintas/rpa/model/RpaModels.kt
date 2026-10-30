@@ -19,6 +19,7 @@
 
 package com.verlintas.rpa.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -83,7 +84,166 @@ enum class RpaAction {
 
     /** 注释（仅编辑器可读，运行时空操作）。 */
     COMMENT,
+
+    /** 打开链接：参数 url（scheme 白名单）。 */
+    OPEN_LINK,
+
+    /** 设置变量（图8）：参数 assignments；取值来源含「界面读取」（即「识别屏幕」，裁定⑥）。 */
+    SET_VARIABLE,
+
+    /** 控制运行（图9）：跳转到 stepId（UI 相对糖，裁定⑤）或停止脚本；可带运行条件。 */
+    CONTROL_FLOW,
+
+    /** 复合动作：引用 [RpaScript.customActions] 里的自定义动作组（递归展开，深度 ≤3）。 */
+    COMPOSITE,
+
+    /** 点击颜色（P2 占位，裁定①文案）；handler 未注册，运行显式报 unsupported_action。 */
+    TAP_COLOR,
+
+    /** 多指手势（P2 占位）；handler 未注册，运行显式报 unsupported_action。 */
+    GESTURE_MULTI,
 }
+
+/** 设置变量的数据类型（图8：数值/字符）。 */
+@Serializable
+enum class RpaVarType {
+    NUMBER,
+    STRING,
+}
+
+/** 设置变量的取值来源（图8「值:」行）；UI_READ 即「识别屏幕」（裁定⑥归并）。 */
+@Serializable
+enum class RpaVarSource {
+
+    /** 字面量（数字或文本，支持 `${ref}` 引用）。 */
+    LITERAL,
+
+    /** 界面读取：OCR / 无障碍读屏存入变量。 */
+    UI_READ,
+
+    /** 变量引用：从另一变量取值。 */
+    VARIABLE_REF,
+
+    /** 自增：数值型变量累加（value 为空按 1 计）。 */
+    INCREMENT,
+}
+
+/** 控制运行的控制类型（图9「控制类型」）。 */
+@Serializable
+enum class RpaFlowKind {
+
+    /** 跳转到目标步骤（存储层 stepId 锚定，裁定⑤）。 */
+    GOTO,
+
+    /** 停止脚本。 */
+    STOP,
+}
+
+/** 运行条件「变量比较」的比较符。 */
+@Serializable
+enum class RpaCompareOp {
+    EQ,
+    NE,
+    GT,
+    GE,
+    LT,
+    LE,
+}
+
+/** 设置变量的一行（图8 变量列表：变量名 + 类型 + 来源 + 值）。 */
+@Serializable
+data class RpaVarAssign(
+    val variableName: String = "",
+    val type: RpaVarType = RpaVarType.STRING,
+    val source: RpaVarSource = RpaVarSource.LITERAL,
+    val value: String = "",
+)
+
+/**
+ * 步骤运行条件（v4 §4.2：条件带载荷）。不满足 → 跳过该步并记日志，
+ * **不算失败**；求值异常同样按「不满足」降级（§六-3，禁止崩引擎）。
+ */
+@Serializable
+sealed interface RpaStepCondition {
+
+    /** 恒执行。 */
+    @Serializable
+    @SerialName("none")
+    data object None : RpaStepCondition
+
+    /** 变量比较：两侧支持字面量与 `${ref}`；双双可解析为数值时按数值比。 */
+    @Serializable
+    @SerialName("variable")
+    data class Variable(
+        val lhs: String = "",
+        val op: RpaCompareOp = RpaCompareOp.EQ,
+        val rhs: String = "",
+    ) : RpaStepCondition
+
+    /** 出现图片（图7：条件自带模板，与定位模板可各指一张）。 */
+    @Serializable
+    @SerialName("image_visible")
+    data class ImageVisible(val templateId: String = "") : RpaStepCondition
+
+    /** 出现文字。 */
+    @Serializable
+    @SerialName("text_visible")
+    data class TextVisible(
+        val text: String = "",
+        val match: RpaMatchMode = RpaMatchMode.CONTAINS,
+    ) : RpaStepCondition
+
+    /** 上步成功。 */
+    @Serializable
+    @SerialName("prev_ok")
+    data object PrevOk : RpaStepCondition
+
+    /** 上步失败。 */
+    @Serializable
+    @SerialName("prev_fail")
+    data object PrevFail : RpaStepCondition
+
+    /** L2 公式条件（[RpaConditionDsl]）；L3 沙箱 JS 为后续批次，同一接口替换。 */
+    @Serializable
+    @SerialName("expr")
+    data class Expr(val expression: String = "") : RpaStepCondition
+}
+
+/** 脚本全局设置（图12 齿轮弹框）。 */
+@Serializable
+data class RpaGlobalSetting(
+
+    /** 默认等待（秒，选填）：步骤 delayAfterMs == 0 时回退该值。 */
+    val defaultWaitSec: Double? = null,
+
+    /** 整脚本循环次数（0 或 1 = 跑一遍）。 */
+    val repeat: Int = 0,
+
+    /** 有动作失败立即暂停（图12 默认勾选）；步骤级 onFailure=CONTINUE 仍可显式豁免。 */
+    val stopOnFailure: Boolean = true,
+
+    /** 全局监听动作（P2 占位，存而不执行）。 */
+    val globalListener: String? = null,
+
+    /** 全局手势变形（P2 占位，存而不执行）。 */
+    val gestureTransform: String? = null,
+)
+
+/** 自定义动作（复合动作）的参数声明。 */
+@Serializable
+data class RpaCustomParam(
+    val name: String = "",
+    val default: String = "",
+)
+
+/** 自定义动作（复合动作）定义：命名步骤组 + 参数声明（§五 L1）。 */
+@Serializable
+data class RpaCustomAction(
+    val id: String,
+    val name: String = "",
+    val params: List<RpaCustomParam> = emptyList(),
+    val steps: List<RpaStep> = emptyList(),
+)
 
 @Serializable
 enum class RpaMatchMode {
@@ -239,11 +399,21 @@ data class RpaVisionLocator(
     val pick: RpaPick = RpaPick.BOTTOM_MOST,
     val offsetX: Int = 0,
     val offsetY: Int = 0,
+
+    /** 匹配第几（图11，选填）：多命中时取第 N 个（1 起）。 */
+    val matchIndex: Int? = null,
+
+    /** 快速搜图（图11）。 */
+    val quickSearch: Boolean = false,
+
+    /** 埋图模式（图11，截图截断语义待确认；P2 先落默认值占位）。 */
+    val embedMode: String = "DEFAULT",
 ) {
     fun isConfigured(): Boolean = when (kind) {
         RpaVisionKind.TEMPLATE -> !templateId.isNullOrBlank()
         RpaVisionKind.OCR_TEXT -> !ocrText.isNullOrBlank()
-        RpaVisionKind.RATIO -> ratioX in 0f..1f && ratioY in 0f..1f
+        RpaVisionKind.RATIO -> ratioX in RpaLimits.RATIO_MIN..RpaLimits.RATIO_MAX &&
+            ratioY in RpaLimits.RATIO_MIN..RpaLimits.RATIO_MAX
     }
 }
 
@@ -276,6 +446,33 @@ data class RpaParams(
     val direction: RpaDirection? = null,
     val distanceRatio: Float? = null,
     val clearFirst: Boolean = false,
+
+    /** 按下时间（图6/图7，毫秒，选填）；>0 走长按语义。 */
+    val holdMs: Int? = null,
+
+    /** 重新打开（重启）（图5）。 */
+    val restart: Boolean = false,
+
+    /** 仅关闭应用（图5）。 */
+    val closeOnly: Boolean = false,
+
+    /** 打开链接的 URL（OPEN_LINK）。 */
+    val url: String? = null,
+
+    /** 设置变量的变量列表（图8 多行）。 */
+    val assignments: List<RpaVarAssign> = emptyList(),
+
+    /** 控制运行的控制类型（CONTROL_FLOW）。 */
+    val flowKind: RpaFlowKind? = null,
+
+    /** 跳转目标 stepId（存储层绝对锚定，裁定⑤；UI 相对糖保存时解析为它）。 */
+    val gotoStepId: String? = null,
+
+    /** 复合动作引用的自定义动作 id（COMPOSITE）。 */
+    val customActionId: String? = null,
+
+    /** 复合动作参数值（参数名 → 值，缺省用声明里的 default）。 */
+    val customArgValues: Map<String, String> = emptyMap(),
 )
 
 @Serializable
@@ -302,6 +499,12 @@ data class RpaStep(
     val delayAfterMs: Long = 0,
     val onFailure: RpaFailurePolicy = RpaFailurePolicy.STOP,
     val note: String = "",
+
+    /** 总执行次数（≥1；1=不重复），区别于 retries（失败重试）。 */
+    val repeat: Int = 1,
+
+    /** 运行条件（图6-图9）；不满足跳过该步并记日志，不算失败。 */
+    val runCondition: RpaStepCondition = RpaStepCondition.None,
 ) {
     fun needsTarget(): Boolean = RpaCatalog.needsTarget(action)
 }
@@ -323,17 +526,36 @@ data class RpaScript(
     val steps: List<RpaStep> = emptyList(),
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
+
+    /** 图12 全局设置（默认等待 / 整脚本循环 / 失败即停）。 */
+    val global: RpaGlobalSetting = RpaGlobalSetting(),
+
+    /** 自定义动作组（§五 L1 复合动作）。 */
+    val customActions: List<RpaCustomAction> = emptyList(),
 ) {
     fun enabledSteps(): List<RpaStep> = steps.filter { it.enabled }
 
     fun variableKeys(): Set<String> = steps.flatMap { it.referencedVariables() }.toSet()
 
+    /**
+     * 已声明的变量：脚本级 [variables] + 各步骤 `SET_VARIABLE` 的变量名（声明语义，
+     * 含复合动作内部），消除 `variable_undefined` 误报。
+     */
+    fun declaredVariableKeys(): Set<String> = buildSet {
+        addAll(variables.keys)
+        (steps + customActions.flatMap { it.steps }).forEach { step ->
+            step.params.assignments.forEach { assign ->
+                if (assign.variableName.isNotBlank()) add(assign.variableName)
+            }
+        }
+    }
+
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 1
+        const val CURRENT_SCHEMA_VERSION = 2
     }
 }
 
-/** 从动作参数、断言文本与定位表达式里提取 `${name}` 变量名。 */
+/** 从动作参数、断言文本、运行条件与定位表达式里提取 `${name}` 变量名。 */
 fun RpaStep.referencedVariables(): Set<String> = buildSet {
     val texts = buildList {
         addAll(
@@ -343,9 +565,27 @@ fun RpaStep.referencedVariables(): Set<String> = buildSet {
                 params.contactName,
                 params.text,
                 params.key,
+                params.url,
                 expect?.text,
             ),
         )
+        // 设置变量的取值：字面量走 `${ref}`；变量引用按「直接引用变量名」计入。
+        params.assignments.forEach { assign -> add(assign.value) }
+        params.customArgValues.values.forEach { value -> add(value) }
+        // 运行条件的载荷同样参与变量替换。
+        when (val condition = runCondition) {
+            is RpaStepCondition.Variable -> {
+                add(condition.lhs)
+                add(condition.rhs)
+            }
+            is RpaStepCondition.Expr -> add(condition.expression)
+            is RpaStepCondition.TextVisible -> add(condition.text)
+            RpaStepCondition.None,
+            is RpaStepCondition.ImageVisible,
+            RpaStepCondition.PrevOk,
+            RpaStepCondition.PrevFail,
+            -> Unit
+        }
         // 定位表达式同样支持变量：联系人名既可能出现在动作参数里，也可能
         // 出现在 a11y 选择器文本 / 视觉 OCR 文本里，两边都要计入声明检查。
         target?.a11y?.selectors?.forEach { selector ->
@@ -366,6 +606,10 @@ fun RpaStep.referencedVariables(): Set<String> = buildSet {
     // 会在设备上抛 PatternSyntaxException，直接击穿编辑器首帧。这里改为纯字符串
     // 扫描，两端行为一致，也避免把用户输入交给正则编译。
     texts.forEach { value -> addAll(value.extractVariableNames()) }
+    // 变量引用的取值就是裸变量名（不是 `${}`），按直接引用计入。
+    params.assignments
+        .filter { it.source == RpaVarSource.VARIABLE_REF && it.value.isNotBlank() }
+        .forEach { add(it.value) }
 }
 
 /** 扫描 `${name}`，名称字符集与校验器约定一致：`A-Z a-z 0-9 _ . -`。 */
@@ -394,7 +638,7 @@ private fun String.extractVariableNames(): List<String> {
     }
 }
 
-private fun Char.isVariableNameChar(): Boolean =
+internal fun Char.isVariableNameChar(): Boolean =
     this in 'A'..'Z' || this in 'a'..'z' || this in '0'..'9' ||
         this == '_' || this == '.' || this == '-'
 

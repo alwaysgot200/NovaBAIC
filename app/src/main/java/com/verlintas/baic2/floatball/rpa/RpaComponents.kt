@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.verlintas.baic2.R
+import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaActionCategory
 import com.verlintas.rpa.model.RpaBounds
@@ -72,8 +73,11 @@ import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaPick
 import com.verlintas.rpa.model.RpaRect
+import com.verlintas.rpa.model.RpaScript
 import com.verlintas.rpa.model.RpaSelector
+import com.verlintas.rpa.model.RpaTarget
 import com.verlintas.rpa.model.RpaVisionKind
+import com.verlintas.rpa.model.RpaVisionSpec
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -120,6 +124,12 @@ internal fun rpaActionLabelRes(action: RpaAction): Int = when (action) {
     RpaAction.SCROLL -> R.string.float_rpa_action_scroll
     RpaAction.ASSERT_TEXT -> R.string.float_rpa_action_assert_text
     RpaAction.COMMENT -> R.string.float_rpa_action_comment
+    RpaAction.OPEN_LINK -> R.string.float_rpa_action_open_link
+    RpaAction.SET_VARIABLE -> R.string.float_rpa_action_set_variable
+    RpaAction.CONTROL_FLOW -> R.string.float_rpa_action_control_flow
+    RpaAction.COMPOSITE -> R.string.float_rpa_action_composite
+    RpaAction.TAP_COLOR -> R.string.float_rpa_action_tap_color
+    RpaAction.GESTURE_MULTI -> R.string.float_rpa_action_gesture_multi
 }
 
 @Composable
@@ -215,6 +225,8 @@ internal fun rpaIssueText(issue: RpaIssue): String {
             "vision_threshold_invalid" -> R.string.float_rpa_issue_threshold
             "vision_region_invalid" -> R.string.float_rpa_issue_region
             "variable_undefined" -> R.string.float_rpa_issue_variable
+            "jump_target_missing" -> R.string.float_rpa_issue_jump_missing
+            "param_goto_missing" -> R.string.float_rpa_issue_goto_missing
             "ready_a11y_missing" -> R.string.float_rpa_issue_ready_a11y
             "ready_vision_missing" -> R.string.float_rpa_issue_ready_vision
             "ready_vision_injection_missing" -> R.string.float_rpa_issue_ready_injection
@@ -548,3 +560,42 @@ internal fun rpaSelectorSummary(selector: RpaSelector): String = buildList {
     if (selector.editableOnly) add("editable")
     if (!selector.enabledOnly) add("any-enabled")
 }.joinToString(" & ").ifBlank { "∅" }
+
+// ---------------------------- 脚本编辑辅助 ----------------------------
+
+/** 布局分析器回填 a11y 定位：只改目标，不触碰视觉定位与其它属性。 */
+internal fun RpaScript.withA11ySpec(stepId: String?, spec: RpaA11ySpec): RpaScript {
+    if (stepId == null) return this
+    return copy(
+        steps = steps.map { step ->
+            if (step.id != stepId) {
+                step
+            } else {
+                val target = step.target ?: RpaTarget()
+                step.copy(target = target.copy(a11y = spec.takeIf { it.isConfigured() }))
+            }
+        },
+    )
+}
+
+/** 以图找图配置页回填视觉定位：兜底定位未配置时自动省略。 */
+internal fun RpaScript.withVisionSpec(stepId: String?, spec: RpaVisionSpec): RpaScript {
+    if (stepId == null) return this
+    val normalized = spec.copy(
+        fallback = spec.fallback?.takeIf { it.isConfigured() },
+    )
+    return copy(
+        steps = steps.map { step ->
+            if (step.id != stepId) {
+                step
+            } else {
+                val target = step.target ?: RpaTarget()
+                step.copy(
+                    target = target.copy(
+                        vision = normalized.takeIf { it.primary.isConfigured() },
+                    ),
+                )
+            }
+        },
+    )
+}
