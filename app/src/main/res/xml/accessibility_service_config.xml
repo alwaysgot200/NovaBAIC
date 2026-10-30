@@ -5,11 +5,11 @@
 
     【禁止】在此静态写入 flagRequestTouchExplorationMode（2026-10-29 性能事故
     教训）：该 flag 会让触摸探索随服务绑定常开，全设备触摸变「先探索后激活」、
-    单指拖动被吃掉，系统明显卡顿。微信 8.x 节点树解锁不再依赖触摸探索——
-    主路线是微信可信白名单桩服务（org.autojs.autojs/
-    com.stardust.autojs.core.accessibility.AccessibilityService，见
-    dev/build-a11y-whitelist-stub.ps1）；TouchExplorationGate 脉冲只作为
-    树退化时的兜底，且运行时 setServiceInfo 在 MIUI/HyperOS 上是空操作。
+    单指拖动被吃掉，系统明显卡顿。微信 8.x 节点树解锁不走触摸探索——放行条件
+    唯一：启用的无障碍服务列表里有 TalkBack 家族（marvin）服务；主路线是
+    WechatTreeUnlock（分析会话级临时启用「随选朗读」，见 WechatTreeUnlock.kt
+    与 AGENTS.md §8 教训 11）；TouchExplorationGate 脉冲只作为树退化时的兜底，
+    且运行时 setServiceInfo 在 MIUI/HyperOS 上是空操作。
 
     另对齐官方两项：isAccessibilityTool 声明为无障碍工具（Android 12+ 隐私
     分类），flagRequestEnhancedWebAccessibility 提升 WebView 内节点可见性。

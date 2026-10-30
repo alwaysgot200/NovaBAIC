@@ -427,3 +427,21 @@ git mergetool / 手工解决
    非默认 `~/.gradle`）缓存了残缺产物。修复顺序：`gradlew --stop` → 删项目
    `.gradle` 与各模块 `build` → **删 `D:\programfiles\Android\gradlepro\caches\build-cache-1`**
    → 冷重建。只清项目级缓存解决不了 FROM-CACHE 毒条目。
+11. **微信 8.x 摘树解锁的坑（2026-10-29 真机定案，别再改回去）**：
+   - 放行条件唯一：**启用的无障碍服务列表里有 TalkBack 家族（marvin）服务**。
+     「触摸探索开」与「autojs 白名单桩」两条线都实测无效——dex 静态反编译的
+     结论被微信 Tinker 热补丁改写，**静态取证必须真机 A/B 复核**，且 A/B 一次
+     只动一个变量（靠「随选朗读 TE=false」对照才把 marvin 与 TE 解耦）。
+   - 解锁唯一入口 `WechatTreeUnlock`（分析会话级临时启用随选朗读，
+     acquire/release 严格配对、覆盖层 onClosed 还原）；**严禁**把
+     `flagRequestTouchExplorationMode` 静态写进服务配置（全机触摸变
+     「先探索后激活」+ 卡顿，10-29 性能事故）；`TouchExplorationGate` 只是
+     不可用兜底（HyperOS 运行时 setServiceInfo 是空操作）。
+   - 写 `enabled_accessibility_services` 会触发全部 a11y 服务解绑重绑（约 1s）：
+     解锁后必须等自身服务回归再采集（`pollA11yReady`）。
+   - 分析覆盖层打开期间**严禁 `uiautomator dump`**（UiAutomation 连接会 detach
+     a11y 服务 → 分析器自动收起 + 微信回摘树，误判为功能坏了）；取证只用
+     screencap + 像素统计。
+   - 驱动坐标以 screencap 像素为准（`dumpsys window` mAttrs y 与实绘差 104px
+     状态栏 inset）；adb 注入三分法：`tap`=普通 View click、`motionevent
+     DOWN/UP`=GestureDetector 单击、`swipe` 会触发扇形拖拽 bug 禁用于浮窗。

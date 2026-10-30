@@ -59,11 +59,14 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.HorizontalDivider
@@ -117,7 +120,10 @@ import com.verlintas.baic2.feature.settings.SettingsScreen
 import com.verlintas.baic2.feature.tasks.TasksScreen
 import com.verlintas.baic2.floatball.FloatSettingsActivity
 import com.verlintas.baic2.floatball.account.AccountActivity
+import com.verlintas.baic2.floatball.AdvisorPlaybookActivity
+import com.verlintas.baic2.floatball.AdvisorProfileActivity
 import com.verlintas.baic2.floatball.home.AdvisorHomeBar
+import com.verlintas.baic2.floatball.rpa.RpaActivity
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -280,6 +286,18 @@ fun Baic2App(
                     dockOpen = false
                     context.startActivity(Intent(context, AccountActivity::class.java))
                 },
+                onOpenProfiles = {
+                    dockOpen = false
+                    context.startActivity(Intent(context, AdvisorProfileActivity::class.java))
+                },
+                onOpenPlaybooks = {
+                    dockOpen = false
+                    context.startActivity(Intent(context, AdvisorPlaybookActivity::class.java))
+                },
+                onOpenRpa = {
+                    dockOpen = false
+                    context.startActivity(RpaActivity.intent(context))
+                },
                 accountName = accountName,
             )
         }
@@ -386,6 +404,9 @@ private fun DockAnchor(
     onSelect: (Baic2Destination) -> Unit,
     onOpenAdvisorSettings: () -> Unit,
     onOpenAccount: () -> Unit,
+    onOpenProfiles: () -> Unit,
+    onOpenPlaybooks: () -> Unit,
+    onOpenRpa: () -> Unit,
     accountName: String? = null,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -428,6 +449,18 @@ private fun DockAnchor(
                 onOpenAccount = {
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onOpenAccount()
+                },
+                onOpenProfiles = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onOpenProfiles()
+                },
+                onOpenPlaybooks = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onOpenPlaybooks()
+                },
+                onOpenRpa = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onOpenRpa()
                 },
                 accountName = accountName,
             )
@@ -506,6 +539,9 @@ private fun AnimatedVisibilityScope.DockPanel(
     onSelect: (Baic2Destination) -> Unit,
     onOpenAdvisorSettings: () -> Unit,
     onOpenAccount: () -> Unit,
+    onOpenProfiles: () -> Unit,
+    onOpenPlaybooks: () -> Unit,
+    onOpenRpa: () -> Unit,
     accountName: String? = null,
 ) {
     val shape = RoundedCornerShape(16.dp)
@@ -543,6 +579,24 @@ private fun AnimatedVisibilityScope.DockPanel(
                 ),
             )
         }
+
+        // 好参谋工具入口（非导航目的地）：联系人画像 / 话术库管理 / RPA 自动化
+        // （2026-10-30 从「好参谋设置」页迁至主页左侧菜单，一键直达管理面）。
+        DockActionItem(
+            icon = Icons.Outlined.Face,
+            label = stringResource(R.string.float_settings_profiles),
+            onClick = onOpenProfiles,
+        )
+        DockActionItem(
+            icon = Icons.AutoMirrored.Outlined.Send,
+            label = stringResource(R.string.float_settings_playbooks),
+            onClick = onOpenPlaybooks,
+        )
+        DockActionItem(
+            icon = Icons.Outlined.PlayArrow,
+            label = stringResource(R.string.float_rpa_settings_entry),
+            onClick = onOpenRpa,
+        )
 
         // 好参谋扩展入口（非导航目的地）：设置 / 登录。
         DockActionItem(

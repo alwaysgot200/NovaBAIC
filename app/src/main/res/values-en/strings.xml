@@ -363,9 +363,7 @@
     <string name="float_playbook_field_tags">标签（逗号分隔，如：报价,异议）</string>
     <string name="float_playbook_field_content">话术正文</string>
     <string name="float_settings_playbooks">话术库管理</string>
-    <string name="float_settings_playbooks_hint">浏览内置话术，增删自己的参考话术</string>
     <string name="float_settings_profiles">联系人画像</string>
-    <string name="float_settings_profiles_hint">按人管理目标、人设、话术与 AI 草稿</string>
     <string name="float_style_entry">说话风格</string>
     <string name="float_settings_style">默认说话风格</string>
     <string name="float_settings_style_hint">基调与意图，对所有联系人生效，可按人单独覆盖</string>
@@ -1528,6 +1526,18 @@
     <string name="float_rpa_quickfind_error_too_large">The image is larger than the current screen and cannot be matched</string>
     <string name="float_rpa_quickfind_idle_only">Image search is only available when idle</string>
     <string name="float_rpa_quickfind_open_failed">Could not open image search; try again later</string>
+    <string name="float_rpa_quickfind_pick_region">Pick from screen</string>
+    <string name="float_rpa_quickfind_pick_hint_drag">Drag to select the target area; drag inside to move, drag edges / corners / rim to resize; switch between rect and circle</string>
+    <string name="float_rpa_quickfind_pick_shape_rect">Rect</string>
+    <string name="float_rpa_quickfind_pick_shape_circle">Circle</string>
+    <string name="float_rpa_quickfind_pick_use">Use this area</string>
+    <string name="float_rpa_quickfind_pick_cancel">Cancel</string>
+    <string name="float_rpa_quickfind_pick_size">Selection %1$d × %2$d px</string>
+    <string name="float_rpa_quickfind_pick_too_small">Selection too small; enlarge to at least %1$d px</string>
+    <string name="float_rpa_quickfind_pick_capturing">Capturing the current screen…</string>
+    <string name="float_rpa_quickfind_pick_failed">Screen pick failed: %1$s</string>
+    <string name="float_rpa_quickfind_result_coord">(%1$d, %2$d)</string>
+    <string name="float_rpa_quickfind_result_box">Match area %1$d × %2$d</string>
 
     <string name="float_rpa_vision_title">Image search</string>
     <string name="float_rpa_vision_capture">Capture screen</string>

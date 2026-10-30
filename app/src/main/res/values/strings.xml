@@ -478,9 +478,7 @@
     <string name="float_playbook_field_content">话术正文</string>
     <string name="float_playbook_ref_label">参考话术</string>
     <string name="float_settings_playbooks">话术库管理</string>
-    <string name="float_settings_playbooks_hint">浏览内置话术，增删自己的参考话术</string>
     <string name="float_settings_profiles">联系人画像</string>
-    <string name="float_settings_profiles_hint">按人管理目标、人设、话术与 AI 草稿</string>
 
     <!-- 悬浮球 · 说话风格（P1 风格行为化） -->
     <string name="float_style_entry">说话风格</string>
@@ -1692,6 +1690,18 @@
     <string name="float_rpa_quickfind_error_too_large">图片比当前画面大，无法匹配</string>
     <string name="float_rpa_quickfind_idle_only">以图找图仅在空闲状态可用</string>
     <string name="float_rpa_quickfind_open_failed">无法打开以图找图，请稍后重试</string>
+    <string name="float_rpa_quickfind_pick_region">屏幕拾取</string>
+    <string name="float_rpa_quickfind_pick_hint_drag">拖动框选目标区域；按住选区内部可整体移动，拖边 / 角 / 圆周可调整；可切换方形 / 圆形</string>
+    <string name="float_rpa_quickfind_pick_shape_rect">方形</string>
+    <string name="float_rpa_quickfind_pick_shape_circle">圆形</string>
+    <string name="float_rpa_quickfind_pick_use">使用此区域</string>
+    <string name="float_rpa_quickfind_pick_cancel">取消</string>
+    <string name="float_rpa_quickfind_pick_size">选区 %1$d × %2$d px</string>
+    <string name="float_rpa_quickfind_pick_too_small">选区太小，请放大到至少 %1$d px</string>
+    <string name="float_rpa_quickfind_pick_capturing">正在抓取当前屏幕…</string>
+    <string name="float_rpa_quickfind_pick_failed">屏幕拾取失败：%1$s</string>
+    <string name="float_rpa_quickfind_result_coord">(%1$d, %2$d)</string>
+    <string name="float_rpa_quickfind_result_box">命中区域 %1$d × %2$d</string>
 
     <!-- RPA 自动化：以图找图 -->
     <string name="float_rpa_vision_title">以图找图</string>

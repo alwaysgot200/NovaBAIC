@@ -92,7 +92,6 @@ import com.verlintas.baic2.floatball.auto.InjectorSelector
 import com.verlintas.baic2.floatball.auto.ReadinessGate
 import com.verlintas.baic2.floatball.auto.ReadinessReport
 import com.verlintas.baic2.floatball.auto.ScreenCapture
-import com.verlintas.baic2.floatball.rpa.RpaActivity
 import com.verlintas.baic2.floatball.shizuku.ShizukuGate
 import com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity
 import com.verlintas.baic2.floatball.update.AppUpdateManager
@@ -630,86 +629,6 @@ private fun AdvisorSettingsScreen(
                     runtime = runtime,
                     strategyCards = strategyCards,
                 )
-
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = scheme.surfaceContainer,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                        .clickable {
-                            context.startActivity(
-                                Intent(context, AdvisorProfileActivity::class.java)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        },
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                        Text(
-                            text = stringResource(R.string.float_settings_profiles),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            text = stringResource(R.string.float_settings_profiles_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = scheme.surfaceContainer,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                        .clickable {
-                            context.startActivity(
-                                Intent(context, AdvisorPlaybookActivity::class.java)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        },
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                        Text(
-                            text = stringResource(R.string.float_settings_playbooks),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            text = stringResource(R.string.float_settings_playbooks_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                // RPA 自动化（vendor/RPA 独立模块）：
-                // 可拖拽动作编排 + a11y/视觉双线路定位；入口与话术库同级。
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = scheme.surfaceContainer,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                        .clickable {
-                            context.startActivity(
-                                RpaActivity.intent(context)
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        },
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
-                        Text(
-                            text = stringResource(R.string.float_rpa_settings_entry),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            text = stringResource(R.string.float_rpa_settings_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant,
-                        )
-                    }
-                }
 
                 SectionLabel(stringResource(R.string.float_settings_session))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

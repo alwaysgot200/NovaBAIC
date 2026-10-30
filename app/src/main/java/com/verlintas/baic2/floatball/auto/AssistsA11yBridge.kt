@@ -267,7 +267,9 @@ class AssistsA11yBridge @Inject constructor(
      * 按文本定位并点击对象——Simple「手势点击微信主页底部Tab」的对象链：
      * 节点自身 ACTION_CLICK → 首个可点击父级 ACTION_CLICK（OpenWechat/ScrollContacts
      * 对底部 tab 的做法）→ 节点中心手势点击兜底（nodeGestureClick 等价，走已验证的
-     * legacy 手势通道）。微信对象树需触摸探索解锁，[TouchExplorationGate] 自动脉冲并恢复。
+     * legacy 手势通道）。微信对象树放行靠启用列表里有 TalkBack 家族服务（主路线
+     * WechatTreeUnlock）；[TouchExplorationGate] 仅为树退化兜底脉冲（HyperOS 上
+     * 运行时 setServiceInfo 是空操作），见 AGENTS.md §8 教训 11。
      */
     suspend fun clickText(query: String): Result<Unit> = withContext(Dispatchers.Main) {
         val needle = query.trim()
@@ -302,7 +304,8 @@ class AssistsA11yBridge @Inject constructor(
     /**
      * 列表滚动——Simple「自动滚动微信通讯录」的对象链：对
      * ListView/RecyclerView 容器执行 ACTION_SCROLL_FORWARD/BACKWARD；节点滚动
-     * 全 miss 时回退屏幕中线 1/3 幅手势滑动。自带触摸探索脉冲。
+     * 全 miss 时回退屏幕中线 1/3 幅手势滑动。自带树退化兜底脉冲（解锁主路线
+     * 见 WechatTreeUnlock / AGENTS.md §8 教训 11）。
      */
     suspend fun scrollList(forward: Boolean): Result<Unit> = withContext(Dispatchers.Main) {
         val service = AssistsService.getOrNull() ?: return@withContext notEnabled()

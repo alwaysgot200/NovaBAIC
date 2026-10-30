@@ -39,6 +39,17 @@ data class RpaQuickFindBox(
 }
 
 /**
+ * 抓帧像素空间的椭圆参数（圆形选区经 x/y 独立缩放后的形状）。
+ * 缩放比一致时 [radiusX] == [radiusY]，即正圆；圆心/半径单位均为帧像素。
+ */
+data class RpaQuickFindEllipse(
+    val centerX: Float,
+    val centerY: Float,
+    val radiusX: Float,
+    val radiusY: Float,
+)
+
+/**
  * 「以图找图」快捷浮层的纯几何：
  *
  * - 抓帧尺寸与窗口尺寸经常不一致（状态栏/导航栏、刘海、分屏），所以 x/y
@@ -72,4 +83,69 @@ object RpaQuickFindGeometry {
     /** 单轴归一化（夹取 0..1）；总量非法时返回 0，绝不抛异常。 */
     fun ratio(value: Int, total: Int): Float =
         if (total <= 0) 0f else (value.toFloat() / total).coerceIn(0f, 1f)
+
+    /**
+     * 窗口坐标选区 → 抓帧像素矩形（[viewBox] 的逆向），x/y 各自独立缩放；
+     * 结果钳位到帧边界内且不为空，任一尺寸非法或选区为空返回 null。
+     */
+    fun frameRect(
+        selection: RpaQuickFindBox,
+        frameWidth: Int,
+        frameHeight: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+    ): RpaBounds? {
+        if (frameWidth <= 0 || frameHeight <= 0) return null
+        if (viewWidth <= 0 || viewHeight <= 0) return null
+        if (selection.isEmpty) return null
+        val scaleX = frameWidth.toFloat() / viewWidth
+        val scaleY = frameHeight.toFloat() / viewHeight
+        val left = (selection.left * scaleX).toInt().coerceIn(0, frameWidth - 1)
+        val top = (selection.top * scaleY).toInt().coerceIn(0, frameHeight - 1)
+        val right = (selection.right * scaleX).toInt().coerceIn(left + 1, frameWidth)
+        val bottom = (selection.bottom * scaleY).toInt().coerceIn(top + 1, frameHeight)
+        return RpaBounds(left = left, top = top, right = right, bottom = bottom)
+    }
+
+    /**
+     * 圆形选区（圆心 + 半径，窗口坐标）→ 外接方形选区（同一窗口坐标）。
+     * 半径非法（NaN / 负 / 无穷）返回空框，调用方按 `isEmpty` 判废。
+     */
+    fun circleBoundingSquare(centerX: Float, centerY: Float, radius: Float): RpaQuickFindBox {
+        if (!radius.isFinite() || radius <= 0f) {
+            return RpaQuickFindBox(0f, 0f, 0f, 0f)
+        }
+        return RpaQuickFindBox(
+            left = centerX - radius,
+            top = centerY - radius,
+            right = centerX + radius,
+            bottom = centerY + radius,
+        )
+    }
+
+    /**
+     * 圆形选区（窗口坐标）→ 帧像素椭圆（x/y 独立缩放后正圆变椭圆，
+     * 圆形掩膜裁剪按此形状取圆内像素）。任一尺寸非法返回 null。
+     */
+    fun frameEllipse(
+        centerX: Float,
+        centerY: Float,
+        radius: Float,
+        frameWidth: Int,
+        frameHeight: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+    ): RpaQuickFindEllipse? {
+        if (frameWidth <= 0 || frameHeight <= 0) return null
+        if (viewWidth <= 0 || viewHeight <= 0) return null
+        if (!radius.isFinite() || radius <= 0f) return null
+        val scaleX = frameWidth.toFloat() / viewWidth
+        val scaleY = frameHeight.toFloat() / viewHeight
+        return RpaQuickFindEllipse(
+            centerX = centerX * scaleX,
+            centerY = centerY * scaleY,
+            radiusX = radius * scaleX,
+            radiusY = radius * scaleY,
+        )
+    }
 }

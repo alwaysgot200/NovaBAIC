@@ -46,12 +46,12 @@ import org.junit.runner.RunWith
  * 「微信节点树解锁不得以触摸探索常开为代价」的真机回归锚
  * （2026-10-29 性能事故后定版，取代旧的「脉冲打开触摸探索」断言）。
  *
- * 背景：微信 8.x `smartDisableAccessibility` 在「启用服务无微信可信白名单组件
- * 且触摸探索关闭」时摘空自身无障碍树（真机 381 字节空根）。解锁的**主路线**是
- * 微信可信白名单桩服务（`org.autojs.autojs/`
- * `com.stardust.autojs.core.accessibility.AccessibilityService`，由
- * `dev/build-a11y-whitelist-stub.ps1` 构建安装并启用）——桩出现在启用服务列表
- * 即让微信放行，全程零触摸探索。此前用静态 `flagRequestTouchExplorationMode`
+ * 背景：微信 8.x `smartDisableAccessibility` 在「启用的无障碍服务列表里没有
+ * TalkBack 家族（`com.google.android.marvin.talkback` 包下任一服务）服务」时摘空自身
+ * 无障碍树（真机 381 字节空根），与触摸探索状态无关（2026-10-29 真机定案）。
+ * 解锁的**主路线**是 `WechatTreeUnlock`（分析会话级临时启用「随选朗读」，
+ * acquire/release 配对还原）——家族服务出现在启用服务列表即让微信放行，
+ * 零触摸探索副作用。此前用静态 `flagRequestTouchExplorationMode`
  * 解锁导致触摸探索随服务绑定常开、全设备触摸变「先探索后激活」、悬浮球拖不动
  * （2026-10-29 用户投诉定案），本测试锁定「微信树可读」与「触摸探索保持关闭」
  * 必须同时成立。[TouchExplorationGate] 仅保留为树退化时的兜底脉冲（MIUI/HyperOS
@@ -61,8 +61,10 @@ import org.junit.runner.RunWith
  * 1. 微信已安装并已登录；
  * 2. 屏幕已点亮、已解锁；
  * 3. 好参谋无障碍服务已启用；
- * 4. 白名单桩服务已启用（`adb shell settings get secure enabled_accessibility_services`
- *    含桩组件）。
+ * 4. TalkBack 家族服务已启用（推荐「随选朗读」SelectToSpeak：不开触摸探索；
+ *    `adb shell settings get secure enabled_accessibility_services` 含
+ *    `com.google.android.marvin.talkback/` 前缀组件）。别用 TalkBack——
+ *    它自带触摸探索，会撞「触摸探索保持关闭」断言。
  *
  * 运行：
  * ```
@@ -104,12 +106,13 @@ class TouchExplorationGateDeviceTest {
             val manager = context.getSystemService(AccessibilityManager::class.java)
             assumeTrue("无法获取 AccessibilityManager", manager != null)
             assumeTrue(
-                "白名单桩未启用：先运行 dev/build-a11y-whitelist-stub.ps1 -Install 并启用桩服务",
-                isStubEnabled(manager),
+                "TalkBack 家族服务未启用：请在 设置 → 无障碍 开启「随选朗读」" +
+                    "（微信放行条件，见 AGENTS.md §8 教训 11）",
+                hasMarvinFamilyService(manager),
             )
             assertFalse(
                 "触摸探索处于开启状态：禁止静态 flagRequestTouchExplorationMode 常开" +
-                    "（2026-10-29 性能事故回归）",
+                    "（2026-10-29 性能事故回归；若用户开了 TalkBack 请改用「随选朗读」）",
                 manager.isTouchExplorationEnabled,
             )
 
@@ -131,7 +134,7 @@ class TouchExplorationGateDeviceTest {
             )
             val snapshot = result.getOrNull()
             assertTrue(
-                "布局分析采集失败：${result.exceptionOrNull()?.message}（白名单桩未生效？）",
+                "布局分析采集失败：${result.exceptionOrNull()?.message}（TalkBack 家族服务未生效？）",
                 snapshot != null,
             )
             assertTrue(
@@ -152,7 +155,7 @@ class TouchExplorationGateDeviceTest {
         }
     }
 
-    /** 白名单桩生效时节点树本就就绪，[TouchExplorationGate] 不得再请求触摸探索。 */
+    /** TalkBack 家族服务放行时节点树本就就绪，[TouchExplorationGate] 不得再请求触摸探索。 */
     @Test
     fun gateDoesNotPulseWhenTreeSettled() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -164,7 +167,7 @@ class TouchExplorationGateDeviceTest {
             assumeTrue("无障碍服务未启用/未绑定", bound)
             val manager = context.getSystemService(AccessibilityManager::class.java)
             assumeTrue("无法获取 AccessibilityManager", manager != null)
-            assumeTrue("白名单桩未启用", isStubEnabled(manager))
+            assumeTrue("TalkBack 家族服务未启用", hasMarvinFamilyService(manager))
 
             instrumentation.uiAutomation
                 .executeShellCommand("am start -n $WECHAT/.ui.LauncherUI")
@@ -172,7 +175,7 @@ class TouchExplorationGateDeviceTest {
             val treeUp = poll(TREE_REBUILD_TIMEOUT_MS) {
                 (AssistsService.getOrNull()?.rootInActiveWindow?.childCount ?: 0) >= 2
             }
-            assumeTrue("微信节点树未就绪（桩未生效？）", treeUp)
+            assumeTrue("微信节点树未就绪（TalkBack 家族服务未生效？）", treeUp)
 
             TouchExplorationGate.acquire()
             try {
@@ -198,11 +201,11 @@ class TouchExplorationGateDeviceTest {
         return labels
     }
 
-    /** 微信可信白名单桩是否已在启用服务列表中（[STUB_COMPONENT] 组件 ID）。 */
-    private fun isStubEnabled(manager: AccessibilityManager?): Boolean = runCatching {
+    /** TalkBack 家族服务是否已在启用服务列表中（[MARVIN_PREFIX] 包前缀，微信放行条件）。 */
+    private fun hasMarvinFamilyService(manager: AccessibilityManager?): Boolean = runCatching {
         manager?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
             .orEmpty()
-            .any { it.id?.contains(STUB_COMPONENT) == true }
+            .any { it.id?.startsWith(MARVIN_PREFIX) == true }
     }.getOrDefault(false)
 
     private suspend fun poll(timeoutMs: Long, condition: () -> Boolean): Boolean {
@@ -222,9 +225,8 @@ class TouchExplorationGateDeviceTest {
     private companion object {
         const val WECHAT = "com.tencent.mm"
 
-        /** 微信可信白名单桩组件（dev/build-a11y-whitelist-stub.ps1 构建）。 */
-        const val STUB_COMPONENT =
-            "org.autojs.autojs/com.stardust.autojs.core.accessibility.AccessibilityService"
+        /** TalkBack 家族包前缀（微信摘树放行条件，见 AGENTS.md §8 教训 11）。 */
+        const val MARVIN_PREFIX = "com.google.android.marvin.talkback/"
         const val SERVICE_BIND_TIMEOUT_MS = 5_000L
         const val TREE_REBUILD_TIMEOUT_MS = 8_000L
         const val POLL_INTERVAL_MS = 200L

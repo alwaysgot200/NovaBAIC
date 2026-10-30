@@ -75,10 +75,6 @@ object WechatTreeUnlock {
         data class Failed(val reason: String) : Outcome
     }
 
-    /** 当前是否持有临时解锁（[acquire] 成功后、[release] 前为 true）。 */
-    val isHeld: Boolean
-        get() = synchronized(lock) { held }
-
     private val lock = Any()
     private var held = false
 
