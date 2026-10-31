@@ -23,6 +23,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -252,8 +253,11 @@ class A11yGestureInjector @Inject constructor(
                 runCatching {
                     if (previous != null) {
                         clipboard.setPrimaryClip(previous)
-                    } else {
+                    } else if (Build.VERSION.SDK_INT >= 28) {
                         clipboard.clearPrimaryClip()
+                    } else {
+                        // API 26/27 无 clearPrimaryClip：写空 clip 覆盖达到清空效果。
+                        clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
                     }
                 }
             },
