@@ -33,11 +33,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -312,17 +314,61 @@ internal fun RpaStatusBadge(text: String, ok: Boolean) {
     }
 }
 
+/**
+ * a11y 缺项报因双态（§7.4 / §7.10）：对齐 `FloatBallService.showAnalyzeA11yNotice`
+ * 既有语义——未开启 →「去开启无障碍」；已启用但服务未连接 →「重试连接」自愈重绑 +
+ * 「去开启无障碍」手动兜底。显式报因不静默；报因文案与布局分析工具同源复用。
+ *
+ * [blocking]：`true`＝A11Y 模式硬前置（红、阻编辑）；`false`＝双模缺项警告（仅阻运行）。
+ */
+@Composable
+internal fun RpaA11yNotice(
+    enabledInSettings: Boolean,
+    onOpenAccessibilitySettings: () -> Unit,
+    onRetryConnection: () -> Unit,
+    modifier: Modifier = Modifier,
+    blocking: Boolean = true,
+) {
+    val tone = if (blocking) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.tertiary
+    }
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = stringResource(
+                if (enabledInSettings) {
+                    R.string.float_rpa_analyze_a11y_unbound
+                } else {
+                    R.string.float_rpa_gate_a11y_required
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = tone,
+        )
+        if (enabledInSettings) {
+            OutlinedButton(onClick = onRetryConnection, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.float_rpa_analyze_rebind))
+            }
+        }
+        OutlinedButton(onClick = onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.float_rpa_gate_go_a11y))
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun RpaModeSelector(
     mode: RpaMode,
     enabled: Boolean = true,
+    modes: List<RpaMode> = RpaMode.entries,
     onMode: (RpaMode) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         // 窄屏（360dp）下三枚中文模式芯片一行放不下，FlowRow 自动换行。
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            RpaMode.entries.forEach { candidate ->
+            modes.forEach { candidate ->
                 FilterChip(
                     selected = mode == candidate,
                     onClick = { onMode(candidate) },
@@ -379,6 +425,18 @@ internal data class FrameBox(
     val kind: FrameBoxKind = FrameBoxKind.NODE,
 )
 
+/**
+ * 模板匹配命中展示件（对齐以图找图结果画布口径，§7.9.2）：绿色命中框 +
+ * 白十字中心 + 中心坐标 chip `(x, y)` + 命中尺寸标签。
+ */
+internal data class FrameHit(
+    val bounds: RpaBounds,
+    val centerX: Int,
+    val centerY: Int,
+    val width: Int,
+    val height: Int,
+)
+
 private data class FitGeometry(
     val scale: Float,
     val offsetX: Float,
@@ -388,6 +446,7 @@ private data class FitGeometry(
 /**
  * 帧预览 + 节点框 + 框选：布局分析器与以图找图配置共用。
  * [draggable] 为 true 时拖拽生成归一化选区；否则点击回传像素坐标，用于选节点。
+ * [hits] 是模板匹配命中（§7.9.2 结果画布展示件），可多命中叠加。
  */
 @Composable
 internal fun RpaFrameCanvas(
@@ -395,6 +454,7 @@ internal fun RpaFrameCanvas(
     modifier: Modifier = Modifier,
     previewHeight: Dp = 280.dp,
     boxes: List<FrameBox> = emptyList(),
+    hits: List<FrameHit> = emptyList(),
     selection: RpaRect? = null,
     draggable: Boolean = false,
     onTapPixel: ((Int, Int) -> Unit)? = null,
@@ -486,6 +546,49 @@ internal fun RpaFrameCanvas(
                         ),
                     )
                 }
+                // 匹配命中展示件（对齐以图找图结果画布口径，§7.9.2）：
+                // 绿色命中框（半透明填充 + 描边）+ 白十字中心 + 绿色中心点。
+                val hitStroke = with(density) { 3.dp.toPx() }
+                val hitArm = with(density) { 18.dp.toPx() }
+                val hitDot = with(density) { 5.dp.toPx() }
+                hits.forEach { hit ->
+                    if (hit.bounds.isEmpty) return@forEach
+                    val left = fit.offsetX + hit.bounds.left * fit.scale
+                    val top = fit.offsetY + hit.bounds.top * fit.scale
+                    val width = hit.bounds.width * fit.scale
+                    val height = hit.bounds.height * fit.scale
+                    val size = Size(max(width, 1f), max(height, 1f))
+                    drawRect(
+                        color = Color(0x3322C55E),
+                        topLeft = Offset(left, top),
+                        size = size,
+                    )
+                    drawRect(
+                        color = Color(0xFF22C55E),
+                        topLeft = Offset(left, top),
+                        size = size,
+                        style = Stroke(width = hitStroke),
+                    )
+                    val cx = fit.offsetX + hit.centerX * fit.scale
+                    val cy = fit.offsetY + hit.centerY * fit.scale
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(cx - hitArm, cy),
+                        end = Offset(cx + hitArm, cy),
+                        strokeWidth = borderWidth * 2,
+                    )
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(cx, cy - hitArm),
+                        end = Offset(cx, cy + hitArm),
+                        strokeWidth = borderWidth * 2,
+                    )
+                    drawCircle(
+                        color = Color(0xFF22C55E),
+                        radius = hitDot,
+                        center = Offset(cx, cy),
+                    )
+                }
                 val live = liveSelection(dragStart, dragCurrent, fit, bitmap)
                 val rect = live ?: selection
                 if (rect != null) {
@@ -502,6 +605,65 @@ internal fun RpaFrameCanvas(
                 }
             }
         }
+
+        // 结果 chip（以图找图结果画布同款）：十字旁中心坐标、框右上角命中尺寸。
+        if (fit.scale > 0f && hits.isNotEmpty()) {
+            val coordChipWidth = with(density) { 96.dp.toPx() }
+            val sizeChipWidth = with(density) { 118.dp.toPx() }
+            val chipHeight = with(density) { 26.dp.toPx() }
+            val chipGap = with(density) { 10.dp.toPx() }
+            val chipInset = with(density) { 4.dp.toPx() }
+            val viewWidth = canvasSize.width.toFloat()
+            val viewHeight = canvasSize.height.toFloat()
+            hits.forEach { hit ->
+                val cx = fit.offsetX + hit.centerX * fit.scale
+                val cy = fit.offsetY + hit.centerY * fit.scale
+                val boxRight = fit.offsetX + hit.bounds.right * fit.scale
+                val boxTop = fit.offsetY + hit.bounds.top * fit.scale
+                var coordX = cx + chipGap
+                if (coordX + coordChipWidth > viewWidth) coordX = cx - chipGap - coordChipWidth
+                var coordY = cy + chipGap
+                if (coordY + chipHeight > viewHeight) coordY = cy - chipGap - chipHeight
+                ResultChip(
+                    text = stringResource(
+                        R.string.float_rpa_quickfind_result_coord,
+                        hit.centerX,
+                        hit.centerY,
+                    ),
+                    x = coordX.coerceIn(0f, (viewWidth - coordChipWidth).coerceAtLeast(0f)),
+                    y = coordY.coerceIn(0f, (viewHeight - chipHeight).coerceAtLeast(0f)),
+                )
+                var sizeY = boxTop - chipHeight - chipInset
+                if (sizeY < 0f) sizeY = boxTop + chipInset
+                ResultChip(
+                    text = stringResource(
+                        R.string.float_rpa_quickfind_result_box,
+                        hit.width,
+                        hit.height,
+                    ),
+                    x = (boxRight - sizeChipWidth)
+                        .coerceIn(0f, (viewWidth - sizeChipWidth).coerceAtLeast(0f)),
+                    y = sizeY.coerceIn(0f, (viewHeight - chipHeight).coerceAtLeast(0f)),
+                )
+            }
+        }
+    }
+}
+
+/** 结果 chip（以图找图结果画布同款）：黑底 72%、圆角 6dp、白字 labelSmall。 */
+@Composable
+private fun ResultChip(text: String, x: Float, y: Float) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = Color.Black.copy(alpha = 0.72f),
+        modifier = Modifier.offset { IntOffset(x.roundToInt(), y.roundToInt()) },
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
     }
 }
 

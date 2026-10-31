@@ -34,6 +34,7 @@ import com.verlintas.rpa.model.RpaLimits
 import com.verlintas.rpa.model.RpaLine
 import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaMode
+import com.verlintas.rpa.model.RpaModePolicy
 import com.verlintas.rpa.model.RpaReadiness
 import com.verlintas.rpa.model.RpaRunEvent
 import com.verlintas.rpa.model.RpaRunResult
@@ -127,6 +128,9 @@ class RpaRunner(
 
     suspend fun run(
         script: RpaScript,
+        // 运行模式门（用户定案）：非空即锁线运行——初始线路必须是它，运行中禁止
+        // 换线 fallback，失败显式报因（§4.5 严禁静默换线）；null = 原自动选线行为。
+        forceLine: RpaLine? = null,
         onEvent: suspend (RpaRunEvent) -> Unit = {},
     ): RpaRunResult {
         val caps = device.capabilities
@@ -144,13 +148,14 @@ class RpaRunner(
             onEvent(RpaRunEvent.ScriptFinished(false, null, "readiness_failed"))
             return RpaRunResult(false, null, "readiness_failed")
         }
-        val session = Session(script, caps, onEvent)
+        val session = Session(script, caps, forceLine, onEvent)
         return session.run()
     }
 
     private inner class Session(
         private val script: RpaScript,
         private val caps: RpaCapabilities,
+        private val forcedLine: RpaLine?,
         private val emit: suspend (RpaRunEvent) -> Unit,
     ) {
 
@@ -523,7 +528,7 @@ class RpaRunner(
             val first = device.inputText(text, primary, step.params.clearFirst)
             if (first.isSuccess) return first.outcome("input_text line=$primary")
             val detail = first.exceptionOrNull()?.message ?: "input_failed"
-            if (script.mode != RpaMode.DUAL) return StepOutcome(false, detail)
+            if (!fallbackAllowed()) return StepOutcome(false, detail)
             val alt = primary.other()
             if (!lineReady(alt)) return StepOutcome(false, detail)
             emit(RpaRunEvent.LineFallback(index, step, primary, alt, detail))
@@ -671,7 +676,7 @@ class RpaRunner(
             val timeout = RpaLimits.stepTimeout(step.timeoutMs)
             val now = System.currentTimeMillis()
             val stepDeadline = now + timeout
-            val alt = primary.other().takeIf { script.mode == RpaMode.DUAL && lineReady(it) }
+            val alt = primary.other().takeIf { fallbackAllowed() && lineReady(it) }
             // 双模式先给主线路留出时间，再预留兜底轮询窗口；总预算始终优先。
             val reserve = if (alt != null) DUAL_FALLBACK_WINDOW_MS else 0L
             val primaryDeadline = minOf(
@@ -719,7 +724,7 @@ class RpaRunner(
             val timeout = RpaLimits.stepTimeout(expect.timeoutMs)
             val now = System.currentTimeMillis()
             val stepDeadline = now + timeout
-            val alt = primary.other().takeIf { script.mode == RpaMode.DUAL && lineReady(it) }
+            val alt = primary.other().takeIf { fallbackAllowed() && lineReady(it) }
             val reserve = if (alt != null) DUAL_FALLBACK_WINDOW_MS else 0L
             val primaryDeadline = minOf(
                 stepDeadline,
@@ -753,15 +758,27 @@ class RpaRunner(
 
         // ---------------------------- 线路 ----------------------------
 
-        private fun initialLine(): RpaLine? = when (script.mode) {
-            RpaMode.A11Y -> RpaLine.A11Y.takeIf { caps.a11yReady }
-            RpaMode.VISION -> RpaLine.VISION.takeIf { caps.visionReady }
-            RpaMode.DUAL -> when {
-                caps.a11yReady -> RpaLine.A11Y
-                caps.visionReady -> RpaLine.VISION
-                else -> null
+        private fun initialLine(): RpaLine? {
+            // 运行模式门锁线（用户定案）：forceLine 必须脚本模式允许且本线就绪，
+            // 不满足按「无可用线路」显式失败，绝不偷换另一条线（§4.5）。
+            if (forcedLine != null) {
+                return forcedLine.takeIf {
+                    RpaModePolicy.lineEnabled(script.mode, it) && lineReady(it)
+                }
+            }
+            return when (script.mode) {
+                RpaMode.A11Y -> RpaLine.A11Y.takeIf { caps.a11yReady }
+                RpaMode.VISION -> RpaLine.VISION.takeIf { caps.visionReady }
+                RpaMode.DUAL -> when {
+                    caps.a11yReady -> RpaLine.A11Y
+                    caps.visionReady -> RpaLine.VISION
+                    else -> null
+                }
             }
         }
+
+        /** 换线 fallback 只对 DUAL 自动选线开放；锁线运行（forcedLine）永不换线。 */
+        private fun fallbackAllowed(): Boolean = forcedLine == null && script.mode == RpaMode.DUAL
 
         private fun lineReady(target: RpaLine): Boolean =
             if (target == RpaLine.A11Y) caps.a11yReady else caps.visionReady
@@ -775,7 +792,7 @@ class RpaRunner(
             val primary = line ?: return null
             val first = device.locate(script.id, target, primary)
             if (first != null) return first
-            if (script.mode != RpaMode.DUAL) return null
+            if (!fallbackAllowed()) return null
             val alt = primary.other()
             if (!lineReady(alt)) return null
             emit(RpaRunEvent.LineFallback(index, step, primary, alt, "locate_miss"))
@@ -794,7 +811,7 @@ class RpaRunner(
             val first = block(primary)
             if (first.isSuccess) return StepOutcome(true, "line=$primary")
             val detail = first.exceptionOrNull()?.message ?: failureDetail
-            if (script.mode != RpaMode.DUAL) return StepOutcome(false, detail)
+            if (!fallbackAllowed()) return StepOutcome(false, detail)
             val alt = primary.other()
             if (!lineReady(alt)) return StepOutcome(false, detail)
             emit(RpaRunEvent.LineFallback(index, step, primary, alt, detail))

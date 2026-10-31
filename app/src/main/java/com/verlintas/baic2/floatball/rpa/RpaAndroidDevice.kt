@@ -28,6 +28,7 @@ import android.net.Uri
 import android.view.accessibility.AccessibilityNodeInfo
 import com.verlintas.baic2.device.api.OcrLine
 import com.verlintas.baic2.device.api.OcrProvider
+import com.verlintas.baic2.device.api.ShellBridge
 import com.verlintas.baic2.floatball.auto.AssistsA11yBridge
 import com.verlintas.baic2.floatball.auto.CvMatch
 import com.verlintas.baic2.floatball.auto.ImChatNavigator
@@ -55,6 +56,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 /**
@@ -75,6 +79,7 @@ import kotlinx.coroutines.withContext
 class RpaAndroidDevice @Inject constructor(
     private val bridge: AssistsA11yBridge,
     private val shizuku: ShizukuInjector,
+    private val shell: ShellBridge,
     private val screenCapture: ScreenCapture,
     private val ocr: OcrProvider,
     private val templateMatcher: RpaTemplateMatcher,
@@ -92,6 +97,9 @@ class RpaAndroidDevice @Inject constructor(
             val projectionReady = screenCapture.projectionAlive
             return RpaCapabilities(
                 a11yReady = a11yReady,
+                // 双态报因（§7.4）：区分「未开启」与「已启用未连接」，
+                // 复用 assists 能力检测组件（AssistsCore.isA11yEnabled）。
+                a11yEnabledInSettings = AssistsCore.isA11yEnabled(context),
                 shizukuReady = shizukuReady,
                 // 视觉线路的可执行性由 Shizuku 注入决定；录屏只提供抽帧，
                 // 没有注入能力时点击 / 输入 / 滑动都无从谈起。
@@ -101,6 +109,16 @@ class RpaAndroidDevice @Inject constructor(
                 screenshotReady = shizukuReady || projectionReady,
             )
         }
+
+    /**
+     * 双模式就绪态变化流（用户定案「一开始就要实时判断」）：a11y 桥连接态与
+     * Shizuku shell 状态任一变化即发信号，供 UI 在 ON_RESUME 之外实时复检
+     * 运行能力徽标（无障碍开 / 关、Shizuku 启动 / 断开都会立刻反映到状态卡）。
+     */
+    val readinessChanges: Flow<Unit> = merge(
+        bridge.connected.map { },
+        shell.state.map { },
+    )
 
     override suspend fun launchApp(
         packageName: String,

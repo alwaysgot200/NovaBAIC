@@ -33,6 +33,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.verlintas.baic2.R
 import com.verlintas.rpa.engine.RpaRunner
+import com.verlintas.rpa.model.RpaLine
 import com.verlintas.rpa.model.RpaRunEvent
 import com.verlintas.rpa.store.RpaScriptStore
 import dagger.hilt.android.AndroidEntryPoint
@@ -87,7 +88,7 @@ class RpaRunService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startRun(intent.getStringExtra(EXTRA_SCRIPT_ID))
+            ACTION_START -> startRun(intent.getStringExtra(EXTRA_SCRIPT_ID), intent.getStringExtra(EXTRA_FORCE_LINE))
             ACTION_STOP -> stopRun("stopped")
         }
         return START_NOT_STICKY
@@ -95,7 +96,12 @@ class RpaRunService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startRun(scriptId: String?) {
+    private fun startRun(scriptId: String?, forceLineName: String?) {
+        val forceLine = when (forceLineName) {
+            RpaLine.A11Y.name -> RpaLine.A11Y
+            RpaLine.VISION.name -> RpaLine.VISION
+            else -> null
+        }
         if (job?.isActive == true) {
             // 同一时间只允许一个运行；第二命令不能静默消失，留痕便于排查。
             controller.record(RpaRunEvent.Log("start_ignored: already_running"))
@@ -119,7 +125,7 @@ class RpaRunService : Service() {
                         device = device,
                         templateExists = { sid, tid -> store.templateExists(sid, tid) },
                     )
-                    val result = runner.run(script) { event ->
+                    val result = runner.run(script, forceLine) { event ->
                         controller.record(event)
                         logEvent(event)
                         if (event is RpaRunEvent.StepStarted ||
@@ -341,6 +347,7 @@ class RpaRunService : Service() {
         const val ACTION_START = "com.verlintas.baic2.floatball.rpa.RUN_START"
         const val ACTION_STOP = "com.verlintas.baic2.floatball.rpa.RUN_STOP"
         const val EXTRA_SCRIPT_ID = "rpa_script_id"
+        const val EXTRA_FORCE_LINE = "rpa_force_line"
 
         private const val CHANNEL_ID = "rpa_run"
         private const val NOTIFICATION_ID = 2301

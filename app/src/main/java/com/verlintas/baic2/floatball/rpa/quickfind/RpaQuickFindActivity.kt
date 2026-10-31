@@ -40,7 +40,6 @@ import com.verlintas.baic2.core.data.prefs.SettingsRepository
 import com.verlintas.baic2.core.model.AccentColor
 import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
-import com.verlintas.baic2.floatball.auto.ScreenCapture
 import com.verlintas.baic2.floatball.rpa.RpaActivity
 import com.verlintas.baic2.floatball.rpa.RpaAndroidDevice
 import com.verlintas.baic2.floatball.rpa.RpaChromeGate
@@ -49,6 +48,7 @@ import com.verlintas.baic2.floatball.rpa.withVisionSpec
 import com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity
 import com.verlintas.rpa.model.RpaModePolicy
 import com.verlintas.rpa.model.RpaPickKind
+import com.verlintas.rpa.model.RpaPickPurpose
 import com.verlintas.rpa.model.RpaPickRequest
 import com.verlintas.rpa.model.RpaVisionSpec
 import com.verlintas.rpa.store.RpaScriptStore
@@ -84,9 +84,6 @@ class RpaQuickFindActivity : ComponentActivity() {
 
     @Inject
     lateinit var device: RpaAndroidDevice
-
-    @Inject
-    lateinit var screenCapture: ScreenCapture
 
     @Inject
     lateinit var settingsRepository: SettingsRepository
@@ -143,18 +140,6 @@ class RpaQuickFindActivity : ComponentActivity() {
                 RpaQuickFindScreen(
                     device = device,
                     captureFrame = { captureWithSelfHidden() },
-                    grantProjection = {
-                        // 授权编排必须发生在本 App 前台 Activity（ScreenCapture 约定）；
-                        // 弹窗可能整页盖住本页，先标记外部流程，避免 onStop 误清退。
-                        externalFlowActive = true
-                        try {
-                            runCatching { screenCapture.ensureProjection() }.getOrDefault(false)
-                        } finally {
-                            // 弹窗未盖住本页时不会有下一次 onResume，这里主动复位；
-                            // 若本页仍被盖住，复位后也不会再触发 onStop，安全。
-                            externalFlowActive = false
-                        }
-                    },
                     onOpenShizuku = {
                         externalFlowActive = true
                         runCatching {
@@ -228,15 +213,6 @@ class RpaQuickFindActivity : ComponentActivity() {
         lifecycleScope.launch {
             val outcome = withContext(Dispatchers.IO) {
                 runCatching {
-                    val png = ByteArrayOutputStream().use { out ->
-                        if (!template.compress(Bitmap.CompressFormat.PNG, 100, out)) {
-                            throw PickApplyException(
-                                R.string.float_rpa_pick_save_failed,
-                                "template_encode_failed",
-                            )
-                        }
-                        out.toByteArray()
-                    }
                     val script = scriptStore.load(request.scriptId)
                         ?: throw PickApplyException(
                             R.string.float_rpa_pick_store_failed,
@@ -248,12 +224,24 @@ class RpaQuickFindActivity : ComponentActivity() {
                             "mode_without_vision",
                         )
                     }
-                    // 先落模板再落脚本：脚本里引用的 templateId 必须已经存在。
-                    scriptStore.saveTemplate(request.scriptId, templateId, png).getOrElse { error ->
-                        throw PickApplyException(
-                            R.string.float_rpa_pick_save_failed,
-                            error.message ?: "template_save_failed",
-                        )
+                    // POINT 目的（屏幕取点）只回填 RATIO 坐标，不落模板；TEMPLATE 才写模板。
+                    if (request.purpose != RpaPickPurpose.POINT) {
+                        val png = ByteArrayOutputStream().use { out ->
+                            if (!template.compress(Bitmap.CompressFormat.PNG, 100, out)) {
+                                throw PickApplyException(
+                                    R.string.float_rpa_pick_save_failed,
+                                    "template_encode_failed",
+                                )
+                            }
+                            out.toByteArray()
+                        }
+                        // 先落模板再落脚本：脚本里引用的 templateId 必须已经存在。
+                        scriptStore.saveTemplate(request.scriptId, templateId, png).getOrElse { error ->
+                            throw PickApplyException(
+                                R.string.float_rpa_pick_save_failed,
+                                error.message ?: "template_save_failed",
+                            )
+                        }
                     }
                     scriptStore.save(script.withVisionSpec(request.stepId, spec))
                         .getOrElse { error ->

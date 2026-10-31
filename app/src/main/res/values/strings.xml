@@ -146,7 +146,10 @@
     <string name="float_shizuku_install_failed">安装程序未能启动，请重试或稍后重启应用。</string>
     <string name="float_shizuku_install_corrupt">内置安装包校验失败，请重新安装本应用。</string>
     <string name="float_shizuku_prereq_title">前置设置（一次性，决定成败）</string>
-    <string name="float_shizuku_prereq_dev">开发者选项里打开「USB 调试（安全设置）」——它与普通「USB 调试」是两个独立开关；不开它，配对成功后执行命令仍会权限不足。</string>
+    <string name="float_shizuku_prereq_dev">开发者选项里打开「USB 调试（安全设置）」（部分机型如小米 / 红米需要它）——不开它，自动点击等命令会权限不足。</string>
+    <string name="float_shizuku_prereq_wifi_adb">开发者选项里打开「无线调试」。先打开开发者选项：进入「设置 → 关于手机（关于本机）」，连续多次单击「Android 版本号」（约 7 次），就会出现开发者选项。没有电脑时，Shizuku「通过无线调试启动」是唯一的启动口，无线调试不开就起不来。注意无线调试跑在 WLAN 上：先连稳定的 Wi-Fi 再开，Wi-Fi 一断系统会自动把它关回去；启动成功后 Shizuku 常驻到手机重启，之后关掉无线调试不影响使用。</string>
+    <string name="float_shizuku_wifi_state_on">无线调试当前：已开启——请趁开着完成配对与启动。</string>
+    <string name="float_shizuku_wifi_state_off">无线调试当前：未开启。打开后若又自动关闭，多因 Wi-Fi 未连接 / 断开或省电断网——先连稳定 Wi-Fi 再开。</string>
     <string name="float_shizuku_prereq_notif">把通知样式切换为「原生 Android」（设置→通知→通知显示设置）——部分定制系统的自定义通知会吞掉 Shizuku 配对弹窗，6 位配对码出不来，卡在「正在搜索配对服务」。</string>
     <string name="float_shizuku_pair_title">无线调试配对三步</string>
     <string name="float_shizuku_pair_1">Shizuku 内点「通过无线调试启动」，跳到开发者选项打开「无线调试」</string>
@@ -878,10 +881,10 @@
     <string name="float_companion_disabled">自动档总闸未开启，请先在设置中确认风险并开启</string>
     <!-- R1 三模执行通道与就绪门（§17.2/§20.1） -->
     <string name="float_settings_executor_section">执行通道</string>
-    <string name="float_settings_executor_hint">自动降级=无障碍可用则用无障碍，失败换手势粘贴，再不行 Shizuku 免无障碍，都不可用自动转起草档。Shizuku 模式免无障碍、检测面更小，但需保持 Shizuku 在线与录屏授权（有状态栏指示灯），找图定位略慢。手势粘贴免 Shizuku：长按输入行→OCR 找「粘贴」→剪贴板落字→点绿键发送，适合微信这类无障碍节点黑洞的 IM。</string>
+    <string name="float_settings_executor_hint">自动：无障碍 → 手势粘贴 → Shizuku 依次降级，均不可用转起草档。</string>
     <string name="float_settings_executor_auto">自动降级</string>
     <string name="float_settings_executor_a11y">仅无障碍</string>
-    <string name="float_settings_executor_gesture">手势粘贴（免 Shizuku）</string>
+    <string name="float_settings_executor_gesture">手势粘贴</string>
     <string name="float_settings_executor_shizuku">Shizuku 免无障碍</string>
     <string name="float_settings_readiness_checking">正在逐项检测就绪状态…</string>
     <!-- 2026-10-20 通报方案 §4：H 接管/G 达成铃声通报。 -->
@@ -1330,7 +1333,7 @@
     <string name="float_rpa_issue_generic">校验失败（%1$s）</string>
 
     <!-- RPA 自动化：脚本库 -->
-    <string name="float_rpa_library_hint">先确定执行模式再编排动作：a11y 模式依赖无障碍服务；无 a11y 模式依赖 Shizuku + 截屏 + OCR；双模式要求每个定位动作两套方案都配置。运行时严格按动作从上到下顺序执行。</string>
+    <string name="float_rpa_library_hint">先确定执行模式再编排动作；运行时按从上到下顺序执行。</string>
     <string name="float_rpa_capabilities">运行能力</string>
     <string name="float_rpa_cap_a11y">无障碍</string>
     <string name="float_rpa_cap_shizuku">Shizuku</string>
@@ -1339,7 +1342,6 @@
     <string name="float_rpa_cap_ocr">OCR</string>
     <string name="float_rpa_cap_projection">录屏</string>
     <string name="float_rpa_cap_refresh">刷新</string>
-    <string name="float_rpa_grant_projection">授权录屏</string>
     <string name="float_rpa_open_shizuku">打开 Shizuku 授权页</string>
     <string name="float_rpa_scripts">我的脚本</string>
     <string name="float_rpa_new">新建</string>
@@ -1411,8 +1413,18 @@
     <string name="float_rpa_import_unreadable">无法识别的脚本文件（支持 .json / .xml / .rpa）</string>
     <string name="float_rpa_record">录制</string>
     <string name="float_rpa_record_planned">录制（规划中）</string>
-    <string name="float_rpa_caps_ready">能力就绪：无障碍 / Shizuku / OCR / 录屏</string>
-    <string name="float_rpa_caps_expand">展开能力详情</string>
+    <string name="float_rpa_mode_line_a11y">a11y（无障碍）</string>
+    <string name="float_rpa_mode_line_vision">无 a11y（shizuku）</string>
+    <string name="float_rpa_mode_status_ready">已激活</string>
+    <string name="float_rpa_mode_status_missing">未激活</string>
+    <string name="float_rpa_run_mode_title">选择运行模式</string>
+    <string name="float_rpa_run_gate_title">运行前置条件未就绪</string>
+    <string name="float_rpa_cap_frame">录屏抽帧</string>
+    <string name="float_rpa_cap_quickfind">以图找图</string>
+    <string name="float_rpa_gate_dual_title">需至少一条线路就绪</string>
+    <string name="float_rpa_gate_dual_hint">a11y 或无 a11y 任一条就绪即可新建。缺哪项补哪项，补齐后点「刷新检测」：</string>
+    <string name="float_rpa_gate_dual_a11y">a11y（无障碍）：在系统设置中开启无障碍服务</string>
+    <string name="float_rpa_gate_dual_shizuku">无 a11y（shizuku）：安装并启动 Shizuku，完成授权</string>
     <string name="float_rpa_script_kb">%1$.1f KB</string>
     <string name="float_rpa_script_meta">%1$s · %2$s</string>
 
@@ -1434,7 +1446,7 @@
     <string name="float_rpa_step_n">第 %1$d 步</string>
     <string name="float_rpa_insert_here">插入到第 %1$d 步</string>
     <string name="float_rpa_pick_on_screen">在目标应用拾取</string>
-    <string name="float_rpa_pick_armed">已进入拾取：请切到目标 App，从悬浮球 → 更多 → 布局分析 / 以图找图</string>
+    <string name="float_rpa_pick_armed">已进入拾取模式</string>
     <string name="float_rpa_pick_applied">定位已回填到当前步骤</string>
     <string name="float_rpa_pick_banner">为「%1$s」%2$s 拾取定位</string>
     <string name="float_rpa_pick_apply">应用到当前步骤</string>
@@ -1674,7 +1686,6 @@
     <string name="float_rpa_quickfind_searching">正在隐藏本页并抓取屏幕…</string>
     <string name="float_rpa_quickfind_below_threshold">低于阈值 %1$s：最佳得分 %2$s（不画假框）</string>
     <string name="float_rpa_quickfind_open_shizuku">打开 Shizuku 授权</string>
-    <string name="float_rpa_quickfind_grant_projection">授权录屏</string>
     <string name="float_rpa_quickfind_no_image">尚未选择图片</string>
     <string name="float_rpa_quickfind_image_ready">图片已就绪，可以查找</string>
     <string name="float_rpa_quickfind_pick_hint">图片只在本次查找内使用，退出即清理</string>
@@ -1723,6 +1734,7 @@
     <string name="float_rpa_vision_test_ok">命中 (%1$d, %2$d)，相似度 %3$s</string>
     <string name="float_rpa_vision_test_fail">未命中（阈值 %1$s）：%2$s</string>
     <string name="float_rpa_vision_test_no_template">请先选择或保存模板</string>
+    <string name="float_rpa_vision_screen_test">从屏幕测试找图</string>
     <string name="float_rpa_vision_ocr">OCR 文本</string>
     <string name="float_rpa_vision_ocr_loading">识别中…</string>
     <string name="float_rpa_vision_ocr_run">识别当前屏幕</string>
@@ -1815,6 +1827,8 @@
     <string name="float_rpa_stepdlg_optional">选填</string>
     <string name="float_rpa_stepdlg_pick_point">屏幕取点</string>
     <string name="float_rpa_stepdlg_open_vision">找图面板</string>
+    <string name="float_rpa_stepdlg_pick_image">图片拾取</string>
+    <string name="float_rpa_planned">规划中</string>
     <string name="float_rpa_stepdlg_concept_launch_app">打开应用</string>
     <string name="float_rpa_stepdlg_concept_tap_image">点击图片</string>
     <string name="float_rpa_stepdlg_concept_tap_text">点击文字</string>
@@ -1836,6 +1850,7 @@
     <string name="float_rpa_stepdlg_hold_ms">按下时间</string>
     <string name="float_rpa_stepdlg_image_pos">图片位置</string>
     <string name="float_rpa_stepdlg_template_none">未选择模板</string>
+    <string name="float_rpa_stepdlg_vision_summary">相似度 %1$d%% · 匹配第 %2$d</string>
     <string name="float_rpa_stepdlg_text">文本</string>
     <string name="float_rpa_stepdlg_match_index">匹配第几</string>
     <string name="float_rpa_stepdlg_var_name">变量名</string>

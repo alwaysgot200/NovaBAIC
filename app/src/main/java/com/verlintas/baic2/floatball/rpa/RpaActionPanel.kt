@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -63,7 +62,6 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -84,10 +82,12 @@ import java.util.Locale
 /**
  * 浮窗动作列表（母规格 §7.5）的墨板 UI：标题栏 + 步骤列表 + 底栏三段。
  *
- * - 窗口几何（宽 55% 拖柄 45%~75%、拖动、贴边吸附、收起圆球）归
- *   [RpaActionPanelController]，这里只发手势事件；
+ * - 窗口几何（宽 80% 定值居中、拖动、贴边吸附、收起圆球）归
+ *   [RpaActionPanelController]，这里只发手势事件；步骤列表固定 3 行高，
+ *   更多步骤内部滚动（§7.5「宽高均不可变」）；
  * - 业务动作全部回调化（[RpaActionPanelHost]），宿主 p2-6 接线，浮窗不做业务；
- * - 墨板观感固定深色（§7.8）：不随系统主题，圆角 16dp / elevation 8dp。
+ * - 墨板观感固定深色（§7.8）：不随系统主题，圆角 16dp / elevation 8dp；
+ * - 动作编辑浮窗（第二 overlay 窗口）的 chrome 见 [RpaActionEditWindow]。
  */
 @Composable
 internal fun RpaActionPanel(
@@ -145,8 +145,6 @@ internal interface RpaActionPanelHost {
 internal interface RpaActionPanelActions : RpaActionPanelHost {
     fun onTitleDragBy(dx: Float, dy: Float)
     fun onTitleDragEnd()
-    fun onWidthDragBy(dx: Float)
-    fun onWidthDragEnd()
     fun onCollapse()
     fun onExpand()
 }
@@ -181,13 +179,13 @@ private val ShadowPad = 8.dp
 /** 圆球直径（§7.5：收起缩为 44dp 圆球）。 */
 private val BallSize = 44.dp
 
-/** 右缘拖柄宽度（45%~75% 屏宽调整）。 */
-private val ResizeHitWidth = 8.dp
-
 /** 步骤行视觉高 36dp + 透明 hit 扩展到 48dp，行间 4dp。 */
 private val StepVisualHeight = 36.dp
 private val StepHitHeight = 48.dp
 private val StepGap = 4.dp
+
+/** 步骤列表固定高（§7.5）：3 × (48+4)dp = 156dp，更多步骤内部滚动。 */
+private val StepListHeight = (StepHitHeight + StepGap) * 3
 
 // ── 面板骨架 ──────────────────────────────────────────────────────────
 
@@ -199,20 +197,12 @@ private fun PanelChrome(state: RpaActionPanelState, actions: RpaActionPanelActio
                 .shadow(8.dp, PanelShape)
                 .clip(PanelShape)
                 .background(InkBoard.Surface)
-                .fillMaxWidth()
-                // 高 = 内容自适应，上限屏高 65%；步骤区内部滚动（§7.5）。
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.65f)
-                // 给右缘拖柄让出一条不遮内容的边。
-                .padding(end = ResizeHitWidth),
+                .fillMaxWidth(),
         ) {
             PanelTitleBar(state = state, actions = actions)
-            StepArea(state = state, actions = actions, modifier = Modifier.weight(1f, fill = false))
+            StepArea(state = state, actions = actions)
             PanelBottomBar(state = state, actions = actions)
         }
-        ResizeHandle(
-            actions = actions,
-            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(ResizeHitWidth),
-        )
     }
 }
 
@@ -240,28 +230,56 @@ private fun PanelBall(actions: RpaActionPanelActions) {
     }
 }
 
-/** 右缘拖柄：竖向细条，拖动调整面板宽度。 */
+/**
+ * 动作编辑浮窗（第二 overlay 窗口，§7.5/§7.6）的墨板 chrome：标题栏（整条拖动 +
+ * ✕ 取消当前步骤编辑）+ 内容区（[RpaStepDialog] 骨架，字段区内部滚动）。
+ *
+ * 窗口几何（等宽对齐列表窗、固定高 ≈ 屏高 50%、接壤吸附 / 跟随 / 独立拖动）归
+ * [RpaActionPanelController]，这里只发手势事件与 ✕ 回调。
+ */
 @Composable
-private fun ResizeHandle(actions: RpaActionPanelActions, modifier: Modifier = Modifier) {
-    val gripDesc = stringResource(R.string.float_rpa_panel_resize)
-    Box(
-        modifier
-            .semantics { contentDescription = gripDesc }
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragEnd = { actions.onWidthDragEnd() },
-                    onDragCancel = { actions.onWidthDragEnd() },
-                ) { _, dragAmount -> actions.onWidthDragBy(dragAmount.x) }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier
-                .width(2.dp)
-                .height(32.dp)
-                .clip(RoundedCornerShape(1.dp))
-                .background(InkBoard.Outline),
-        )
+internal fun RpaActionEditWindow(
+    title: String,
+    onTitleDragBy: (dx: Float, dy: Float) -> Unit,
+    onTitleDragEnd: () -> Unit,
+    onClose: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val closeDesc = stringResource(R.string.float_rpa_analyze_close)
+    Baic2Theme(darkTheme = true) {
+        Box(Modifier.padding(ShadowPad)) {
+            Column(
+                Modifier
+                    .shadow(8.dp, PanelShape)
+                    .clip(PanelShape)
+                    .background(InkBoard.Surface)
+                    .fillMaxSize(),
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(StepHitHeight)
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragEnd = { onTitleDragEnd() },
+                                onDragCancel = { onTitleDragEnd() },
+                            ) { _, dragAmount -> onTitleDragBy(dragAmount.x, dragAmount.y) }
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = title,
+                        style = TitleTextStyle,
+                        color = InkBoard.OnSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                    )
+                    TitleIconButton(glyph = "✕", description = closeDesc, onClick = onClose)
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) { content() }
+            }
+        }
     }
 }
 
@@ -339,26 +357,29 @@ internal data class StepRowState(
 @Composable
 private fun StepArea(state: RpaActionPanelState, actions: RpaActionPanelActions, modifier: Modifier = Modifier) {
     Column(modifier.padding(horizontal = 8.dp)) {
-        if (state.steps.isEmpty()) {
-            Text(
-                text = stringResource(R.string.float_rpa_panel_steps_empty),
-                style = SummaryTextStyle,
-                color = InkBoard.OnSurfaceMuted,
-                modifier = Modifier.padding(vertical = 8.dp),
-            )
-        } else {
-            LazyColumn(Modifier.weight(1f, fill = false)) {
-                itemsIndexed(state.steps) { index, step ->
-                    StepRow(
-                        row = StepRowState(
-                            step = step,
-                            index = index,
-                            count = state.steps.size,
-                            selected = step.id == state.selectedStepId,
-                            steps = state.steps,
-                        ),
-                        actions = actions,
-                    )
+        // 列表固定 3 行高（§7.5）：更多步骤内部滚动，窗口高保持内容自适应。
+        Box(Modifier.fillMaxWidth().height(StepListHeight)) {
+            if (state.steps.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.float_rpa_panel_steps_empty),
+                    style = SummaryTextStyle,
+                    color = InkBoard.OnSurfaceMuted,
+                    modifier = Modifier.align(Alignment.CenterStart).padding(vertical = 8.dp),
+                )
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    itemsIndexed(state.steps) { index, step ->
+                        StepRow(
+                            row = StepRowState(
+                                step = step,
+                                index = index,
+                                count = state.steps.size,
+                                selected = step.id == state.selectedStepId,
+                                steps = state.steps,
+                            ),
+                            actions = actions,
+                        )
+                    }
                 }
             }
         }

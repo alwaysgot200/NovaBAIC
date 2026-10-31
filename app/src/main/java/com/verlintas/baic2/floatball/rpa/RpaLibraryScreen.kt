@@ -27,6 +27,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
@@ -87,6 +89,7 @@ import com.verlintas.baic2.floatball.AdvisorPage
 import com.verlintas.baic2.floatball.DeleteConfirmDialog
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaCapabilities
+import com.verlintas.rpa.model.RpaLine
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaScript
 import com.verlintas.rpa.store.RpaExportFormat
@@ -117,8 +120,8 @@ internal fun RpaLibraryScreen(
     runState: RpaRunController.State,
     onBack: () -> Unit,
     onRefreshCapabilities: () -> Unit,
-    onGrantProjection: () -> Unit,
     onOpenShizuku: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
     onOpen: (RpaScript) -> Unit,
     onCreate: (name: String, mode: RpaMode, appPackage: String) -> Unit,
     onRun: (RpaScript) -> Unit,
@@ -131,6 +134,7 @@ internal fun RpaLibraryScreen(
     onImport: (ByteArray) -> Unit,
 ) {
     var creating by remember { mutableStateOf(false) }
+    var createGate by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<RpaScript?>(null) }
     var renaming by remember { mutableStateOf<RpaScript?>(null) }
     var exporting by remember { mutableStateOf<RpaScript?>(null) }
@@ -139,7 +143,6 @@ internal fun RpaLibraryScreen(
     var query by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
     var addMenuOpen by remember { mutableStateOf(false) }
-    var capsExpanded by remember { mutableStateOf(false) }
     val filtered = remember(scripts, query) { filterRpaScripts(scripts, query) }
     val running = runState as? RpaRunController.State.Running
     val finished = runState as? RpaRunController.State.Finished
@@ -147,8 +150,9 @@ internal fun RpaLibraryScreen(
     val scope = rememberCoroutineScope()
     val busyText = stringResource(R.string.float_rpa_run_already)
     val unreadableText = stringResource(R.string.float_rpa_import_unreadable)
-    val allReady = capabilities.a11yReady && capabilities.shizukuReady &&
-        capabilities.ocrReady && capabilities.projectionReady
+    val a11yModeReady = capabilities.a11yModeReady()
+    val visionModeReady = capabilities.visionModeReady()
+    val anyReady = a11yModeReady || visionModeReady
 
     fun runAction(target: RpaScript) {
         val self = running?.takeIf { it.scriptId == target.id }
@@ -156,6 +160,18 @@ internal fun RpaLibraryScreen(
             self != null -> onStopRun()
             running != null -> Toast.makeText(context, busyText, Toast.LENGTH_SHORT).show()
             else -> onRun(target)
+        }
+    }
+
+    /**
+     * 新建前置门（用户定案）：a11y / 无 a11y 至少一条线路就绪即可新建；
+     * 两条都缺才弹就绪门给直达修复入口。新建后的可选模式按就绪情况过滤。
+     */
+    fun requestCreate() {
+        if (anyReady) {
+            creating = true
+        } else {
+            createGate = true
         }
     }
 
@@ -211,7 +227,7 @@ internal fun RpaLibraryScreen(
                             text = { Text(stringResource(R.string.float_rpa_new)) },
                             onClick = {
                                 addMenuOpen = false
-                                creating = true
+                                requestCreate()
                             },
                         )
                         DropdownMenuItem(
@@ -235,31 +251,11 @@ internal fun RpaLibraryScreen(
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                     ) {
-                        if (allReady && !capsExpanded) {
-                            // 能力全就绪时收起为一行（§7.1），点击展开完整能力卡。
-                            RpaCard {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = stringResource(R.string.float_rpa_caps_ready),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable { capsExpanded = true },
-                                    )
-                                    TextButton(onClick = onRefreshCapabilities) {
-                                        Text(stringResource(R.string.float_rpa_cap_refresh))
-                                    }
-                                }
-                            }
-                        } else {
-                            RpaCapabilityCard(
-                                capabilities = capabilities,
-                                onRefresh = onRefreshCapabilities,
-                                onGrantProjection = onGrantProjection,
-                                onOpenShizuku = onOpenShizuku,
-                            )
-                        }
+                        // 运行能力卡（用户定案）：只留两行模式状态，不堆解释文字。
+                        RpaCapabilityCard(
+                            capabilities = capabilities,
+                            onRefresh = onRefreshCapabilities,
+                        )
                         Text(
                             text = stringResource(R.string.float_rpa_scripts),
                             style = MaterialTheme.typography.titleSmall,
@@ -319,7 +315,7 @@ internal fun RpaLibraryScreen(
                                 OutlinedButton(onClick = {}, enabled = false) {
                                     Text(stringResource(R.string.float_rpa_record_planned))
                                 }
-                                Button(onClick = { creating = true }) {
+                                Button(onClick = { requestCreate() }) {
                                     Text(stringResource(R.string.float_rpa_new))
                                 }
                             }
@@ -360,11 +356,22 @@ internal fun RpaLibraryScreen(
     if (creating) {
         CreateScriptDialog(
             defaultPackage = initialPackage.orEmpty(),
+            capabilities = capabilities,
             onDismiss = { creating = false },
             onConfirm = { name, mode, pkg ->
                 creating = false
                 onCreate(name, mode, pkg)
             },
+        )
+    }
+
+    if (createGate) {
+        DualReadyGateDialog(
+            capabilities = capabilities,
+            onDismiss = { createGate = false },
+            onRefresh = onRefreshCapabilities,
+            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+            onOpenShizuku = onOpenShizuku,
         )
     }
 
@@ -504,13 +511,23 @@ private fun countP2Steps(script: RpaScript): Int {
         .count { it.action in p2 }
 }
 
+/** a11y 模式激活口径：无障碍服务连接即激活。 */
+internal fun RpaCapabilities.a11yModeReady(): Boolean = a11yReady
+
+/**
+ * 无 a11y 模式激活口径（用户定案 2026-10-30）：条件就是 Shizuku shell 正常工作。
+ * 录屏抽帧由软件在 Shizuku 就绪后自动完成（静默授权 + 运行时取投影），
+ * 不设人工按钮、不进就绪条件；OCR 内置即就绪。失败报因在运行时收口（§4.5）。
+ */
+internal fun RpaCapabilities.visionModeReady(): Boolean = shizukuReady
+
 @Composable
 private fun RpaCapabilityCard(
     capabilities: RpaCapabilities,
     onRefresh: () -> Unit,
-    onGrantProjection: () -> Unit,
-    onOpenShizuku: () -> Unit,
 ) {
+    val a11yReady = capabilities.a11yModeReady()
+    val visionReady = capabilities.visionModeReady()
     RpaCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             RpaSectionTitle(
@@ -521,60 +538,249 @@ private fun RpaCapabilityCard(
                 Text(stringResource(R.string.float_rpa_cap_refresh))
             }
         }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.padding(top = 6.dp),
-        ) {
-            RpaStatusBadge(
-                text = stringResource(R.string.float_rpa_cap_a11y),
-                ok = capabilities.a11yReady,
-            )
-            RpaStatusBadge(
-                text = stringResource(R.string.float_rpa_cap_shizuku),
-                ok = capabilities.shizukuReady,
-            )
-            RpaStatusBadge(
-                text = stringResource(R.string.float_rpa_cap_ocr),
-                ok = capabilities.ocrReady,
-            )
-            RpaStatusBadge(
-                text = stringResource(R.string.float_rpa_cap_projection),
-                ok = capabilities.projectionReady,
-            )
-        }
-        Text(
-            text = stringResource(
-                if (capabilities.visionReady) {
-                    R.string.float_rpa_cap_vision_ready
-                } else {
-                    R.string.float_rpa_cap_vision_missing
-                },
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = if (capabilities.visionReady) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.error
-            },
-            modifier = Modifier.padding(top = 6.dp),
+        // 运行能力卡（用户定案）：只留两行模式状态 + 激活徽标，不堆 chips 与解释。
+        ModeReadyRow(
+            label = stringResource(R.string.float_rpa_mode_line_a11y),
+            ready = a11yReady,
         )
-        if (!capabilities.projectionReady && !capabilities.shizukuReady) {
-            OutlinedButton(
-                onClick = onGrantProjection,
-                modifier = Modifier.padding(top = 6.dp),
-            ) {
-                Text(stringResource(R.string.float_rpa_grant_projection))
-            }
-        }
-        if (!capabilities.shizukuReady) {
-            OutlinedButton(
-                onClick = onOpenShizuku,
-                modifier = Modifier.padding(top = 6.dp),
-            ) {
-                Text(stringResource(R.string.float_rpa_open_shizuku))
-            }
-        }
+        ModeReadyRow(
+            label = stringResource(R.string.float_rpa_mode_line_vision),
+            ready = visionReady,
+        )
     }
+}
+
+/** 模式状态行：激活=主题色「已激活」，未激活=灰显「未激活」（不激活置灰显示）。 */
+@Composable
+private fun ModeReadyRow(label: String, ready: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(top = 8.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (ready) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.weight(1f),
+        )
+        CapChip(
+            text = stringResource(
+                if (ready) R.string.float_rpa_mode_status_ready
+                else R.string.float_rpa_mode_status_missing,
+            ),
+            ready = ready,
+        )
+    }
+}
+
+/** 能力子项 chip：就绪=主题色，缺失=灰显（与模式行同一「未激活置灰」口径）。 */
+@Composable
+private fun CapChip(text: String, ready: Boolean) {
+    val container = if (ready) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val onContainer = if (ready) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(shape = RoundedCornerShape(8.dp), color = container) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = onContainer,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        )
+    }
+}
+
+/**
+ * 新建前置门（用户定案 2026-10-30）：a11y / 无 a11y 至少一条线路就绪即可新建；
+ * 两条都缺才弹本门。缺哪项列哪项，修复入口统一指向无障碍设置 / Shizuku 设置页
+ * （Shizuku 走通后录屏抽帧自动完成，不设人工按钮）。
+ */
+@Composable
+private fun DualReadyGateDialog(
+    capabilities: RpaCapabilities,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+    onOpenShizuku: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.float_rpa_gate_dual_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = stringResource(R.string.float_rpa_gate_dual_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!capabilities.a11yReady) {
+                    Text(
+                        text = stringResource(R.string.float_rpa_gate_dual_a11y),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    OutlinedButton(
+                        onClick = onOpenAccessibilitySettings,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.float_rpa_gate_go_a11y))
+                    }
+                }
+                if (!capabilities.shizukuReady) {
+                    Text(
+                        text = stringResource(R.string.float_rpa_gate_dual_shizuku),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    OutlinedButton(
+                        onClick = onOpenShizuku,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.float_rpa_open_shizuku))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onRefresh) {
+                Text(stringResource(R.string.float_rpa_gate_refresh))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.float_cancel))
+            }
+        },
+    )
+}
+
+/**
+ * 运行模式门（用户定案「单击运行先选可用运行模式」）：按脚本支持的模式给候选线
+ * （VISION-only 只能无 a11y、A11Y-only 只能 a11y、DUAL 二选一），未就绪模式置灰
+ * 不可选并给直达修复入口；确认即以选定线路锁线运行（引擎禁止换线）。
+ */
+@Composable
+internal fun RunModeSelectDialog(
+    scriptMode: RpaMode,
+    capabilities: RpaCapabilities,
+    onDismiss: () -> Unit,
+    onConfirm: (RpaLine) -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+    onOpenShizuku: () -> Unit,
+) {
+    val candidates = when (scriptMode) {
+        RpaMode.A11Y -> listOf(RpaLine.A11Y)
+        RpaMode.VISION -> listOf(RpaLine.VISION)
+        RpaMode.DUAL -> listOf(RpaLine.A11Y, RpaLine.VISION)
+    }
+
+    fun lineReady(line: RpaLine): Boolean = when (line) {
+        RpaLine.A11Y -> capabilities.a11yModeReady()
+        RpaLine.VISION -> capabilities.visionModeReady()
+    }
+
+    var selected by remember(scriptMode) { mutableStateOf(candidates.firstOrNull { lineReady(it) }) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                stringResource(
+                    if (scriptMode == RpaMode.DUAL) {
+                        R.string.float_rpa_run_mode_title
+                    } else {
+                        R.string.float_rpa_run_gate_title
+                    },
+                ),
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                candidates.forEach { candidate ->
+                    val ready = lineReady(candidate)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = ready) { selected = candidate },
+                    ) {
+                        RadioButton(
+                            selected = selected == candidate,
+                            onClick = { if (ready) selected = candidate },
+                            enabled = ready,
+                        )
+                        Text(
+                            stringResource(
+                                if (candidate == RpaLine.A11Y) {
+                                    R.string.float_rpa_mode_line_a11y
+                                } else {
+                                    R.string.float_rpa_mode_line_vision
+                                },
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (ready) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        CapChip(
+                            text = stringResource(
+                                if (ready) {
+                                    R.string.float_rpa_mode_status_ready
+                                } else {
+                                    R.string.float_rpa_mode_status_missing
+                                },
+                            ),
+                            ready = ready,
+                        )
+                    }
+                }
+                // 缺项修复入口（与新建前置门同款）：只列候选模式缺的项；
+                // 无 a11y 线缺项统一指向 Shizuku 设置页（录屏抽帧走通后自动完成）。
+                if (RpaLine.A11Y in candidates && !capabilities.a11yReady) {
+                    OutlinedButton(
+                        onClick = onOpenAccessibilitySettings,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.float_rpa_gate_go_a11y))
+                    }
+                }
+                if (RpaLine.VISION in candidates && !capabilities.visionModeReady()) {
+                    OutlinedButton(
+                        onClick = onOpenShizuku,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.float_rpa_open_shizuku))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selected?.let { lineReady(it) } == true,
+                onClick = { selected?.let(onConfirm) },
+            ) {
+                Text(stringResource(R.string.float_rpa_run))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.float_cancel))
+            }
+        },
+    )
 }
 
 /**
@@ -977,14 +1183,30 @@ internal fun ImportConfirmDialog(
     )
 }
 
+/**
+ * 新建脚本弹框（用户定案 2026-10-30）：模式选项按就绪情况过滤——哪条线路就绪
+ * 就给哪条（DUAL 需两条都就绪），未就绪的模式不出现，免得建完无法运行。
+ */
 @Composable
 private fun CreateScriptDialog(
     defaultPackage: String,
+    capabilities: RpaCapabilities,
     onDismiss: () -> Unit,
     onConfirm: (name: String, mode: RpaMode, appPackage: String) -> Unit,
 ) {
+    val a11yReady = capabilities.a11yModeReady()
+    val visionReady = capabilities.visionModeReady()
+    val selectableModes = remember(a11yReady, visionReady) {
+        buildList {
+            if (a11yReady) add(RpaMode.A11Y)
+            if (visionReady) add(RpaMode.VISION)
+            if (a11yReady && visionReady) add(RpaMode.DUAL)
+        }
+    }
     var name by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf(RpaMode.DUAL) }
+    var mode by remember(selectableModes) {
+        mutableStateOf(selectableModes.firstOrNull { it == RpaMode.DUAL } ?: selectableModes.first())
+    }
     var appPackage by remember { mutableStateOf(defaultPackage) }
 
     AlertDialog(
@@ -997,7 +1219,11 @@ private fun CreateScriptDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                RpaModeSelector(mode = mode, onMode = { mode = it })
+                RpaModeSelector(
+                    mode = mode,
+                    modes = selectableModes,
+                    onMode = { mode = it },
+                )
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },

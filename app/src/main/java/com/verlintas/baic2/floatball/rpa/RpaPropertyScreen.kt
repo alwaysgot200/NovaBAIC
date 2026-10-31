@@ -103,7 +103,6 @@ internal fun RpaPropertyScreen(
     onDelete: () -> Unit,
     onDescriptionChange: (String) -> Unit,
     onRefreshCapabilities: () -> Unit,
-    onGrantProjection: () -> Unit,
     onOpenShizuku: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -171,7 +170,6 @@ internal fun RpaPropertyScreen(
                     script = script,
                     capabilities = capabilities,
                     onRefreshCapabilities = onRefreshCapabilities,
-                    onGrantProjection = onGrantProjection,
                     onOpenShizuku = onOpenShizuku,
                 )
                 PropertyBasicInfo(script)
@@ -328,7 +326,6 @@ private fun PropertyEnvironment(
     script: RpaScript,
     capabilities: RpaCapabilities,
     onRefreshCapabilities: () -> Unit,
-    onGrantProjection: () -> Unit,
     onOpenShizuku: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -371,11 +368,8 @@ private fun PropertyEnvironment(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (!capabilities.projectionReady && !capabilities.shizukuReady) {
-                OutlinedButton(onClick = onGrantProjection, modifier = Modifier.padding(top = 6.dp)) {
-                    Text(stringResource(R.string.float_rpa_grant_projection))
-                }
-            }
+            // 无 a11y 线缺项修复入口统一指向 Shizuku 设置页（用户定案：录屏抽帧
+            // 由 Shizuku 走通后自动完成，不设「授权录屏」人工按钮）。
             if (!capabilities.shizukuReady) {
                 OutlinedButton(onClick = onOpenShizuku, modifier = Modifier.padding(top = 6.dp)) {
                     Text(stringResource(R.string.float_rpa_open_shizuku))

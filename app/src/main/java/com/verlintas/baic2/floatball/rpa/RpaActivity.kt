@@ -80,6 +80,8 @@ import com.verlintas.rpa.model.RpaFlowKind
 import com.verlintas.rpa.model.RpaIds
 import com.verlintas.rpa.model.RpaIssue
 import com.verlintas.rpa.model.RpaIssueSeverity
+import com.verlintas.rpa.model.RpaLine
+import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaParams
 import com.verlintas.rpa.model.RpaPickRequest
 import com.verlintas.rpa.model.RpaReadiness
@@ -98,6 +100,7 @@ import java.io.File
 import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -177,7 +180,7 @@ class RpaActivity : ComponentActivity() {
                     },
                     onClose = { finish() },
                     onCloseForPick = { finish() },
-                    onStartRun = { scriptId -> RpaEntryPoints.startRun(this, scriptId) },
+                    onStartRun = { scriptId, line -> RpaEntryPoints.startRun(this, scriptId, line) },
                     onStopRun = { RpaEntryPoints.stopRun(this) },
                 )
             }
@@ -216,6 +219,17 @@ private fun Context.withRpaLocale(locale: Locale): Context {
     return createConfigurationContext(configuration)
 }
 
+/** 就绪校验按所选运行线收口（D7）：只拦本线真缺的前置项，另一条线的缺项不拦。 */
+private fun RpaIssue.hindersLine(line: RpaLine): Boolean = when (line) {
+    RpaLine.A11Y -> code !in setOf(
+        "ready_vision_missing",
+        "ready_vision_injection_missing",
+        "ready_ocr_missing",
+        "ready_dual_vision_missing",
+    )
+    RpaLine.VISION -> code !in setOf("ready_a11y_missing", "ready_dual_a11y_missing")
+}
+
 private enum class RpaScreen {
     LIBRARY,
     PROPERTY,
@@ -241,7 +255,7 @@ private fun RpaApp(
     onOpenShizuku: () -> Unit,
     onClose: () -> Unit,
     onCloseForPick: () -> Unit,
-    onStartRun: (String) -> Unit,
+    onStartRun: (String, RpaLine) -> Unit,
     onStopRun: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -252,6 +266,8 @@ private fun RpaApp(
     var script by remember { mutableStateOf<RpaScript?>(null) }
     var capabilities by remember { mutableStateOf(device.capabilities) }
     var blockedIssues by remember { mutableStateOf<List<RpaIssue>>(emptyList()) }
+    // 运行模式门请求（D4/D5）：非空即弹 RunModeSelectDialog。
+    var runModeRequest by remember { mutableStateOf<RpaScript?>(null) }
     // 属性页「编辑」的模式确认门（§7.4）：确认后拉起浮窗动作面板。
     var modeGateVisible by remember { mutableStateOf(false) }
     // p2-6 浮窗会话与弹框槽：动作面板是悬浮覆盖层，业务弹框全部画进它的 overlay。
@@ -274,6 +290,14 @@ private fun RpaApp(
 
     fun refreshCapabilities() {
         capabilities = device.capabilities
+    }
+
+    // 系统无障碍设置直达（模式门 / 运行能力卡 / 新建前置门共用）。
+    val openAccessibilitySettings: () -> Unit = {
+        runCatching {
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+        Unit
     }
 
     /** 进入脚本详情页（§7.2）：列表单击 / 新建 / 导入 / 拾取回跳的统一落点。 */
@@ -328,23 +352,45 @@ private fun RpaApp(
      * 运行前统一门禁：先落盘（列表运行读的是 store 版本），再做校验 + 能力就绪；
      * 有 ERROR 时只弹问题列表，不启动服务，避免后台跑一半才失败。
      */
-    suspend fun requestRun(target: RpaScript) {
+    suspend fun requestRun(target: RpaScript, line: RpaLine) {
         val saved = persist(target) ?: return
         val issues = withContext(Dispatchers.IO) {
             RpaValidator.validate(saved) +
                 RpaReadiness.check(saved, device.capabilities) { sid, tid ->
                     store.templateExists(sid, tid)
                 }
-        }
+        }.filter { it.hindersLine(line) }
         val errors = issues.filter { it.severity == RpaIssueSeverity.ERROR }
         if (errors.isNotEmpty()) {
             blockedIssues = errors
             return
         }
-        runCatching { onStartRun(saved.id) }
+        runCatching { onStartRun(saved.id, line) }
             .onFailure {
                 Toast.makeText(context, runStartFailed, Toast.LENGTH_SHORT).show()
             }
+    }
+
+    /**
+     * 运行模式门（用户定案 D5）：DUAL 每次运行弹「选择运行模式」；单模式脚本唯一
+     * 模式就绪→直跑，未就绪→弹修复门（确认钮置灰，先去开设置）。
+     */
+    fun requestRunWithModeGate(target: RpaScript) {
+        val onlyLine = when (target.mode) {
+            RpaMode.A11Y -> RpaLine.A11Y
+            RpaMode.VISION -> RpaLine.VISION
+            RpaMode.DUAL -> null
+        }
+        val ready = when (onlyLine) {
+            RpaLine.A11Y -> capabilities.a11yModeReady()
+            RpaLine.VISION -> capabilities.visionModeReady()
+            null -> false
+        }
+        if (onlyLine != null && ready) {
+            scope.launch { requestRun(target, onlyLine) }
+        } else {
+            runModeRequest = target
+        }
     }
 
     /**
@@ -418,10 +464,11 @@ private fun RpaApp(
     }
 
     /**
-     * 进入拾取（方案 §7.8）：先落盘脚本（弹框里的新步骤先把底稿插进步骤表，
+     * 进入拾取（方案 §7.8/§7.9）：先落盘脚本（弹框里的新步骤先把底稿插进步骤表，
      * 保证工具写回按 stepId 命中），再武装请求并退出本页，把目标 App 让到前台；
-     * 用户在悬浮球里完成布局分析 / 以图找图并「应用到当前步骤」后，带 scriptId /
-     * stepId 重新打开本页并定位到该步骤。
+     * 随后**直拉对应工具面**（布局分析 / 以图找图，不经悬浮球菜单）——服务侧等
+     * 本 App 退出前台后自动打开。用户完成拾取并「应用到当前步骤」后，带
+     * scriptId / stepId 重新打开本页并定位到该步骤。
      */
     fun armPick(request: RpaPickRequest) {
         scope.launch {
@@ -435,6 +482,7 @@ private fun RpaApp(
             persist(base) ?: return@launch
             withContext(Dispatchers.IO) { pickCoordinator.arm(request) }
             Toast.makeText(context, R.string.float_rpa_pick_armed, Toast.LENGTH_LONG).show()
+            RpaEntryPoints.openPickTool(context)
             panelController?.close()
             panelController = null
             onCloseForPick()
@@ -482,44 +530,11 @@ private fun RpaApp(
 
     /**
      * 面板弹框槽（画在 overlay 内；禁 android Dialog 的用 Ink 内窗）：
-     * 步骤编辑 / 全局设置 / 删除被引用跳转 / 清空动作 / 运行日志 / 脚本变量 /
-     * 导出格式 / 导入确认。
+     * 全局设置 / 删除被引用跳转 / 清空动作 / 运行日志 / 脚本变量 /
+     * 导出格式 / 导入确认。步骤编辑走动作编辑浮窗（[RpaActionPanelController.openEdit]）。
      */
     val panelDialogs: @Composable () -> Unit = {
         val active = script
-        val slot = stepDialog
-        if (slot != null && active != null) {
-            RpaStepDialog(
-                step = slot.step,
-                isNew = slot.isNew,
-                script = active,
-                onArmPick = { request -> armPick(request) },
-                onOpenVisionPanel = {
-                    // 图11 找图面板：暂存来源弹框步骤，收起面板进以图找图页。
-                    visionSlot = slot
-                    stepDialog = null
-                    panelController?.onCollapse()
-                    screen = RpaScreen.VISION
-                    runCatching {
-                        context.startActivity(
-                            Intent(context, RpaActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
-                        )
-                    }
-                },
-                onConfirm = { updated ->
-                    stepDialog = null
-                    if (slot.isNew) {
-                        mutateSteps { steps -> steps + updated }
-                    } else {
-                        mutateSteps { steps ->
-                            steps.map { step -> if (step.id == updated.id) updated else step }
-                        }
-                    }
-                },
-                onDismiss = { stepDialog = null },
-            )
-        }
         if (settingsVisible && active != null) {
             RpaGlobalSettingsDialog(
                 global = active.global,
@@ -684,7 +699,7 @@ private fun RpaApp(
             }
 
             override fun onRun() {
-                script?.let { active -> scope.launch { requestRun(active) } }
+                script?.let { active -> requestRunWithModeGate(active) }
             }
 
             override fun onStop() = onStopRun()
@@ -788,6 +803,57 @@ private fun RpaApp(
         }
     }
 
+    // 步骤编辑 = 动作编辑浮窗（第二 overlay 窗口，§7.5/§7.6）：stepDialog 驱动开合。
+    LaunchedEffect(stepDialog, panelController) {
+        val controller = panelController
+        val slot = stepDialog
+        if (slot == null || controller == null) {
+            controller?.closeEdit()
+            return@LaunchedEffect
+        }
+        controller.openEdit(
+            title = context.getString(
+                if (slot.isNew) R.string.float_rpa_panel_add_step else R.string.float_rpa_stepdlg_title,
+            ),
+            onDismiss = { stepDialog = null },
+        ) {
+            // 内容读快照态组合：脚本 / 步骤槽变化即刷新（与原弹框槽口径一致）。
+            val current = stepDialog
+            val active = script
+            if (current != null && active != null) {
+                RpaStepDialog(
+                    step = current.step,
+                    script = active,
+                    onArmPick = { request -> armPick(request) },
+                    onOpenVisionPanel = {
+                        // 图11 找图面板：暂存来源弹框步骤，收起面板进以图找图页。
+                        visionSlot = current
+                        stepDialog = null
+                        panelController?.onCollapse()
+                        screen = RpaScreen.VISION
+                        runCatching {
+                            context.startActivity(
+                                Intent(context, RpaActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+                            )
+                        }
+                    },
+                    onConfirm = { updated ->
+                        stepDialog = null
+                        if (current.isNew) {
+                            mutateSteps { steps -> steps + updated }
+                        } else {
+                            mutateSteps { steps ->
+                                steps.map { step -> if (step.id == updated.id) updated else step }
+                            }
+                        }
+                    },
+                    onDismiss = { stepDialog = null },
+                )
+            }
+        }
+    }
+
     // 面板展示态与外部状态同步（脚本 / 运行态 / 日志开关 / 选中步）。
     LaunchedEffect(runState, script, logsVisible, stepDialog) {
         panelController?.update(currentPanelState())
@@ -812,6 +878,12 @@ private fun RpaApp(
         refreshCapabilities()
     }
 
+    // 双模式状态实时刷新（用户定案「一开始就要实时判断」）：a11y 连接态 /
+    // Shizuku shell 状态一变，运行能力卡与新建前置门立刻复检，不等下次 resume。
+    LaunchedEffect(Unit) {
+        device.readinessChanges.collect { refreshCapabilities() }
+    }
+
     BackHandler(enabled = screen != RpaScreen.LIBRARY) {
         // §九面板收纳：返回键先把浮窗面板收成圆球，再走各页既有返回口径。
         panelController?.onCollapse()
@@ -831,13 +903,8 @@ private fun RpaApp(
             runState = runState,
             onBack = onClose,
             onRefreshCapabilities = { refreshCapabilities() },
-            onGrantProjection = {
-                scope.launch {
-                    runCatching { device.ensureVisionReady() }
-                    refreshCapabilities()
-                }
-            },
             onOpenShizuku = onOpenShizuku,
+            onOpenAccessibilitySettings = openAccessibilitySettings,
             onOpen = { target -> openProperty(target) },
             onCreate = { name, mode, pkg ->
                 scope.launch {
@@ -855,7 +922,7 @@ private fun RpaApp(
                     }
                 }
             },
-            onRun = { target -> scope.launch { requestRun(target) } },
+            onRun = { target -> requestRunWithModeGate(target) },
             onStopRun = onStopRun,
             onEdit = { target -> openProperty(target) },
             onRename = { target, name ->
@@ -940,7 +1007,7 @@ private fun RpaApp(
                     runState = runState,
                     onBack = { scope.launch { leaveToLibrary() } },
                     onEdit = { modeGateVisible = true },
-                    onRun = { scope.launch { requestRun(active) } },
+                    onRun = { requestRunWithModeGate(active) },
                     onStopRun = onStopRun,
                     onShare = { format -> scope.launch { exportScript(active, format) } },
                     onRename = { name ->
@@ -983,12 +1050,6 @@ private fun RpaApp(
                         scope.launch { persist(active.copy(description = description)) }
                     },
                     onRefreshCapabilities = { refreshCapabilities() },
-                    onGrantProjection = {
-                        scope.launch {
-                            runCatching { device.ensureVisionReady() }
-                            refreshCapabilities()
-                        }
-                    },
                     onOpenShizuku = onOpenShizuku,
                 )
                 if (modeGateVisible) {
@@ -1011,9 +1072,11 @@ private fun RpaApp(
                                 )
                             }
                         },
-                        onGrantProjection = {
+                        onRetryA11yConnection = {
                             scope.launch {
-                                runCatching { device.ensureVisionReady() }
+                                RpaEntryPoints.retryA11yBinding(context)
+                                // 服务侧重绑 + 绑定轮询（约 2s）完成后复检徽标。
+                                delay(2_500)
                                 refreshCapabilities()
                             }
                         },
@@ -1063,6 +1126,20 @@ private fun RpaApp(
                     Text(stringResource(R.string.float_rpa_run_blocked_dismiss))
                 }
             },
+        )
+    }
+
+    runModeRequest?.let { target ->
+        RunModeSelectDialog(
+            scriptMode = target.mode,
+            capabilities = capabilities,
+            onDismiss = { runModeRequest = null },
+            onConfirm = { line ->
+                runModeRequest = null
+                scope.launch { requestRun(target, line) }
+            },
+            onOpenAccessibilitySettings = openAccessibilitySettings,
+            onOpenShizuku = onOpenShizuku,
         )
     }
 }

@@ -145,12 +145,18 @@ internal fun RpaVisionScreen(
             withContext(Dispatchers.Default) { cropBitmap(bitmap, rect) }
         }
     }
-    val testBox = test?.match?.let { match ->
-        FrameBox(
-            bounds = RpaBounds(match.left, match.top, match.right, match.bottom),
-            kind = FrameBoxKind.SELECTED,
+    // 测试命中展示件（§7.9.2）：绿色命中框 + 白十字中心 + 坐标 / 尺寸 chip。
+    val testHits = test?.match?.let { match ->
+        listOf(
+            FrameHit(
+                bounds = RpaBounds(match.left, match.top, match.right, match.bottom),
+                centerX = match.centerX,
+                centerY = match.centerY,
+                width = match.width,
+                height = match.height,
+            ),
         )
-    }
+    }.orEmpty()
 
     suspend fun reload() {
         loading = true
@@ -210,8 +216,7 @@ internal fun RpaVisionScreen(
         }
     }
 
-    fun runTemplateTest() {
-        val bitmap = frame ?: return
+    fun runTemplateTest(bitmap: Bitmap) {
         val id = templateId ?: return
         test = null
         scope.launch {
@@ -228,6 +233,31 @@ internal fun RpaVisionScreen(
                     VisionTest(false, detail = error.message ?: "match_failed")
                 },
             )
+        }
+    }
+
+    /**
+     * 从屏幕测试找图（§7.9.2）：抓**当前帧**跑 [RpaAndroidDevice.testTemplate]，
+     * 结果画布复用以图找图展示件（绿色命中框 + 白十字中心 + 坐标 / 尺寸 chip）；
+     * 抓帧失败显式报因，不静默。
+     */
+    fun runScreenTest() {
+        if (templateId == null) return
+        test = null
+        scope.launch {
+            loading = true
+            loadError = null
+            val captured = withContext(Dispatchers.IO) {
+                runCatching { device.visionConfigFrame() }.getOrNull()
+            }
+            loading = false
+            if (captured == null) {
+                loadError = "frame_unavailable"
+                test = VisionTest(false, detail = "frame_unavailable")
+                return@launch
+            }
+            frame = captured
+            runTemplateTest(captured)
         }
     }
 
@@ -261,6 +291,18 @@ internal fun RpaVisionScreen(
                                 text = stringResource(R.string.float_rpa_vision_capture),
                                 modifier = Modifier.weight(1f),
                             )
+                            // 图11 右上「从屏幕测试找图」（§7.9.2）：抓当前帧跑匹配。
+                            OutlinedButton(
+                                onClick = { runScreenTest() },
+                                enabled = !loading && templateId != null,
+                                modifier = Modifier.padding(end = 8.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.float_rpa_vision_screen_test),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                             OutlinedButton(
                                 onClick = { scope.launch { reload() } },
                                 enabled = !loading,
@@ -307,7 +349,7 @@ internal fun RpaVisionScreen(
                                 bitmap = bitmap,
                                 previewHeight = 320.dp,
                                 selection = selection,
-                                boxes = listOfNotNull(testBox),
+                                hits = testHits,
                                 draggable = ratioPickTarget == null,
                                 onSelection = { selection = it },
                                 onTapPixel = { x, y ->
@@ -482,7 +524,7 @@ internal fun RpaVisionScreen(
                         modifier = Modifier.padding(top = 4.dp),
                     ) {
                         OutlinedButton(
-                            onClick = { runTemplateTest() },
+                            onClick = { frame?.let { runTemplateTest(it) } },
                             enabled = !loading && templateId != null,
                         ) {
                             Text(stringResource(R.string.float_rpa_vision_test))

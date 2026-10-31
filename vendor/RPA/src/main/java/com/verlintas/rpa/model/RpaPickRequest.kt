@@ -29,6 +29,19 @@ enum class RpaPickKind {
 }
 
 /**
+ * 拾取用途（v5 §7.9 排矛盾）：同一 VISION 拾取，回填的目标种类不同。
+ *
+ * - [TEMPLATE]：图片拾取——屏幕选区裁剪成模板，回填 `RpaVisionLocator(kind=TEMPLATE)`；
+ * - [POINT]：屏幕取点——回填 `RpaVisionLocator(kind=RATIO, ratioX/ratioY)`，
+ *   保持「点击(坐标)」的概念不被翻转成「点击图片」。
+ */
+@Serializable
+enum class RpaPickPurpose {
+    TEMPLATE,
+    POINT,
+}
+
+/**
  * 编辑器武装的拾取请求（方案 §7.8）。
  *
  * 编辑器先落盘脚本，再 arm 一份请求；工具（布局分析覆盖层 / 以图找图浮层）
@@ -44,6 +57,9 @@ data class RpaPickRequest(
     val scriptName: String = "",
     val stepLabel: String = "",
     val createdAt: Long = 0L,
+
+    /** 拾取用途（v5）：区分图片拾取与屏幕取点的回填目标种类，默认图片拾取。 */
+    val purpose: RpaPickPurpose = RpaPickPurpose.TEMPLATE,
 ) {
     fun isExpired(now: Long = System.currentTimeMillis()): Boolean =
         createdAt <= 0L || now - createdAt > TTL_MS

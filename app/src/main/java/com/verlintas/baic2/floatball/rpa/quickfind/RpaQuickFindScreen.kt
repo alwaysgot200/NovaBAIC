@@ -93,6 +93,7 @@ import com.verlintas.baic2.floatball.rpa.RpaAndroidDevice
 import com.verlintas.rpa.model.RpaBounds
 import com.verlintas.rpa.model.RpaIds
 import com.verlintas.rpa.model.RpaPick
+import com.verlintas.rpa.model.RpaPickPurpose
 import com.verlintas.rpa.model.RpaPickRequest
 import com.verlintas.rpa.model.RpaVisionKind
 import com.verlintas.rpa.model.RpaVisionLocator
@@ -279,6 +280,33 @@ private fun hitCircleInterior(
     tolerance: Float,
 ): Boolean = hypot(x - circle.centerX, y - circle.centerY) <= circle.radius + tolerance
 
+/** 选区中心 → 帧比例坐标（屏幕取点 POINT 回填用）；映射失败返回 null。 */
+private fun selectionCenterRatio(
+    shape: PickShape,
+    rect: RpaQuickFindBox?,
+    circle: PickCircle?,
+    frame: Bitmap,
+    viewSize: IntSize,
+): Pair<Float, Float>? {
+    val selection = when (shape) {
+        PickShape.RECT -> rect ?: return null
+        PickShape.CIRCLE -> circle?.let {
+            RpaQuickFindGeometry.circleBoundingSquare(it.centerX, it.centerY, it.radius)
+        } ?: return null
+    }
+    val bounds = RpaQuickFindGeometry.frameRect(
+        selection = selection,
+        frameWidth = frame.width,
+        frameHeight = frame.height,
+        viewWidth = viewSize.width,
+        viewHeight = viewSize.height,
+    ) ?: return null
+    val cx = (bounds.left + bounds.right) / 2
+    val cy = (bounds.top + bounds.bottom) / 2
+    return RpaQuickFindGeometry.ratio(cx, frame.width) to
+        RpaQuickFindGeometry.ratio(cy, frame.height)
+}
+
 /** 命中结果连同本次搜索参数一起保存，改滑杆不会改写已复制的 JSON。 */
 private data class QuickFindResult(
     val match: CvMatch,
@@ -300,7 +328,7 @@ private data class QuickFindResult(
  * - SEARCHING：由 Activity 把自身 decor 隐藏后抓帧（见 [RpaQuickFindActivity]），
  *   这里只负责发起与收结果；
  * - RESULT：绿色命中框 + 十字中心（[Canvas]）+ 底部结果卡（像素/比例/得分）；
- * - ERROR：无帧源给 Shizuku / 录屏授权入口；黑帧、模板过大、低于阈值各有文案。
+ * - ERROR：无帧源给 Shizuku 修复入口；黑帧、模板过大、低于阈值各有文案。
  *
  * 目标 App 始终在下方可见；本页只消费触摸，不把截图铺成背景。
  */
@@ -309,7 +337,6 @@ private data class QuickFindResult(
 internal fun RpaQuickFindScreen(
     device: RpaAndroidDevice,
     captureFrame: suspend () -> Result<Bitmap>,
-    grantProjection: suspend () -> Boolean,
     onOpenShizuku: () -> Unit,
     onExternalFlow: () -> Unit,
     onClose: () -> Unit,
@@ -464,23 +491,9 @@ internal fun RpaQuickFindScreen(
         }
     }
 
-    fun grantProjectionNow() {
-        if (searching) return
-        scope.launch {
-            val granted = runCatching { grantProjection() }.getOrDefault(false)
-            if (granted) {
-                sourceMissing = false
-                error = null
-            } else {
-                sourceMissing = true
-                error = context.getString(R.string.float_rpa_quickfind_error_frame)
-            }
-        }
-    }
-
     /**
      * 屏幕拾取（方案 §3.1）：自隐抓帧成功后进入冻结画布选区；失败沿用
-     * 既有三类报因 + Shizuku / 录屏授权入口，绝不静默。
+     * 既有三类报因 + Shizuku 修复入口，绝不静默。
      */
     fun startRegionPick() {
         if (searching || pickCapturing || pickCropping) return
@@ -530,6 +543,29 @@ internal fun RpaQuickFindScreen(
         val circleSel = pickCircle
         pickCropping = true
         error = null
+        // POINT 目的（屏幕取点，§7.9 排矛盾）：取选区中心比例回填 RATIO 坐标，
+        // 不裁模板、不搜索，保持「点击(坐标)」概念不被翻转成「点击图片」。
+        if (pickRequest?.purpose == RpaPickPurpose.POINT) {
+            val center = selectionCenterRatio(shapeNow, rectSel, circleSel, frame, viewSize)
+            pickCropping = false
+            if (center == null) {
+                error = context.getString(R.string.float_rpa_quickfind_pick_failed, "pick_point_failed")
+            } else {
+                onApplyPick?.invoke(
+                    RpaVisionSpec(
+                        primary = RpaVisionLocator(
+                            kind = RpaVisionKind.RATIO,
+                            ratioX = center.first,
+                            ratioY = center.second,
+                        ),
+                    ),
+                    // POINT 不写模板：bitmap/templateId 占位，applyPick 按 purpose 跳过模板落盘。
+                    frame,
+                    "",
+                )
+            }
+            return
+        }
         scope.launch {
             val bitmap = withContext(Dispatchers.Default) {
                 when (shapeNow) {
@@ -892,7 +928,6 @@ internal fun RpaQuickFindScreen(
                             message = message,
                             sourceMissing = sourceMissing,
                             onOpenShizuku = onOpenShizuku,
-                            onGrantProjection = { grantProjectionNow() },
                         )
                     }
                     Row(
@@ -1080,7 +1115,6 @@ internal fun RpaQuickFindScreen(
                         message = message,
                         sourceMissing = sourceMissing,
                         onOpenShizuku = onOpenShizuku,
-                        onGrantProjection = { grantProjectionNow() },
                     )
                 }
 
@@ -1233,14 +1267,13 @@ private suspend fun writeTemplateFile(context: Context, bitmap: Bitmap): File? =
         if (ok) file else null
     }
 
-/** 报因块：错误文案 + 帧源缺失时的 Shizuku / 录屏授权入口（方案 §5）。 */
+/** 报因块：错误文案 + 帧源缺失时的 Shizuku 修复入口（录屏抽帧走通后自动完成）。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QuickFindErrorBlock(
     message: String,
     sourceMissing: Boolean,
     onOpenShizuku: () -> Unit,
-    onGrantProjection: () -> Unit,
 ) {
     Text(
         text = message,
@@ -1248,16 +1281,8 @@ private fun QuickFindErrorBlock(
         color = MaterialTheme.colorScheme.error,
     )
     if (sourceMissing) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(onClick = onOpenShizuku) {
-                Text(stringResource(R.string.float_rpa_quickfind_open_shizuku))
-            }
-            OutlinedButton(onClick = onGrantProjection) {
-                Text(stringResource(R.string.float_rpa_quickfind_grant_projection))
-            }
+        OutlinedButton(onClick = onOpenShizuku) {
+            Text(stringResource(R.string.float_rpa_quickfind_open_shizuku))
         }
     }
 }

@@ -87,6 +87,7 @@ internal fun ShizukuGrantScreen(
     var executing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var justGranted by remember { mutableStateOf(false) }
+    var wirelessDebugOn by remember { mutableStateOf(readWirelessDebug(context)) }
 
     fun refreshInstalled() {
         installed = gate.isManagerInstalled()
@@ -131,7 +132,10 @@ internal fun ShizukuGrantScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refreshInstalled()
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshInstalled()
+                wirelessDebugOn = readWirelessDebug(context)
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -316,6 +320,24 @@ internal fun ShizukuGrantScreen(
                         context.startActivity(Intent(ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
                     }
                 }
+                StepItem(stringResource(R.string.float_shizuku_prereq_wifi_adb)) {
+                    runCatching {
+                        context.startActivity(Intent(ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                    }
+                }
+                // 无线调试开在 WLAN 上，Wi-Fi 一断系统就会自动关掉——实时显示开关
+                // 真值，用户不用去开发者选项反复确认「是不是又自己关了」。
+                Text(
+                    text = stringResource(
+                        if (wirelessDebugOn) {
+                            R.string.float_shizuku_wifi_state_on
+                        } else {
+                            R.string.float_shizuku_wifi_state_off
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (wirelessDebugOn) scheme.primary else scheme.error,
+                )
                 StepItem(stringResource(R.string.float_shizuku_prereq_notif)) {
                     openNotificationStyleSettings(context)
                 }
@@ -420,6 +442,14 @@ private data class InstallNote(
     val arg: String? = null,
     val isError: Boolean = false,
 )
+
+/**
+ * 无线调试开关的系统真值（`Settings.Global.ADB_WIFI_ENABLED`，键读不到按关处理）。
+ * 该开关跑在 WLAN 上，Wi-Fi 断开时会被系统自动关闭，前置设置行用它实时显示状态。
+ */
+private fun readWirelessDebug(context: android.content.Context): Boolean = runCatching {
+    android.provider.Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) == 1
+}.getOrDefault(false)
 
 /**
  * 逐级降级打开通知样式设置（配对弹窗需要系统原生通知通道才显示 6 位配对码）。

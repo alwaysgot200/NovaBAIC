@@ -62,14 +62,14 @@ internal fun RpaModeGateDialog(
     onConfirm: (RpaMode) -> Unit,
     onRefreshCapabilities: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
-    onGrantProjection: () -> Unit,
+    onRetryA11yConnection: () -> Unit,
     onOpenShizuku: () -> Unit,
 ) {
     var mode by remember { mutableStateOf(script.mode) }
     val a11yBlocked = mode == RpaMode.A11Y && !capabilities.a11yReady
-    val visionUnready = !capabilities.shizukuReady ||
-        !capabilities.projectionReady ||
-        !capabilities.ocrReady
+    // 无 a11y 线就绪口径（用户定案 2026-10-30）：Shizuku shell 正常即可；
+    // 录屏抽帧走通 Shizuku 后自动完成，不设人工按钮、不进就绪条件。
+    val visionUnready = !capabilities.shizukuReady
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -99,18 +99,15 @@ internal fun RpaModeGateDialog(
                     )
                     RpaStatusBadge(stringResource(R.string.float_rpa_cap_ocr), capabilities.ocrReady)
                 }
-                if (a11yBlocked) {
-                    Text(
-                        text = stringResource(R.string.float_rpa_gate_a11y_required),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                // a11y 报因双态（§7.4）：未开启 →「去开启」；已启用未连接 →「重试连接」
+                // 自愈重绑 + 「去开启无障碍」手动兜底。A11Y 模式阻编辑，双模仅警告。
+                if (!capabilities.a11yReady && mode != RpaMode.VISION) {
+                    RpaA11yNotice(
+                        enabledInSettings = capabilities.a11yEnabledInSettings,
+                        onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                        onRetryConnection = onRetryA11yConnection,
+                        blocking = a11yBlocked,
                     )
-                    OutlinedButton(
-                        onClick = onOpenAccessibilitySettings,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.float_rpa_gate_go_a11y))
-                    }
                 }
                 if (visionUnready && mode != RpaMode.A11Y) {
                     Text(
@@ -118,21 +115,12 @@ internal fun RpaModeGateDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.tertiary,
                     )
-                    if (!capabilities.shizukuReady) {
-                        OutlinedButton(
-                            onClick = onOpenShizuku,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.float_rpa_open_shizuku))
-                        }
-                    }
-                    if (!capabilities.projectionReady && !capabilities.shizukuReady) {
-                        OutlinedButton(
-                            onClick = onGrantProjection,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(stringResource(R.string.float_rpa_grant_projection))
-                        }
+                    // 无 a11y 线缺项修复入口统一指向 Shizuku 设置页。
+                    OutlinedButton(
+                        onClick = onOpenShizuku,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.float_rpa_open_shizuku))
                     }
                 }
             }

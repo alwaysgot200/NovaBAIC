@@ -706,6 +706,10 @@ class FloatBallService : Service() {
             ACTION_RPA_TOOL_FINISHED -> {
                 rpaChromeGate.show(RpaChromeGate.REASON_QUICK_FIND)
             }
+            // 拾取武装后直拉工具面（§7.9）：等前台让出再开，避免抓到自家画面。
+            ACTION_RPA_PICK_OPEN_TOOL -> scope.launch { openToolForPick() }
+            // RPA 模式门「重试连接」（§7.4 双态报因）：同一自愈重绑通道。
+            ACTION_RPA_A11Y_RETRY -> retryA11yBindingFromRpa()
             // M3-b 陪伴窗口收尾通知「续 30 分钟」：同一状态机入口重启窗口。
             CompanionWindowController.ACTION_RENEW_WINDOW -> onCompanionRenew(intent)
             // M2-a 起草通知点开：分屏预览代拟稿，一键发送/改后发送（§8.1 N4）。
@@ -2997,6 +3001,29 @@ class FloatBallService : Service() {
         return a11yReady()
     }
 
+    /**
+     * 直拉工具面（§7.9 排矛盾 2）：armPick 时本 App 仍在前台，布局分析的前台门禁
+     * （[startAnalyzeOverlay]）会拦；这里先轮询等前台让出（RpaActivity 退场动画），
+     * 再按拾取 kind 打开布局分析 / 以图找图，全程不经悬浮球菜单。超时仍自家前台则报因。
+     */
+    private suspend fun openToolForPick() {
+        repeat(PICK_OPEN_POLL_MAX) {
+            val foreground = runCatching {
+                AssistsCore.getPackageName(AssistsCore.NodeLookupScope.ActiveWindow)
+            }.getOrDefault(packageName)
+            if (foreground != packageName) {
+                when (pickCoordinator.current()?.kind) {
+                    RpaPickKind.A11Y -> openRpaAnalyze()
+                    else -> runCatching { startActivity(RpaEntryPoints.quickFind(this)) }
+                }
+                return
+            }
+            delay(PICK_OPEN_POLL_MS)
+        }
+        // 超时仍自家前台：按原报因提示切到目标 App，绝不静默。
+        toast(R.string.float_rpa_analyze_switch_to_target)
+    }
+
     private fun startAnalyzeOverlay() {
         val foreground = runCatching {
             AssistsCore.getPackageName(AssistsCore.NodeLookupScope.ActiveWindow)
@@ -3189,6 +3216,19 @@ class FloatBallService : Service() {
             if (pollA11yReady(A11Y_REBIND_WAIT_MS) && mode == Mode.IDLE && analyze == null) {
                 openAnalyzeWithUnlock()
             } else {
+                toast(R.string.float_rpa_analyze_rebind_failed)
+            }
+        }
+    }
+
+    /**
+     * RPA 模式门「重试连接」（§7.4 双态报因）：与 [retryAnalyzeA11y] 同一自愈重绑
+     * 通道（[rebindA11yService]），绑定仍失败显式报因（toast）引导手动开关，不静默。
+     */
+    private fun retryA11yBindingFromRpa() {
+        scope.launch {
+            rebindA11yService()
+            if (!pollA11yReady(A11Y_REBIND_WAIT_MS)) {
                 toast(R.string.float_rpa_analyze_rebind_failed)
             }
         }
@@ -3647,6 +3687,12 @@ class FloatBallService : Service() {
         /** RPA 工具页（以图找图）退出回传：复位悬浮球隐藏标志。 */
         const val ACTION_RPA_TOOL_FINISHED = "com.verlintas.baic2.floatball.RPA_TOOL_FINISHED"
 
+        /** 拾取武装后直拉工具面（§7.9）：等前台让出后自动开布局分析 / 以图找图，不经菜单。 */
+        const val ACTION_RPA_PICK_OPEN_TOOL = "com.verlintas.baic2.floatball.RPA_PICK_OPEN_TOOL"
+
+        /** RPA 模式门「重试连接」：自愈重绑无障碍服务（§7.4 双态报因）。 */
+        const val ACTION_RPA_A11Y_RETRY = "com.verlintas.baic2.floatball.RPA_A11Y_RETRY"
+
         /** 主页三键入口（方案 §5.5）：action 由 [com.verlintas.baic2.floatball.home.AdvisorHomeLauncher] 发出。 */
         const val ACTION_ONESHOT_FROM_MAIN = "com.verlintas.baic2.floatball.ONESHOT_FROM_MAIN"
         const val ACTION_CONTINUOUS_FROM_MAIN = "com.verlintas.baic2.floatball.CONTINUOUS_FROM_MAIN"
@@ -3662,6 +3708,10 @@ class FloatBallService : Service() {
         /** 无障碍就绪门的重绑等待窗口与轮询间隔（绑定是异步的，先等再判缺项）。 */
         const val A11Y_REBIND_WAIT_MS = 2_000L
         const val A11Y_REBIND_POLL_MS = 200L
+
+        /** 直拉工具面的前台让出轮询（armPick 时本 App 在前台，退场动画后才让出）。 */
+        const val PICK_OPEN_POLL_MS = 100L
+        const val PICK_OPEN_POLL_MAX = 30
 
         /** 自愈重绑的 shell 命令超时（settings 读写是轻操作）。 */
         const val SHELL_REBIND_TIMEOUT_MS = 3_000L

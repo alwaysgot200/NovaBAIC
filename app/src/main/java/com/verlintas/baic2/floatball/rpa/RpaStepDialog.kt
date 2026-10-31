@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -90,6 +91,7 @@ import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaParams
 import com.verlintas.rpa.model.RpaPickKind
+import com.verlintas.rpa.model.RpaPickPurpose
 import com.verlintas.rpa.model.RpaPickRequest
 import com.verlintas.rpa.model.RpaScript
 import com.verlintas.rpa.model.RpaSelector
@@ -105,14 +107,16 @@ import com.verlintas.rpa.model.RpaVisionSpec
 import com.verlintas.rpa.store.RpaScriptStore
 import java.io.File
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 import kotlinx.coroutines.launch
 
 /**
- * 步骤编辑弹框（母规格 §7.6）：墨板固定深色、圆角 20dp、scale 0.96→1 + fade 120ms。
+ * 动作编辑浮窗内容（母规格 §7.6）：动作类型下拉 + 动态字段区 + 公共尾部。
  *
- * - **in-window 绘制**：直接画在面板 overlay 的 ComposeView 里（遮罩 + 卡片），
- *   不用 android Dialog，避免 overlay 窗口 token 问题；
+ * - **载体 = 动作编辑浮窗**（§7.5 双浮窗下位，第二 overlay 窗口）：窗口 chrome
+ *   （标题栏拖动 / ✕ 取消编辑）由 [RpaActionEditWindow] 提供，这里只画内容；
+ *   字段区内部滚动（固定高窗口内 [Column] + verticalScroll），底部按钮行固定；
  * - 动作类型下拉是 UI 概念清单（裁定⑦）：点击三兄弟 = `TAP` + 不同目标种类，
  *   模型枚举零增量；切换类型用 [RpaCatalog.defaultStep] 重建字段，保留公共尾部；
  * - 坐标 / 图片位置的「...」次级钮：屏幕取点走 [RpaPickRequest] 回调（宿主交给
@@ -124,7 +128,6 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun RpaStepDialog(
     step: RpaStep,
-    isNew: Boolean,
     script: RpaScript,
     onArmPick: (RpaPickRequest) -> Unit,
     onOpenVisionPanel: () -> Unit,
@@ -138,35 +141,38 @@ internal fun RpaStepDialog(
     val errors = formErrors(form, script)
 
     Baic2Theme(darkTheme = true) {
-        Box(Modifier.fillMaxWidth()) {
-            InkDialogShell(
-                title = stringResource(
-                    if (isNew) R.string.float_rpa_panel_add_step else R.string.float_rpa_stepdlg_title,
-                ),
-                onDismiss = onDismiss,
-            ) {
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
                 ActionHeader(
                     form = form,
                     onFormChange = { form = it },
                     step = step,
                 )
                 InkDivider()
-                StepFields(
-                    form = form,
-                    onFormChange = { form = it },
-                    step = step,
-                    script = script,
-                    onArmPick = onArmPick,
-                    onOpenVisionPanel = onOpenVisionPanel,
-                    onOpenAppPicker = { showAppPicker = true },
-                )
-                InkDivider()
-                TailFields(
-                    form = form,
-                    onFormChange = { form = it },
-                    onOpenCondition = { showCondition = true },
-                )
-                ErrorList(errors)
+                // 字段区内部滚动（§7.6）：动态字段 + 公共尾部 + 校验报错。
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    StepFields(
+                        form = form,
+                        onFormChange = { form = it },
+                        step = step,
+                        script = script,
+                        onArmPick = onArmPick,
+                        onOpenVisionPanel = onOpenVisionPanel,
+                        onOpenAppPicker = { showAppPicker = true },
+                    )
+                    InkDivider()
+                    TailFields(
+                        form = form,
+                        onFormChange = { form = it },
+                        onOpenCondition = { showCondition = true },
+                    )
+                    ErrorList(errors)
+                }
                 DialogButtons(
                     confirmEnabled = errors.isEmpty(),
                     onConfirm = { onConfirm(form.build(step)) },
@@ -834,8 +840,10 @@ internal fun <T> InkDropdown(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    plannedLabels: List<String> = emptyList(),
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val plannedText = stringResource(R.string.float_rpa_planned)
     Box(modifier) {
         Row(
             Modifier
@@ -875,6 +883,28 @@ internal fun <T> InkDropdown(
                         expanded = false
                         onSelect(option)
                     },
+                )
+            }
+            // P2「规划中」置灰项（§7.10）：保留位置展示路线图，不可选中（≠ 假入口）。
+            plannedLabels.forEach { label ->
+                DropdownMenuItem(
+                    enabled = false,
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = label,
+                                style = InkTextStyles.Body,
+                                color = InkDialog.OnSurfaceDisabled,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = plannedText,
+                                style = InkTextStyles.Badge,
+                                color = InkDialog.OnSurfaceDisabled,
+                            )
+                        }
+                    },
+                    onClick = {},
                 )
             }
         }
@@ -978,6 +1008,11 @@ private fun ActionHeader(
                 if (concept != form.concept) onFormChange(form.rebuildFor(concept, step))
             },
             modifier = Modifier.weight(1f),
+            // P2 动作类型（点击颜色 / 多指手势）置灰「规划中」，不可选中（§7.10）。
+            plannedLabels = listOf(
+                stringResource(R.string.float_rpa_action_tap_color),
+                stringResource(R.string.float_rpa_action_gesture_multi),
+            ),
         )
         Spacer(Modifier.width(4.dp))
         Box {
@@ -1037,7 +1072,7 @@ private fun StepFields(
     when (form.concept) {
         StepConcept.LAUNCH_APP -> LaunchAppFields(form, onFormChange, onOpenAppPicker)
         StepConcept.TAP_POINT -> TapPointFields(form, onFormChange, step, script, onArmPick)
-        StepConcept.TAP_IMAGE -> TapImageFields(form, onFormChange, step, script, onOpenVisionPanel)
+        StepConcept.TAP_IMAGE -> TapImageFields(form, onFormChange, step, script, onArmPick, onOpenVisionPanel)
         StepConcept.TAP_TEXT -> TapTextFields(form, onFormChange)
         StepConcept.SET_VARIABLE -> SetVariableFields(form, onFormChange)
         StepConcept.CONTROL_FLOW -> ControlFlowFields(form, onFormChange, step, script)
@@ -1128,8 +1163,9 @@ private fun TapPointFields(
         Spacer(Modifier.width(4.dp))
         EllipsisButton(
             description = pickDesc,
-            // 屏幕取点：构造拾取请求交宿主 arm（唯一拾取通道 = RpaPickCoordinator.arm）。
-            onClick = { onArmPick(buildPickRequest(step, script)) },
+            // 屏幕取点：构造拾取请求交宿主 arm（唯一拾取通道 = RpaPickCoordinator.arm），
+            // purpose=POINT 让回填写 RATIO 坐标，保持「点击(坐标)」概念不翻转。
+            onClick = { onArmPick(buildPickRequest(step, script, RpaPickPurpose.POINT)) },
         )
     }
     HoldMsField(form, onFormChange)
@@ -1141,11 +1177,13 @@ private fun TapImageFields(
     onFormChange: (StepForm) -> Unit,
     step: RpaStep,
     script: RpaScript,
+    onArmPick: (RpaPickRequest) -> Unit,
     onOpenVisionPanel: () -> Unit,
 ) {
     val context = LocalContext.current
     val store = remember(context) { RpaScriptStore(File(context.filesDir, "rpa")) }
     val visionDesc = stringResource(R.string.float_rpa_stepdlg_open_vision)
+    val pickImageDesc = stringResource(R.string.float_rpa_stepdlg_pick_image)
     FieldRow(stringResource(R.string.float_rpa_stepdlg_image_pos)) {
         // 模板缩略图（脚本模板池，filesDir/rpa/templates/<scriptId>/）。
         val thumb = remember(form.templateId) { loadTemplateThumb(store, script.id, form.templateId) }
@@ -1178,18 +1216,53 @@ private fun TapImageFields(
             }
         }
         Spacer(Modifier.width(8.dp))
-        Text(
-            text = form.templateId.ifBlank {
-                stringResource(R.string.float_rpa_stepdlg_template_none)
-            },
-            style = InkTextStyles.Summary,
-            color = InkDialog.OnSurfaceMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = form.templateId.ifBlank {
+                    stringResource(R.string.float_rpa_stepdlg_template_none)
+                },
+                style = InkTextStyles.Summary,
+                color = InkDialog.OnSurfaceMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // 摘要（§7.9.2）：视觉定位参数速览「相似度 76% · 匹配第 1」。
+            val primary = step.target?.vision?.primary ?: RpaVisionLocator()
+            Text(
+                text = stringResource(
+                    R.string.float_rpa_stepdlg_vision_summary,
+                    (primary.threshold * 100).roundToInt(),
+                    primary.matchIndex ?: 1,
+                ),
+                style = InkTextStyles.Badge,
+                color = InkDialog.OnSurfaceDisabled,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         Spacer(Modifier.width(4.dp))
-        EllipsisButton(description = visionDesc, onClick = onOpenVisionPanel)
+        // 图片位置双入口（§7.9）：「...」弹「图片拾取 / 找图面板」二选一。
+        Box {
+            var showEntry by remember { mutableStateOf(false) }
+            EllipsisButton(description = visionDesc, onClick = { showEntry = true })
+            DropdownMenu(expanded = showEntry, onDismissRequest = { showEntry = false }) {
+                DropdownMenuItem(
+                    text = { Text(pickImageDesc) },
+                    onClick = {
+                        showEntry = false
+                        // 图片拾取：直拉以图找图拾取模式（purpose=TEMPLATE 回填模板）。
+                        onArmPick(buildPickRequest(step, script, RpaPickPurpose.TEMPLATE))
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(visionDesc) },
+                    onClick = {
+                        showEntry = false
+                        onOpenVisionPanel()
+                    },
+                )
+            }
+        }
     }
     HoldMsField(form, onFormChange)
 }
@@ -1878,10 +1951,15 @@ private fun AppPickerDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
 // ── 拾取请求（唯一拾取通道 = RpaPickCoordinator.arm，宿主接线）────────
 
 /**
- * 构造拾取请求：坐标「...」屏幕取点用。kind 按脚本模式选线
- * （A11Y 脚本走 a11y 拾取，其余走视觉拾取），交宿主 `RpaPickCoordinator.arm`。
+ * 构造拾取请求（v5 §7.9）：kind 按脚本模式选线（A11Y 脚本走 a11y 拾取，其余走视觉拾取），
+ * 交宿主 `RpaPickCoordinator.arm`。[purpose] 决定回填目标种类——屏幕取点回填 RATIO
+ * 坐标（保持「点击(坐标)」概念不翻转），图片拾取回填 TEMPLATE 模板。
  */
-private fun buildPickRequest(step: RpaStep, script: RpaScript): RpaPickRequest = RpaPickRequest(
+private fun buildPickRequest(
+    step: RpaStep,
+    script: RpaScript,
+    purpose: RpaPickPurpose,
+): RpaPickRequest = RpaPickRequest(
     requestId = RpaIds.newId("pick"),
     scriptId = script.id,
     stepId = step.id,
@@ -1889,6 +1967,7 @@ private fun buildPickRequest(step: RpaStep, script: RpaScript): RpaPickRequest =
     scriptName = script.name,
     stepLabel = step.label,
     createdAt = System.currentTimeMillis(),
+    purpose = purpose,
 )
 
 /** 模板缩略图（小图直接解码；失败返回 null，不挡编辑）。 */

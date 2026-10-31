@@ -699,6 +699,9 @@ data class RpaIssue(
 /** 运行前的能力快照（由 app 侧采集）。 */
 data class RpaCapabilities(
     val a11yReady: Boolean = false,
+
+    /** 系统设置里无障碍服务是否已开启（区分「未开启」与「已启用未连接」双态报因）。 */
+    val a11yEnabledInSettings: Boolean = false,
     val shizukuReady: Boolean = false,
     val visionReady: Boolean = false,
     val ocrReady: Boolean = false,
