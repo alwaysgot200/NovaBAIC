@@ -133,6 +133,13 @@ object RpaWechatHelloFixture {
                 // 输入通道（spec §2.1）：a11y 沿用焦点替换写入；无 a11y 剪贴板
                 // 粘贴 + 先清空（全选+删除），不预点焦点。
                 lineParams = INPUT_LINE_PARAMS,
+                // 2026-11-01 真机取证：SET_TEXT 后微信搜索页存在「建议布局→结果
+                // 布局」切换竞态——无障碍树先于视觉更新（树里已见 odf 结果行，
+                // 屏幕还是建议布局），下一步立即点会落到旧布局的「搜索:」建议行
+                // 上，跳到通用搜索页而非聊天页，后续步骤全跑偏（step#6 发送
+                // target_timeout）。等 2.5s 让结果布局落定（校准实验：等 2.5s 后
+                // 同坐标点击一次即进聊天页）。
+                delayAfterMs = 2_500,
             ),
             step(
                 action = RpaAction.TAP,
@@ -146,9 +153,14 @@ object RpaWechatHelloFixture {
                             // 聊天记录行的 text 也含全名。结果行名节点是 TextView
                             // （com.tencent.mm:id/odf）且 text 恰为完整显示名，
                             // 故 EXACT + TextView 双条件唯一锁定联系人行。
+                            // 2026-11-01 补证：树里同文本节点不止结果行——搜索
+                            // 建议行的名字 TextView 文本也恰为全名（布局切换竞态
+                            // 窗口内会被 EXACT 误中）。结果行名节点 id 恒为 odf，
+                            // 追加 viewId 三条件，即便时序滑动也只认结果行。
                             RpaSelector(
                                 text = "\${contactName}",
                                 textMatch = RpaMatchMode.EXACT,
+                                viewId = "odf",
                                 className = "android.widget.TextView",
                                 enabledOnly = true,
                             ),

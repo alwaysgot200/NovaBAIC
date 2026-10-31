@@ -76,6 +76,15 @@ import org.junit.runner.RunWith
  * （app_missing 干净失败、零线路回退）；已安装走 happy path，锁线时断言
  * 全程零 LineFallback 且每步线路都是锁的那条。
  *
+ * 已知坑（2026-11-01 HyperOS 真机实测，a11y 锁线运行必读）：`am instrument`
+ * 重启 App 进程时，正在绑定的无障碍服务会被系统记入 Crashed services 且
+ * **不再自动重绑**（dumpsys accessibility 可见），测试将以 assume 假跳过——
+ * 输出 OK (1 test) 但 logcat 只有 instrumented start + probe alive fg=null，
+ * 20s 就绪等待全部超时。对策：instrument 启动后立刻（awaitLineReady 的 20s
+ * 窗口内）做一次无障碍开关循环强制重绑：
+ * `settings put secure enabled_accessibility_services "null"` +
+ * `accessibility_enabled 0` → 等 2s → 写回服务列表 + 置 1。
+ *
  * 断言（第 8 步不占脚本）：7 步全部成功后，聊天页屏幕文本必须出现「你好」。
  * 失败输出逐步 line/reason（含线路回退），直接定位是选择器漂移还是发送失败。
  */
