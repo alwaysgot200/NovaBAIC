@@ -463,7 +463,7 @@ class AccountApi @Inject constructor(
          * 只需替换本 URL（同商城同类商品页）。余额不足「充值」、购买分享与
          * 「浏览器购买」统一使用它；页面自带的 OG 标签决定社交卡片内容。
          */
-        const val RECHARGE_URL = "https://www.80fafa.com/Goods/3007AFB1DC8B710E"
+        const val RECHARGE_URL = "https://www.80fafa.com/Goods/EB827AC2D47CA617"
 
         const val GRANT_TYPE = "password"
 

@@ -485,6 +485,7 @@ object RpaValidator {
             add(RpaIssue("step_repeat_invalid", step.id, RpaIssueSeverity.WARNING))
         }
         addAll(validateCondition(step))
+        addAll(validateLineParams(script, step))
         val target = step.target
         when (step.action) {
             RpaAction.LAUNCH_APP -> if (step.params.packageName.isNullOrBlank()) {
@@ -627,6 +628,69 @@ object RpaValidator {
         }
     }
 
+    /**
+     * D 类分线通道参数校验（§五/§六）：空选择器、比例点越界、ROI 零面积、
+     * 以及双模式双写（B10）——D 类动作恰好配置一侧时报缺侧引导补写。
+     */
+    private fun validateLineParams(script: RpaScript, step: RpaStep): List<RpaIssue> = buildList {
+        val a11y = step.lineParams.a11y
+        val vision = step.lineParams.vision
+        // 空条件选择器一律拒绝（与 target 侧同口径，不看模式 / 动作）。
+        if (a11y.readySelector?.isEmpty() == true) {
+            add(RpaIssue("param_ready_selector_invalid", step.id))
+        }
+        if (a11y.inputSelector?.isEmpty() == true) {
+            add(RpaIssue("param_input_selector_invalid", step.id))
+        }
+        if (a11y.anchorSelector?.isEmpty() == true) {
+            add(RpaIssue("param_anchor_selector_invalid", step.id))
+        }
+        if (a11y.readScope?.isEmpty() == true) {
+            add(RpaIssue("param_read_scope_invalid", step.id))
+        }
+        // 比例点（left=xRatio、top=yRatio）：越界报错（容忍区间同 RATIO_MIN..MAX）。
+        if (vision.focusPoint?.let { !it.isRatioPoint() } == true) {
+            add(RpaIssue("param_focus_point_invalid", step.id))
+        }
+        if (vision.startPoint?.let { !it.isRatioPoint() } == true) {
+            add(RpaIssue("param_start_point_invalid", step.id))
+        }
+        if (vision.endPoint?.let { !it.isRatioPoint() } == true) {
+            add(RpaIssue("param_end_point_invalid", step.id))
+        }
+        // ROI 四值可越界（图11「103%」）：只拒零面积。
+        if (vision.ocrRegion?.let { !it.isValid() } == true) {
+            add(RpaIssue("param_ocr_region_invalid", step.id))
+        }
+        // 双模式双写（B10）：恰好一侧配置时报缺侧；两侧全默认（旧脚本）与
+        // 两侧齐备都不报；单模式只写本线，另一线允许缺失（§〇.2 模式兼容）。
+        if (script.mode == RpaMode.DUAL && usesDualLineParams(step)) {
+            val a11yConfigured = a11y.isConfigured()
+            val visionConfigured = vision.isConfigured()
+            if (a11yConfigured && !visionConfigured) {
+                add(RpaIssue("mode_dual_missing_vision_line_params", step.id))
+            }
+            if (visionConfigured && !a11yConfigured) {
+                add(RpaIssue("mode_dual_missing_a11y_line_params", step.id))
+            }
+        }
+    }
+
+    /** 双写约束只覆盖 D 类分线通道参数适用的动作（§一 动作矩阵）。 */
+    private fun usesDualLineParams(step: RpaStep): Boolean = when (step.action) {
+        RpaAction.LAUNCH_APP,
+        RpaAction.OPEN_CHAT,
+        RpaAction.INPUT_TEXT,
+        RpaAction.SWIPE,
+        RpaAction.SCROLL,
+        RpaAction.ASSERT_TEXT,
+        -> true
+        // SET_VARIABLE 只有「界面读取」行才走读屏通道（readScope / ocrRegion）。
+        RpaAction.SET_VARIABLE ->
+            step.params.assignments.any { it.source == RpaVarSource.UI_READ }
+        else -> false
+    }
+
     private fun validateTarget(
         script: RpaScript,
         step: RpaStep,
@@ -721,8 +785,20 @@ object RpaReadiness {
     fun check(
         script: RpaScript,
         caps: RpaCapabilities,
+        // 前置探针（B1/B5）：默认「未接入」不误报，旧调用方零回归；
+        // templateExists 必须最后（调用方用尾随 lambda 绑定模板探针）。
+        appInstalled: (String) -> Boolean = { true },
+        screenLocked: () -> Boolean = { false },
         templateExists: (scriptId: String, templateId: String) -> Boolean = { _, _ -> true },
     ): List<RpaIssue> = buildList {
+        // B1 前置预检：目标 App 未安装 → 显式报因，禁止起跑（§六 6.1③）。
+        if (script.appPackage.isNotBlank() && !appInstalled(script.appPackage)) {
+            add(RpaIssue("app_missing", detail = script.appPackage))
+        }
+        // B5 前置预检：屏幕锁屏 → 显式报因，禁止起跑。
+        if (screenLocked()) {
+            add(RpaIssue("screen_locked"))
+        }
         when (script.mode) {
             RpaMode.A11Y -> if (!caps.a11yReady) {
                 add(RpaIssue("ready_a11y_missing"))

@@ -63,8 +63,9 @@ import kotlinx.coroutines.launch
 
 /**
  * 投影免弹窗授权引导页（docs/2026-10-21 方案 §5.2）：三态驱动——未装内置安装
- * （docs/2026-10-26-内置安装Shizuku方案.md）→ 未运行引导无线调试配对（含两条
- * 一次性前置）→ 运行中一键执行 `appops set PROJECT_MEDIA allow` → 绿色已生效。
+ * （docs/2026-10-26-内置安装Shizuku方案.md）→ 未运行引导无线调试配对（前置只留
+ * 「无线调试」一项，面向个人用户不设 USB 调试，2026-10-31 定案）→ 运行中一键执行
+ * `appops set PROJECT_MEDIA allow` → 绿色已生效。
  * 失败展示 shell 原文；从系统安装器返回时按 ON_RESUME 自动刷新安装态。
  */
 @Composable
@@ -315,11 +316,6 @@ internal fun ShizukuGrantScreen(
 
             // ---- 前置（一次性，决定成败）----
             SectionCard(stringResource(R.string.float_shizuku_prereq_title)) {
-                StepItem(stringResource(R.string.float_shizuku_prereq_dev)) {
-                    runCatching {
-                        context.startActivity(Intent(ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-                    }
-                }
                 StepItem(stringResource(R.string.float_shizuku_prereq_wifi_adb)) {
                     runCatching {
                         context.startActivity(Intent(ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
@@ -338,9 +334,6 @@ internal fun ShizukuGrantScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = if (wirelessDebugOn) scheme.primary else scheme.error,
                 )
-                StepItem(stringResource(R.string.float_shizuku_prereq_notif)) {
-                    openNotificationStyleSettings(context)
-                }
             }
 
             // ---- 配对三步 ----
@@ -350,6 +343,11 @@ internal fun ShizukuGrantScreen(
                 }
                 StepItem(stringResource(R.string.float_shizuku_pair_2))
                 StepItem(stringResource(R.string.float_shizuku_pair_3))
+                // 配对码弹不出来的排障项（非前置）：前置只留「无线调试」一项
+                // （2026-10-31 定案，面向个人用户不设 USB 调试）。
+                StepItem(stringResource(R.string.float_shizuku_prereq_notif)) {
+                    openNotificationStyleSettings(context)
+                }
             }
 
             Spacer(Modifier.height(Baic2Spacing.lg))

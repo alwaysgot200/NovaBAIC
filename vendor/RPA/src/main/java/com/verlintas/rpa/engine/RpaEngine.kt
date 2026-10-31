@@ -19,6 +19,7 @@
 
 package com.verlintas.rpa.engine
 
+import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaCapabilities
 import com.verlintas.rpa.model.RpaCompareOp
@@ -30,15 +31,18 @@ import com.verlintas.rpa.model.RpaExpect
 import com.verlintas.rpa.model.RpaFailurePolicy
 import com.verlintas.rpa.model.RpaFlowKind
 import com.verlintas.rpa.model.RpaHit
+import com.verlintas.rpa.model.RpaInputChannel
 import com.verlintas.rpa.model.RpaLimits
 import com.verlintas.rpa.model.RpaLine
 import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaModePolicy
 import com.verlintas.rpa.model.RpaReadiness
+import com.verlintas.rpa.model.RpaRect
 import com.verlintas.rpa.model.RpaRunEvent
 import com.verlintas.rpa.model.RpaRunResult
 import com.verlintas.rpa.model.RpaScript
+import com.verlintas.rpa.model.RpaSelector
 import com.verlintas.rpa.model.RpaStep
 import com.verlintas.rpa.model.RpaStepCondition
 import com.verlintas.rpa.model.RpaTarget
@@ -87,7 +91,15 @@ interface RpaDevice {
         line: RpaLine,
     ): Result<Unit>
 
-    suspend fun inputText(text: String, line: RpaLine, clearFirst: Boolean): Result<Unit>
+    suspend fun inputText(
+        text: String,
+        line: RpaLine,
+        clearFirst: Boolean,
+        inputSelector: RpaSelector? = null,
+        appendMode: Boolean = false,
+        inputChannel: RpaInputChannel = RpaInputChannel.SHELL_INPUT,
+        focusPoint: RpaRect? = null,
+    ): Result<Unit>
 
     suspend fun pressKey(key: String, line: RpaLine): Result<Unit>
 
@@ -97,8 +109,16 @@ interface RpaDevice {
     /** 按线路定位；返回 null 表示未命中（不抛异常，方便轮询）。 */
     suspend fun locate(scriptId: String, target: RpaTarget, line: RpaLine): RpaHit?
 
-    /** 当前屏幕的文本行（a11y 节点文本 / OCR 行），断言与「界面读取」用。 */
-    suspend fun textLines(line: RpaLine): List<String>
+    /**
+     * 当前屏幕的文本行（a11y 节点文本 / OCR 行），断言与「界面读取」用。
+     * [readScope] 仅 a11y 线消费（读屏范围节点）；[ocrRegion] 仅 vision 线消费
+     * （OCR 读取区域）——引擎按当前线只传本线字段，禁止跨线取值。
+     */
+    suspend fun textLines(
+        line: RpaLine,
+        readScope: RpaSelector? = null,
+        ocrRegion: RpaRect? = null,
+    ): List<String>
 
     suspend fun foregroundPackage(line: RpaLine): String?
 
@@ -134,7 +154,7 @@ class RpaRunner(
         onEvent: suspend (RpaRunEvent) -> Unit = {},
     ): RpaRunResult {
         val caps = device.capabilities
-        val readiness = RpaReadiness.check(script, caps, templateExists)
+        val readiness = RpaReadiness.check(script, caps, templateExists = templateExists)
         if (RpaReadiness.hasErrors(readiness)) {
             onEvent(RpaRunEvent.ScriptStarted(script, null))
             readiness.filter { it.severity == com.verlintas.rpa.model.RpaIssueSeverity.ERROR }
@@ -187,6 +207,15 @@ class RpaRunner(
                     return RpaRunResult(false, outcome.failedIndex, "run_timeout")
                 }
                 if (!outcome.ok) {
+                    // B1 兜底报因：app_missing（缺 App）显式记日志后干净结束。
+                    if (outcome.detail.startsWith("app_missing")) {
+                        emit(
+                            RpaRunEvent.Log(
+                                "app_missing abort step=${outcome.failedIndex ?: "-"} " +
+                                    "detail=${outcome.detail}",
+                            ),
+                        )
+                    }
                     emit(
                         RpaRunEvent.ScriptFinished(
                             false,
@@ -271,6 +300,11 @@ class RpaRunner(
                 // 总预算耗尽优先于步骤失败策略。
                 if (!outcome.ok && outcome.detail == "run_timeout") {
                     return SeqOutcome(false, failedIndex = pc, detail = "run_timeout")
+                }
+                // B1 兜底：app_missing（缺 App）立即干净结束整段脚本——步骤级
+                // CONTINUE 也拦不住，禁止换线 / 继续执行掩盖缺前置（§六 6.1③）。
+                if (!outcome.ok && outcome.detail.startsWith("app_missing")) {
+                    return SeqOutcome(false, failedIndex = pc, detail = outcome.detail)
                 }
                 if (!outcome.ok && stopOnFailure(step)) {
                     return SeqOutcome(false, failedIndex = pc, detail = outcome.detail)
@@ -441,7 +475,15 @@ class RpaRunner(
                     if (!pause(RETRY_DELAY_MS)) return StepOutcome(false, "run_timeout")
                 }
             }
-            return last
+            // 错误码收口（§六 6.3）：重试耗尽（多轮全败）收口 step_timeout 并保留
+            // 末次原因；单次失败保留稳定码；run_timeout / app_missing 不收口。
+            return if (
+                attempts > 1 && last.detail != "run_timeout" && !last.detail.startsWith("app_missing")
+            ) {
+                StepOutcome(false, "step_timeout: ${last.detail}")
+            } else {
+                last
+            }
         }
 
         /** handler 注册表（裁定⑧）：when 显式分发；P2 占位动作显式报 unsupported_action。 */
@@ -457,12 +499,18 @@ class RpaRunner(
                         StepOutcome(false, "param_package_missing")
                     } else {
                         val active = line ?: return StepOutcome(false, "no_active_line")
-                        device.launchApp(
+                        val outcome = device.launchApp(
                             pkg,
                             active,
                             restart = step.params.restart,
                             closeOnly = step.params.closeOnly,
                         ).outcome("launch_app $pkg line=$active")
+                        // 启动完成判定（D 类）：仅关闭应用不等待；未配置也不等待。
+                        if (!outcome.ok || step.params.closeOnly) {
+                            outcome
+                        } else {
+                            awaitReady(step, active)?.let { StepOutcome(false, it) } ?: outcome
+                        }
                     }
                 }
                 RpaAction.OPEN_CHAT -> openChat(index, step)
@@ -501,14 +549,19 @@ class RpaRunner(
             if (im.isNullOrBlank() || contact.isNullOrBlank()) {
                 return StepOutcome(false, "param_open_chat_missing")
             }
-            return onLine(index, step, "open_chat_failed") { active ->
+            val outcome = onLine(index, step, "open_chat_failed") { active ->
                 device.openChat(im, contact, active)
             }
+            if (!outcome.ok) return outcome
+            // 启动完成判定（D 类）：聊天页打开成功后等就绪信号；未配置不等待。
+            val active = line ?: return outcome
+            return awaitReady(step, active)?.let { StepOutcome(false, it) } ?: outcome
         }
 
         private suspend fun tap(index: Int, step: RpaStep, long: Boolean): StepOutcome {
+            // §六 6.3 错误码收口：定位全 miss 的稳定码是 target_timeout。
             val hit = locateWithFallback(index, step)
-                ?: return StepOutcome(false, "target_not_found")
+                ?: return StepOutcome(false, "target_timeout")
             val active = line ?: return StepOutcome(false, "no_active_line")
             val result = if (long) {
                 device.longPress(hit.x, hit.y, active)
@@ -525,19 +578,64 @@ class RpaRunner(
             val text = resolve(step.params.text)
             if (text.isNullOrEmpty()) return StepOutcome(false, "param_text_missing")
             val primary = line ?: return StepOutcome(false, "no_active_line")
-            val first = device.inputText(text, primary, step.params.clearFirst)
+            val first = inputOnLine(step, primary, text)
             if (first.isSuccess) return first.outcome("input_text line=$primary")
             val detail = first.exceptionOrNull()?.message ?: "input_failed"
-            if (!fallbackAllowed()) return StepOutcome(false, detail)
+            // app_missing 是前置缺失：禁止换线掩盖，直接失败（B1 兜底）。
+            if (detail.startsWith("app_missing") || !fallbackAllowed()) {
+                return StepOutcome(false, detail)
+            }
             val alt = primary.other()
             if (!lineReady(alt)) return StepOutcome(false, detail)
             emit(RpaRunEvent.LineFallback(index, step, primary, alt, detail))
-            val second = device.inputText(text, alt, clearFirst = true)
+            val second = inputOnLine(step, alt, text)
             if (second.isSuccess) {
                 line = alt
                 return second.outcome("input_text fallback line=$alt")
             }
             return StepOutcome(false, second.exceptionOrNull()?.message ?: "input_failed")
+        }
+
+        /**
+         * INPUT_TEXT 分线消费（§五 D 类，禁止跨线取值）：a11y 线只取
+         * inputSelector / appendMode（通道恒 SHELL_INPUT、focusPoint 恒 null）；
+         * vision 线只取 inputChannel / clearBeforeInput / focusPoint
+         * （inputSelector 恒 null、appendMode 恒 false）。
+         */
+        private suspend fun inputOnLine(
+            step: RpaStep,
+            active: RpaLine,
+            text: String,
+        ): Result<Unit> = if (active == RpaLine.A11Y) {
+            val a11y = step.lineParams.a11y
+            device.inputText(
+                text = text,
+                line = active,
+                clearFirst = step.params.clearFirst,
+                inputSelector = a11y.inputSelector,
+                appendMode = a11y.appendMode,
+                inputChannel = RpaInputChannel.SHELL_INPUT,
+                focusPoint = null,
+            )
+        } else {
+            val vision = step.lineParams.vision
+            // 缺省口径（§五「缺省值 = 现行为」）：vision 侧未配置时输入通道 /
+            // 清空行为与旧脚本完全一致（SHELL_INPUT + 只看 clearFirst）。
+            val visionConfigured = vision.isConfigured()
+            device.inputText(
+                text = text,
+                line = active,
+                clearFirst = step.params.clearFirst ||
+                    (visionConfigured && vision.clearBeforeInput),
+                inputSelector = null,
+                appendMode = false,
+                inputChannel = if (visionConfigured) {
+                    vision.inputChannel
+                } else {
+                    RpaInputChannel.SHELL_INPUT
+                },
+                focusPoint = vision.focusPoint,
+            )
         }
 
         private suspend fun pressKey(index: Int, step: RpaStep): StepOutcome {
@@ -572,7 +670,7 @@ class RpaRunner(
                     RpaVarSource.LITERAL -> resolve(assign.value) ?: ""
                     RpaVarSource.UI_READ -> {
                         val active = line ?: return StepOutcome(false, "no_active_line")
-                        device.textLines(active).joinToString("\n")
+                        textLinesOf(step, active).joinToString("\n")
                     }
                     RpaVarSource.VARIABLE_REF -> runtimeVars[assign.value]
                         ?: return StepOutcome(false, "variable_undefined:${assign.value}")
@@ -654,18 +752,73 @@ class RpaRunner(
                 RpaLimits.MIN_SWIPE_DURATION_MS,
                 RpaLimits.MAX_SWIPE_DURATION_MS,
             )
-            val cx = w / 2
-            val cy = h / 2
+            return onLine(index, step, "swipe_failed") { active ->
+                // 每线几何在本线 block 内计算（禁止跨线取值，也防坐标跨线泄漏）。
+                val geom = gestureGeometry(step, active, direction, w, h, ratio)
+                    ?: return@onLine Result.failure(IllegalStateException("target_timeout"))
+                device.swipe(geom[0], geom[1], geom[2], geom[3], duration, active)
+            }
+        }
+
+        /**
+         * 手势几何（§一 D 类）：a11y 线以 anchorSelector 锚点为手势中心（miss →
+         * 返回 null，由调用方收口 target_timeout）；vision 线优先 startPoint /
+         * endPoint（双点精确、单点按向量平移）；缺省按方向 + 距离居中换算。
+         */
+        private suspend fun gestureGeometry(
+            step: RpaStep,
+            active: RpaLine,
+            direction: RpaDirection,
+            w: Int,
+            h: Int,
+            ratio: Float,
+        ): List<Int>? {
             val dx = (w * ratio / 2f).toInt()
             val dy = (h * ratio / 2f).toInt()
+            // 缺省向量：屏幕中心按方向 + 距离。
             val (x1, y1, x2, y2) = when (direction) {
-                RpaDirection.LEFT -> listOf(cx + dx, cy, cx - dx, cy)
-                RpaDirection.RIGHT -> listOf(cx - dx, cy, cx + dx, cy)
-                RpaDirection.UP -> listOf(cx, cy + dy, cx, cy - dy)
-                RpaDirection.DOWN -> listOf(cx, cy - dy, cx, cy + dy)
+                RpaDirection.LEFT -> listOf(w / 2 + dx, h / 2, w / 2 - dx, h / 2)
+                RpaDirection.RIGHT -> listOf(w / 2 - dx, h / 2, w / 2 + dx, h / 2)
+                RpaDirection.UP -> listOf(w / 2, h / 2 + dy, w / 2, h / 2 - dy)
+                RpaDirection.DOWN -> listOf(w / 2, h / 2 - dy, w / 2, h / 2 + dy)
             }
-            return onLine(index, step, "swipe_failed") { active ->
-                device.swipe(x1, y1, x2, y2, duration, active)
+            val vx = x2 - x1
+            val vy = y2 - y1
+            return if (active == RpaLine.A11Y) {
+                val anchor = step.lineParams.a11y.anchorSelector?.resolve(runtimeVars)
+                    ?: return listOf(x1, y1, x2, y2)
+                val hit = device.locate(
+                    script.id,
+                    RpaTarget(a11y = RpaA11ySpec(selectors = listOf(anchor))),
+                    active,
+                ) ?: return null
+                // 手势居中锚点：把默认向量平移到锚点中心。
+                listOf(hit.x - vx / 2, hit.y - vy / 2, hit.x + vx / 2, hit.y + vy / 2)
+            } else {
+                val vision = step.lineParams.vision
+                val start = vision.startPoint
+                val end = vision.endPoint
+                when {
+                    // 双点给定：按比例点精确换算（left=xRatio、top=yRatio）。
+                    start != null && end != null -> listOf(
+                        (start.left * w).toInt(),
+                        (start.top * h).toInt(),
+                        (end.left * w).toInt(),
+                        (end.top * h).toInt(),
+                    )
+                    // 单点给定：默认向量平移到该点（起点 / 终点同理）。
+                    start != null -> {
+                        val sx = (start.left * w).toInt()
+                        val sy = (start.top * h).toInt()
+                        listOf(sx, sy, sx + vx, sy + vy)
+                    }
+                    end != null -> {
+                        val ex = (end.left * w).toInt()
+                        val ey = (end.top * h).toInt()
+                        listOf(ex - vx, ey - vy, ex, ey)
+                    }
+                    else -> listOf(x1, y1, x2, y2)
+                }
             }
         }
 
@@ -730,23 +883,29 @@ class RpaRunner(
                 stepDeadline,
                 (deadline - reserve).coerceAtLeast(now + MIN_PRIMARY_WINDOW_MS),
             )
-            if (pollText(expect, primary, primaryDeadline)) {
+            if (pollText(expect, primary, primaryDeadline) { textLinesOf(step, it) }) {
                 return StepOutcome(true, "assert_ok line=$primary")
             }
             if (alt != null) {
                 emit(RpaRunEvent.LineFallback(index, step, primary, alt, "assert_miss"))
                 val altDeadline = minOf(stepDeadline + DUAL_FALLBACK_WINDOW_MS, deadline)
-                if (pollText(expect, alt, altDeadline)) {
+                if (pollText(expect, alt, altDeadline) { textLinesOf(step, it) }) {
                     line = alt
                     return StepOutcome(true, "assert_ok fallback line=$alt")
                 }
             }
-            return StepOutcome(false, "assert_text_missing: ${expect.text}")
+            // §六 6.3 错误码收口：断言未命中的稳定码是 assert_failed。
+            return StepOutcome(false, "assert_failed: ${expect.text}")
         }
 
-        private suspend fun pollText(expect: RpaExpect, line: RpaLine, until: Long): Boolean {
+        private suspend fun pollText(
+            expect: RpaExpect,
+            line: RpaLine,
+            until: Long,
+            readLines: suspend (RpaLine) -> List<String>,
+        ): Boolean {
             while (System.currentTimeMillis() < until) {
-                val found = device.textLines(line).any { text ->
+                val found = readLines(line).any { text ->
                     RpaTextMatch.matches(text, expect.text, expect.match, ignoreWhitespace = true)
                 }
                 if (found) return true
@@ -755,6 +914,44 @@ class RpaRunner(
             }
             return false
         }
+
+        /**
+         * 启动完成判定（§一 D 类）：A11Y 线等 readySelector 节点出现、VISION 线
+         * 等 readyText 文本上屏（OCR）；未配置不等待。轮询窗口 = 步骤超时，
+         * 超时返回 `launch_timeout`（null = 就绪或无需等待）。
+         */
+        private suspend fun awaitReady(step: RpaStep, active: RpaLine): String? {
+            val until = System.currentTimeMillis() + RpaLimits.stepTimeout(step.timeoutMs)
+            return when (active) {
+                RpaLine.A11Y -> {
+                    val ready = step.lineParams.a11y.readySelector?.resolve(runtimeVars)
+                        ?: return null
+                    val target = RpaTarget(a11y = RpaA11ySpec(selectors = listOf(ready)))
+                    if (pollLocate(target, active, until) != null) null else "launch_timeout"
+                }
+                RpaLine.VISION -> {
+                    val readyText = resolve(step.lineParams.vision.readyText)
+                        ?.takeIf { it.isNotBlank() } ?: return null
+                    val ready = RpaExpect(text = readyText)
+                    if (pollText(ready, active, until) { device.textLines(it) }) {
+                        null
+                    } else {
+                        "launch_timeout"
+                    }
+                }
+            }
+        }
+
+        /**
+         * 读屏按线取本线范围参数（禁止跨线取值）：a11y 线只传 readScope、
+         * vision 线只传 ocrRegion；断言与「界面读取」共用。
+         */
+        private suspend fun textLinesOf(step: RpaStep, active: RpaLine): List<String> =
+            if (active == RpaLine.A11Y) {
+                device.textLines(active, readScope = step.lineParams.a11y.readScope)
+            } else {
+                device.textLines(active, ocrRegion = step.lineParams.vision.ocrRegion)
+            }
 
         // ---------------------------- 线路 ----------------------------
 
@@ -790,13 +987,28 @@ class RpaRunner(
         private suspend fun locateWithFallback(index: Int, step: RpaStep): RpaHit? {
             val target = step.target?.resolve(runtimeVars) ?: return null
             val primary = line ?: return null
-            val first = device.locate(script.id, target, primary)
+            // timeoutMs = 「等待目标出现」的步骤预算（与 WAIT_FOR_TARGET、启动完成
+            // 判定同语义，参数标准普适）：目标页异步渲染（如 IM 搜索结果列表）时
+            // 按步骤超时轮询定位，不单发一枪；全 miss 由调用方报 target_timeout。
+            val timeout = RpaLimits.stepTimeout(step.timeoutMs)
+            val now = System.currentTimeMillis()
+            val stepDeadline = now + timeout
+            val alt = primary.other().takeIf { fallbackAllowed() && lineReady(it) }
+            // 双模式先给主线路留出时间，再预留兜底轮询窗口；总预算始终优先。
+            val reserve = if (alt != null) DUAL_FALLBACK_WINDOW_MS else 0L
+            val primaryDeadline = minOf(
+                stepDeadline,
+                (deadline - reserve).coerceAtLeast(now + MIN_PRIMARY_WINDOW_MS),
+            )
+            val first = pollLocate(target, primary, primaryDeadline)
             if (first != null) return first
-            if (!fallbackAllowed()) return null
-            val alt = primary.other()
-            if (!lineReady(alt)) return null
+            if (alt == null) return null
             emit(RpaRunEvent.LineFallback(index, step, primary, alt, "locate_miss"))
-            val second = device.locate(script.id, target, alt) ?: return null
+            val second = pollLocate(
+                target,
+                alt,
+                minOf(stepDeadline + DUAL_FALLBACK_WINDOW_MS, deadline),
+            ) ?: return null
             line = alt
             return second
         }
@@ -811,7 +1023,10 @@ class RpaRunner(
             val first = block(primary)
             if (first.isSuccess) return StepOutcome(true, "line=$primary")
             val detail = first.exceptionOrNull()?.message ?: failureDetail
-            if (!fallbackAllowed()) return StepOutcome(false, detail)
+            // app_missing 是前置缺失：禁止换线掩盖，直接失败（B1 兜底）。
+            if (detail.startsWith("app_missing") || !fallbackAllowed()) {
+                return StepOutcome(false, detail)
+            }
             val alt = primary.other()
             if (!lineReady(alt)) return StepOutcome(false, detail)
             emit(RpaRunEvent.LineFallback(index, step, primary, alt, detail))

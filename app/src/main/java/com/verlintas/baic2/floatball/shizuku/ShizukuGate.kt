@@ -36,7 +36,7 @@ sealed interface ShizukuGrantResult {
     /** appops 已写入且复查确认为 allow。 */
     data object Granted : ShizukuGrantResult
 
-    /** shell 失败：携带 stderr/原因原文，展示层映射文案（权限不足指回前置①）。 */
+    /** shell 失败：携带 stderr/原因原文，展示层映射文案（权限不足指回前置：无线调试/Shizuku 启动）。 */
     data class Failed(val reason: String) : ShizukuGrantResult
 }
 

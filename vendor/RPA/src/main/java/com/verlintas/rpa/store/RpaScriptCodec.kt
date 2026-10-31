@@ -30,6 +30,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import org.w3c.dom.Element
 import org.w3c.dom.Node
@@ -66,8 +67,18 @@ object RpaJsonCodec : RpaScriptCodec {
     override fun encode(script: RpaScript): ByteArray =
         rpaJson.encodeToString(RpaScript.serializer(), script).toByteArray(Charsets.UTF_8)
 
-    override fun decode(bytes: ByteArray): RpaScript =
-        rpaJson.decodeFromString(RpaScript.serializer(), String(bytes, Charsets.UTF_8))
+    override fun decode(bytes: ByteArray): RpaScript {
+        val text = String(bytes, Charsets.UTF_8)
+        // §7.6 版本守卫先于解码：高版本文件拒绝导入（报「文件版本较新」）。
+        // 解析失败不在此处抛（走原路径由解码器报损坏），只取到版本号才守卫。
+        val version = runCatching {
+            (rpaJson.parseToJsonElement(text) as? JsonObject)
+                ?.get("schemaVersion")
+                ?.let { (it as? JsonPrimitive)?.intOrNull }
+        }.getOrNull()
+        guardSchemaVersion(version)
+        return rpaJson.decodeFromString(RpaScript.serializer(), text)
+    }
 }
 
 /**
@@ -129,9 +140,17 @@ object RpaXmlCodec : RpaScriptCodec {
         if (root == null || root.tagName != ROOT_TAG) {
             throw IllegalArgumentException("xml_root_invalid")
         }
+        // §7.6 版本守卫：根属性与树内字段两处都查（导出两者都写，防截改其一）。
+        guardSchemaVersion(
+            root.getAttribute("schemaVersion").takeIf { it.isNotEmpty() }?.toIntOrNull(),
+        )
         val tree = readChildren(root).singleOrNull { it.first == null }
             ?.second
             ?: throw IllegalArgumentException("xml_body_missing")
+        guardSchemaVersion(
+            (tree as? JsonObject)?.get("schemaVersion")
+                ?.let { (it as? JsonPrimitive)?.intOrNull },
+        )
         return rpaJson.decodeFromJsonElement(RpaScript.serializer(), tree)
     }
 
@@ -263,6 +282,16 @@ object RpaXmlCodec : RpaScriptCodec {
 /** 从字节流自动识别 json / xml（导入用）。 */
 internal fun looksLikeXml(bytes: ByteArray): Boolean =
     bytes.decodeToString(0, minOf(bytes.size, 64)).trimStart().startsWith("<")
+
+/**
+ * §7.6 版本守卫：schemaVersion 高于当前实现 → 拒绝导入，报「文件版本较新」
+ * （schema_version_too_new）。缺字段 / 解析不到版本号不拦，由解码器按损坏处理。
+ */
+internal fun guardSchemaVersion(version: Int?) {
+    if (version != null && version > RpaScript.CURRENT_SCHEMA_VERSION) {
+        throw IllegalArgumentException("schema_version_too_new: $version")
+    }
+}
 
 /** 从 JSON 树读取对象（包 manifest 用）。 */
 internal fun parseJsonObject(text: String): JsonObject =

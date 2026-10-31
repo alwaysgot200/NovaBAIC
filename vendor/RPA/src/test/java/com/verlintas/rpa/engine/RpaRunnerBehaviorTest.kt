@@ -19,6 +19,7 @@
 
 package com.verlintas.rpa.engine
 
+import com.verlintas.rpa.model.RpaA11yLineParams
 import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaCapabilities
@@ -31,9 +32,12 @@ import com.verlintas.rpa.model.RpaFailurePolicy
 import com.verlintas.rpa.model.RpaFlowKind
 import com.verlintas.rpa.model.RpaGlobalSetting
 import com.verlintas.rpa.model.RpaHit
+import com.verlintas.rpa.model.RpaInputChannel
 import com.verlintas.rpa.model.RpaLine
+import com.verlintas.rpa.model.RpaLineParams
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaParams
+import com.verlintas.rpa.model.RpaRect
 import com.verlintas.rpa.model.RpaRunEvent
 import com.verlintas.rpa.model.RpaRunResult
 import com.verlintas.rpa.model.RpaScript
@@ -44,17 +48,34 @@ import com.verlintas.rpa.model.RpaTarget
 import com.verlintas.rpa.model.RpaVarAssign
 import com.verlintas.rpa.model.RpaVarSource
 import com.verlintas.rpa.model.RpaVarType
+import com.verlintas.rpa.model.RpaVisionKind
+import com.verlintas.rpa.model.RpaVisionLineParams
+import com.verlintas.rpa.model.RpaVisionLocator
+import com.verlintas.rpa.model.RpaVisionSpec
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+
+/** 就绪能力快照：两线全就绪（B2/B3 按需 copy 改单项）。 */
+private val READY_CAPS = RpaCapabilities(
+    a11yReady = true,
+    shizukuReady = true,
+    visionReady = true,
+    ocrReady = true,
+    projectionReady = true,
+    screenshotReady = true,
+)
 
 /**
  * 引擎行为单测（v4 §六）：handler 注册表完备性、P2 占位显式报错、
  * 跳转（相对锚定 / 上限 / 悬空）、条件跳过与求值异常降级、
  * 变量四来源、repeat 与 retries 交互、整脚本循环、复合动作深度、
- * 全局默认等待回退、stopOnFailure 处置。
+ * 全局默认等待回退、stopOnFailure 处置；以及双模式参数的边界矩阵
+ * （B1 缺 App / B2 a11y 前置 / B3 注入前置、target_timeout、
+ * assert_failed、step_timeout、锁线零回退、分线参数禁跨线）。
  */
 class RpaRunnerBehaviorTest {
 
@@ -537,14 +558,203 @@ class RpaRunnerBehaviorTest {
         assertFalse(finished[1].ok)
     }
 
+    // ------------------------------ 边界矩阵（§六） ------------------------------
+
+    @Test
+    fun b1AppMissingEndsRunWithReport() {
+        // B1 缺 App（运行中兜底）：app_missing 立即干净结束，无视 CONTINUE；
+        // 报因走 Log + ScriptFinished，且绝不允许 fallback 换线掩盖缺前置。
+        val device = FakeDevice(launchFailure = "app_missing: com.example.app")
+        val events = mutableListOf<RpaRunEvent>()
+        val result = run(
+            scriptOf(
+                steps = listOf(
+                    step(
+                        "s1",
+                        RpaAction.LAUNCH_APP,
+                        RpaParams(packageName = "com.example.app"),
+                        onFailure = RpaFailurePolicy.CONTINUE,
+                    ),
+                    step("s2", RpaAction.INPUT_TEXT, RpaParams(text = "after")),
+                ),
+                mode = RpaMode.DUAL,
+            ),
+            device,
+            events,
+        )
+        assertFalse(result.ok)
+        assertTrue(result.detail, result.detail.startsWith("app_missing"))
+        assertEquals(0, result.failedStepIndex)
+        assertTrue(device.inputs.isEmpty())
+        assertTrue(events.any { it is RpaRunEvent.Log && it.message.contains("app_missing") })
+        assertTrue(events.filterIsInstance<RpaRunEvent.LineFallback>().isEmpty())
+        val finished = events.last() as RpaRunEvent.ScriptFinished
+        assertFalse(finished.ok)
+        assertTrue(finished.detail, finished.detail.startsWith("app_missing"))
+    }
+
+    @Test
+    fun b2A11yLineMissingIsBlockedBeforeRun() {
+        // B2 a11y 前置不具备：就绪门拦截，一步都不执行（显式报因，绝不静默换线）。
+        val events = mutableListOf<RpaRunEvent>()
+        val result = run(
+            scriptOf(
+                listOf(step("a", RpaAction.INPUT_TEXT, RpaParams(text = "hi"))),
+                mode = RpaMode.A11Y,
+            ),
+            FakeDevice(caps = READY_CAPS.copy(a11yReady = false)),
+            events,
+        )
+        assertFalse(result.ok)
+        assertEquals("readiness_failed", result.detail)
+        assertTrue(events.any { it is RpaRunEvent.Log && it.message.contains("ready_a11y_missing") })
+        assertTrue(events.filterIsInstance<RpaRunEvent.StepStarted>().isEmpty())
+    }
+
+    @Test
+    fun b3VisionInjectionMissingIsBlockedBeforeRun() {
+        // B3 无 a11y 前置不具备（Shizuku 注入缺失）：同样就绪门拦截不运行。
+        val events = mutableListOf<RpaRunEvent>()
+        val result = run(
+            scriptOf(
+                listOf(step("a", RpaAction.INPUT_TEXT, RpaParams(text = "hi"))),
+                mode = RpaMode.VISION,
+            ),
+            FakeDevice(caps = READY_CAPS.copy(visionReady = true, shizukuReady = false)),
+            events,
+        )
+        assertFalse(result.ok)
+        assertEquals("readiness_failed", result.detail)
+        assertTrue(
+            events.any {
+                it is RpaRunEvent.Log && it.message.contains("ready_vision_injection_missing")
+            },
+        )
+        assertTrue(events.filterIsInstance<RpaRunEvent.StepStarted>().isEmpty())
+    }
+
+    @Test
+    fun targetTimeoutWhenLocateMisses() {
+        // §六 6.3：定位全 miss 的稳定码是 target_timeout（不暴露 target_not_found）。
+        val result = run(
+            scriptOf(listOf(step("a", RpaAction.TAP, target = hitTarget(), timeoutMs = 200))),
+            FakeDevice(hit = null),
+        )
+        assertFalse(result.ok)
+        assertEquals("target_timeout", result.detail)
+    }
+
+    @Test
+    fun tapWaitsForTargetWithinStepTimeout() {
+        // timeoutMs = 「等待目标出现」的步骤预算（参数标准普适）：目标晚到
+        // （目标页异步渲染）时 TAP 按步骤超时轮询命中，不单发一枪。
+        val device = FakeDevice(missFirstLocates = 2)
+        val result = run(
+            scriptOf(listOf(step("a", RpaAction.TAP, target = hitTarget(), timeoutMs = 3_000))),
+            device,
+        )
+        assertTrue(result.ok)
+        assertEquals(listOf(10 to 20), device.taps)
+    }
+
+    @Test
+    fun assertFailedWhenExpectedTextNeverAppears() {
+        val result = run(
+            scriptOf(
+                listOf(
+                    step(
+                        "a",
+                        RpaAction.ASSERT_TEXT,
+                        expect = RpaExpect(text = "再见", timeoutMs = 100),
+                    ),
+                ),
+            ),
+            FakeDevice(texts = listOf("你好")),
+        )
+        assertFalse(result.ok)
+        assertTrue(result.detail, result.detail.startsWith("assert_failed"))
+        assertTrue(result.detail, result.detail.contains("再见"))
+    }
+
+    @Test
+    fun stepTimeoutWhenRetriesExhausted() {
+        // 重试耗尽（多轮全败）收口 step_timeout 并保留末次原因；
+        // 单次失败仍保留稳定码（见 stopOnFailure 用例断言）。
+        val device = FakeDevice(failFirstTaps = Int.MAX_VALUE)
+        val result = run(
+            scriptOf(listOf(step("a", RpaAction.TAP, target = hitTarget(), retries = 2))),
+            device,
+        )
+        assertFalse(result.ok)
+        assertEquals(3, device.taps.size)
+        assertTrue(result.detail, result.detail.startsWith("step_timeout"))
+        assertTrue(result.detail, result.detail.contains("tap_failed"))
+    }
+
+    @Test
+    fun forcedLineRunNeverFallsBack() {
+        // 锁线运行（forceLine）是两线独立验证的唯一口径：miss 只报 target_timeout，
+        // 零 LineFallback（禁止静默换线，§4.5）。
+        val events = mutableListOf<RpaRunEvent>()
+        val result = run(
+            scriptOf(listOf(step("a", RpaAction.TAP, target = dualTarget(), timeoutMs = 200)), mode = RpaMode.DUAL),
+            FakeDevice(hit = null),
+            events,
+            forceLine = RpaLine.VISION,
+        )
+        assertFalse(result.ok)
+        assertEquals("target_timeout", result.detail)
+        assertTrue(events.filterIsInstance<RpaRunEvent.LineFallback>().isEmpty())
+    }
+
+    @Test
+    fun inputTextConsumesOnlyCurrentLineParams() {
+        // 禁止跨线取值：a11y 线只消费 inputSelector/appendMode，vision 线只消费
+        // inputChannel/clearBeforeInput/focusPoint，对侧字段保持接口默认。
+        val selector = RpaSelector(editableOnly = true)
+        val focus = RpaRect(left = 0.5f, top = 0.9f)
+        val lineParams = RpaLineParams(
+            a11y = RpaA11yLineParams(inputSelector = selector, appendMode = true),
+            vision = RpaVisionLineParams(
+                inputChannel = RpaInputChannel.SHELL_INPUT,
+                clearBeforeInput = true,
+                focusPoint = focus,
+            ),
+        )
+        val steps = listOf(
+            step("a", RpaAction.INPUT_TEXT, RpaParams(text = "hi"), lineParams = lineParams),
+        )
+
+        val a11yDevice = FakeDevice()
+        run(scriptOf(steps, mode = RpaMode.DUAL), a11yDevice, forceLine = RpaLine.A11Y)
+        val a11yCall = a11yDevice.inputCalls.single()
+        assertEquals(RpaLine.A11Y, a11yCall.line)
+        assertEquals(selector, a11yCall.inputSelector)
+        assertTrue(a11yCall.appendMode)
+        assertNull(a11yCall.focusPoint)
+        assertFalse(a11yCall.clearFirst)
+        assertEquals(RpaInputChannel.SHELL_INPUT, a11yCall.inputChannel)
+
+        val visionDevice = FakeDevice()
+        run(scriptOf(steps, mode = RpaMode.DUAL), visionDevice, forceLine = RpaLine.VISION)
+        val visionCall = visionDevice.inputCalls.single()
+        assertEquals(RpaLine.VISION, visionCall.line)
+        assertNull(visionCall.inputSelector)
+        assertFalse(visionCall.appendMode)
+        assertEquals(focus, visionCall.focusPoint)
+        assertTrue(visionCall.clearFirst)
+        assertEquals(RpaInputChannel.SHELL_INPUT, visionCall.inputChannel)
+    }
+
     // ------------------------------ 夹具 ------------------------------
 
     private fun run(
         script: RpaScript,
         device: RpaDevice,
         events: MutableList<RpaRunEvent> = mutableListOf(),
+        forceLine: RpaLine? = null,
     ): RpaRunResult = runBlocking {
-        RpaRunner(device = device).run(script) { event -> events += event }
+        RpaRunner(device = device).run(script, forceLine) { event -> events += event }
     }
 
     private fun scriptOf(
@@ -552,10 +762,11 @@ class RpaRunnerBehaviorTest {
         customActions: List<RpaCustomAction> = emptyList(),
         variables: Map<String, String> = emptyMap(),
         global: RpaGlobalSetting = RpaGlobalSetting(),
+        mode: RpaMode = RpaMode.A11Y,
     ) = RpaScript(
         id = "script",
         name = "引擎单测",
-        mode = RpaMode.A11Y,
+        mode = mode,
         variables = variables,
         steps = steps,
         customActions = customActions,
@@ -572,6 +783,8 @@ class RpaRunnerBehaviorTest {
         repeat: Int = 1,
         retries: Int = 0,
         onFailure: RpaFailurePolicy = RpaFailurePolicy.STOP,
+        lineParams: RpaLineParams = RpaLineParams(),
+        timeoutMs: Long = 5_000,
     ) = RpaStep(
         id = id,
         action = action,
@@ -582,6 +795,8 @@ class RpaRunnerBehaviorTest {
         repeat = repeat,
         retries = retries,
         onFailure = onFailure,
+        lineParams = lineParams,
+        timeoutMs = timeoutMs,
     )
 
     private fun gatedTap(id: String, variable: String, expected: String): RpaStep = step(
@@ -597,6 +812,14 @@ class RpaRunnerBehaviorTest {
 
     private fun hitTarget() = RpaTarget(
         a11y = RpaA11ySpec(selectors = listOf(RpaSelector(text = "按钮"))),
+    )
+
+    /** 双线定位（B10 双写）：锁线 / 自动选线都按线取本侧。 */
+    private fun dualTarget() = RpaTarget(
+        a11y = RpaA11ySpec(selectors = listOf(RpaSelector(text = "按钮"))),
+        vision = RpaVisionSpec(
+            primary = RpaVisionLocator(kind = RpaVisionKind.TEMPLATE, templateId = "tpl_btn"),
+        ),
     )
 
     /** 每个动作的最小可用参数：只验证 handler 存在（不报 unsupported_action）。 */
@@ -645,36 +868,50 @@ class RpaRunnerBehaviorTest {
         private val texts: List<String> = listOf("你好"),
         /** 前 N 次点击故意失败（0 = 全成功；Int.MAX_VALUE = 全失败）。 */
         private val failFirstTaps: Int = 0,
+        /** 前 N 次定位故意 miss（0 = 一次命中；目标晚到的轮询等待验证用）。 */
+        private val missFirstLocates: Int = 0,
+        private val caps: RpaCapabilities = READY_CAPS,
+        /** 启动 / 打开聊天的失败原因（null = 成功）：B1 缺 App 兜底用。 */
+        private val launchFailure: String? = null,
     ) : RpaDevice {
 
-        override val capabilities = RpaCapabilities(
-            a11yReady = true,
-            shizukuReady = true,
-            visionReady = true,
-            ocrReady = true,
-            projectionReady = true,
-            screenshotReady = true,
-        )
+        override val capabilities: RpaCapabilities get() = caps
 
         val taps = mutableListOf<Pair<Int, Int>>()
         val holds = mutableListOf<Int>()
         val inputs = mutableListOf<String>()
         val links = mutableListOf<String>()
 
+        /** inputText 收到的全部分线参数（断言「只消费本线参数、禁跨线取值」）。 */
+        data class InputCall(
+            val text: String,
+            val line: RpaLine,
+            val clearFirst: Boolean,
+            val inputSelector: RpaSelector?,
+            val appendMode: Boolean,
+            val inputChannel: RpaInputChannel,
+            val focusPoint: RpaRect?,
+        )
+
+        val inputCalls = mutableListOf<InputCall>()
+
         private var tapFailBudget = failFirstTaps
+        private var locateMissBudget = missFirstLocates
 
         override suspend fun launchApp(
             packageName: String,
             line: RpaLine,
             restart: Boolean,
             closeOnly: Boolean,
-        ): Result<Unit> = Result.success(Unit)
+        ): Result<Unit> = launchFailure?.let { Result.failure(IllegalStateException(it)) }
+            ?: Result.success(Unit)
 
         override suspend fun openChat(
             imPackage: String,
             contactName: String,
             line: RpaLine,
-        ): Result<Unit> = Result.success(Unit)
+        ): Result<Unit> = launchFailure?.let { Result.failure(IllegalStateException(it)) }
+            ?: Result.success(Unit)
 
         override suspend fun tap(x: Int, y: Int, line: RpaLine, holdMs: Int): Result<Unit> {
             taps += x to y
@@ -703,8 +940,21 @@ class RpaRunnerBehaviorTest {
             text: String,
             line: RpaLine,
             clearFirst: Boolean,
+            inputSelector: RpaSelector?,
+            appendMode: Boolean,
+            inputChannel: RpaInputChannel,
+            focusPoint: RpaRect?,
         ): Result<Unit> {
             inputs += text
+            inputCalls += InputCall(
+                text = text,
+                line = line,
+                clearFirst = clearFirst,
+                inputSelector = inputSelector,
+                appendMode = appendMode,
+                inputChannel = inputChannel,
+                focusPoint = focusPoint,
+            )
             return Result.success(Unit)
         }
 
@@ -720,9 +970,19 @@ class RpaRunnerBehaviorTest {
             scriptId: String,
             target: RpaTarget,
             line: RpaLine,
-        ): RpaHit? = hit
+        ): RpaHit? {
+            if (locateMissBudget > 0) {
+                locateMissBudget--
+                return null
+            }
+            return hit
+        }
 
-        override suspend fun textLines(line: RpaLine): List<String> = texts
+        override suspend fun textLines(
+            line: RpaLine,
+            readScope: RpaSelector?,
+            ocrRegion: RpaRect?,
+        ): List<String> = texts
 
         override suspend fun foregroundPackage(line: RpaLine): String? = "com.example.app"
 

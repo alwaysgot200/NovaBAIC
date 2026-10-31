@@ -20,6 +20,8 @@
 package com.verlintas.baic2.floatball.rpa
 
 import android.app.ActivityManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -29,6 +31,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.verlintas.baic2.device.api.OcrLine
 import com.verlintas.baic2.device.api.OcrProvider
 import com.verlintas.baic2.device.api.ShellBridge
+import com.verlintas.baic2.device.api.ShellResult
+import com.verlintas.baic2.device.api.ShellState
 import com.verlintas.baic2.floatball.auto.AssistsA11yBridge
 import com.verlintas.baic2.floatball.auto.CvMatch
 import com.verlintas.baic2.floatball.auto.ImChatNavigator
@@ -38,6 +42,7 @@ import com.verlintas.rpa.engine.RpaDevice
 import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaCapabilities
 import com.verlintas.rpa.model.RpaHit
+import com.verlintas.rpa.model.RpaInputChannel
 import com.verlintas.rpa.model.RpaLine
 import com.verlintas.rpa.model.RpaPick
 import com.verlintas.rpa.model.RpaRect
@@ -50,8 +55,16 @@ import com.verlintas.rpa.model.RpaVisionSpec
 import com.verlintas.rpa.store.RpaScriptStore
 import com.ven.assists.AssistsCore
 import com.ven.assists.service.AssistsService
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +73,20 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+
+/**
+ * 取 [RpaAndroidDevice] 的 Hilt 入口。**必须声明在主源码**：Hilt 组件在编译
+ * 主模块时聚合 @EntryPoint，测试源集里声明的入口接口不在组件里，运行期会
+ * ClassCastException（真机仪器测试取设备实例的唯一通道）。
+ */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface RpaAndroidDeviceEntryPoint {
+    fun rpaDevice(): RpaAndroidDevice
+
+    /** 真机仪器测试的 shell 通道（微信节点树解锁 WechatTreeUnlock 写安全设置用）。 */
+    fun shellBridge(): ShellBridge
+}
 
 /**
  * [RpaDevice] 的 Android 实现：严格按线路分流，绝不「a11y 失败偷偷换 Shizuku」。
@@ -138,18 +165,53 @@ class RpaAndroidDevice @Inject constructor(
             }.getOrNull() ?: return@withContext Result.failure(
                 IllegalStateException("app_missing: $packageName"),
             )
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            runCatching { context.startActivity(launch) }.mapCatching {
-                if (!foregroundProbeAvailable(line)) {
-                    // 纯投影视觉线没有前台探针（无 Shizuku）；startActivity 成功
-                    // 即视为启动完成，给冷启动留出稳定时间，绝不空等超时报错。
-                    if (line == RpaLine.A11Y) error("a11y_not_ready")
-                    delay(LAUNCH_SETTLE_MS)
-                } else if (!awaitForeground(packageName, line)) {
-                    error("launch_timeout: $packageName")
+            // 「启动应用」= 应用首页（2026-10-31 真机定案）：纯 FLAG_ACTIVITY_NEW_TASK
+            // 对已有任务是「带到前台即完」——目标 App 停在二级页（如微信聊天页）时
+            // launcher intent 被顶页无效投递，启动完成判定（readySelector/readyText
+            // 所等的首页元素）永远等不到 → launch_timeout。CLEAR_TOP 清掉入口 Activity
+            // 之上的页面，保证判定所等的首页元素必然出现，启动语义与任务残留状态无关。
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            // 投递通道（2026-10-31 真机续案）：部分系统会静默丢弃后台进程的
+            // startActivity（HyperOS「后台弹出界面」MIUIOP 10021 实测拦截：调用
+            // 正常返回但界面不动，启动完成判定只能等满步骤超时误报 launch_timeout）。
+            // shell 通道（Shizuku，shell 身份投递 am start）不受该限制，优先走它；
+            // 无 shell 通道 / shell 投递失败再回退标准 startActivity。启动投递是
+            // 线路中立的设备控制（同 closeApp），不属感知/注入通道，不算换线。
+            if (!launchViaShell(launch)) {
+                runCatching { context.startActivity(launch) }.getOrElse {
+                    return@withContext Result.failure(it)
                 }
             }
+            if (!foregroundProbeAvailable(line)) {
+                // 纯投影视觉线没有前台探针（无 Shizuku）；投递成功
+                // 即视为启动完成，给冷启动留出稳定时间，绝不空等超时报错。
+                if (line == RpaLine.A11Y) {
+                    return@withContext Result.failure(IllegalStateException("a11y_not_ready"))
+                }
+                delay(LAUNCH_SETTLE_MS)
+            } else if (!awaitForeground(packageName, line)) {
+                return@withContext Result.failure(
+                    IllegalStateException("launch_timeout: $packageName"),
+                )
+            }
+            return@withContext Result.success(Unit)
         }
+
+    /** shell 通道投递 am start；无 shell 通道 / 投递失败返回 false，调用方回退 startActivity。 */
+    private suspend fun launchViaShell(launch: Intent): Boolean {
+        if (shell.state.value != ShellState.Ready) return false
+        val component = launch.component?.flattenToShortString() ?: return false
+        val result = runCatching {
+            shell.exec(
+                "am start -f 0x${Integer.toHexString(launch.flags)} -n $component",
+                timeoutMs = LAUNCH_SHELL_TIMEOUT_MS,
+            )
+        }.getOrNull()
+        return result is ShellResult.Output &&
+            result.exitCode == 0 &&
+            !result.stdout.contains("Error") &&
+            !result.stderr.contains("Error")
+    }
 
     override suspend fun openChat(
         imPackage: String,
@@ -173,7 +235,13 @@ class RpaAndroidDevice @Inject constructor(
         when (result) {
             is ImChatNavigator.NavResult.Ok -> Result.success(Unit)
             is ImChatNavigator.NavResult.Fail -> Result.failure(
-                IllegalStateException("open_chat_failed: ${result.reason}"),
+                // IM 未安装是前置缺失：按 app_missing 收口（B1 兜底语义），
+                // 引擎据此禁换线直接失败。
+                if (result.reason == ImChatNavigator.REASON_APP_MISSING) {
+                    IllegalStateException("app_missing: $imPackage")
+                } else {
+                    IllegalStateException("open_chat_failed: ${result.reason}")
+                },
             )
         }
     }
@@ -210,22 +278,136 @@ class RpaAndroidDevice @Inject constructor(
         text: String,
         line: RpaLine,
         clearFirst: Boolean,
+        inputSelector: RpaSelector?,
+        appendMode: Boolean,
+        inputChannel: RpaInputChannel,
+        focusPoint: RpaRect?,
     ): Result<Unit> = when (line) {
-        RpaLine.A11Y -> bridge.typeText(text)
-        RpaLine.VISION -> {
-            val cleared = if (clearFirst) {
-                runCatching { shizuku.clearInput() }.getOrNull()
-            } else {
-                null
+        RpaLine.A11Y -> typeViaA11y(text, clearFirst, inputSelector, appendMode)
+        RpaLine.VISION -> typeViaVision(text, clearFirst, inputChannel, focusPoint)
+    }
+
+    /**
+     * A11Y 线输入：inputSelector 指定目标可编辑节点并点按聚焦（miss 显式报
+     * `input_focus_missing`，绝不静默写到别处）；appendMode 且不清空时读旧文本
+     * 拼接（SET_TEXT 是整体替换，不拼接就丢旧文）；最终 [AssistsA11yBridge.typeText] 写入。
+     * 输入框有界等待：上一步导航/点击后新窗口与输入焦点常在几百毫秒后才就绪
+     * （2026-10-31 真机：点搜索图标后立即输入报 no_focused_input），定位与写入
+     * 前都先等输入焦点或可编辑节点出现，预算耗尽照常报因，绝不吞错。
+     */
+    private suspend fun typeViaA11y(
+        text: String,
+        clearFirst: Boolean,
+        inputSelector: RpaSelector?,
+        appendMode: Boolean,
+    ): Result<Unit> {
+        if (inputSelector != null && !inputSelector.isEmpty()) {
+            val hit = awaitLocateA11y(RpaA11ySpec(selectors = listOf(inputSelector)))
+                ?: return Result.failure(IllegalStateException("input_focus_missing"))
+            val tapped = bridge.tap(hit.x, hit.y)
+            if (tapped.isFailure) return tapped
+        }
+        awaitA11yInputReady()
+        val payload = if (appendMode && !clearFirst) {
+            existingEditableText()?.plus(text) ?: text
+        } else {
+            text
+        }
+        return bridge.typeText(payload)
+    }
+
+    /** 有界重试定位（新窗口未就绪的竞态）：预算 [INPUT_READY_BUDGET_MS] 内轮询，耗尽即 miss。 */
+    private suspend fun awaitLocateA11y(spec: RpaA11ySpec): RpaHit? {
+        val deadline = System.currentTimeMillis() + INPUT_READY_BUDGET_MS
+        while (true) {
+            locateA11y(spec)?.let { return it }
+            if (System.currentTimeMillis() >= deadline) return null
+            delay(INPUT_READY_POLL_MS)
+        }
+    }
+
+    /**
+     * 有界等待输入框就绪：焦点输入节点或可编辑节点出现（与
+     * [AssistsA11yBridge.typeText] 候选同口径）即续写；等不到不拦，
+     * 交 typeText 如实报 `no_focused_input`。
+     */
+    private suspend fun awaitA11yInputReady() {
+        if (AssistsService.getOrNull() == null) return
+        val deadline = System.currentTimeMillis() + INPUT_READY_BUDGET_MS
+        while (!a11yInputReady()) {
+            if (System.currentTimeMillis() >= deadline) return
+            delay(INPUT_READY_POLL_MS)
+        }
+    }
+
+    private suspend fun a11yInputReady(): Boolean = boundedProbe(A11Y_PROBE_TIMEOUT_MS) {
+        val service = AssistsService.getOrNull() ?: return@boundedProbe false
+        if (service.rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) != null) {
+            return@boundedProbe true
+        }
+        AssistsCore.getAllNodes().any { it.isEditable && it.isEnabled }
+    } == true
+
+    /** 追加写入前读旧文本：优先取 isFocused 的可编辑节点，其次全树首个可编辑节点。 */
+    private fun existingEditableText(): String? = runCatching {
+        val nodes = AssistsCore.getAllNodes()
+        val focused = nodes.firstOrNull { it.isFocused && it.isEditable }
+        (focused ?: nodes.firstOrNull { it.isEditable })?.text?.toString()
+    }.getOrNull()
+
+    /**
+     * VISION 线输入：focusPoint 先点按聚焦；clearFirst 走本线 Ctrl+A+DEL 清空；
+     * 写入通道只按 lineParams 显式选择——CLIPBOARD_PASTE 剪贴板粘贴（用后恢复旧
+     * 剪贴板），SHELL_INPUT 走 `input text`。绝不回退 a11y 输入通道。
+     */
+    private suspend fun typeViaVision(
+        text: String,
+        clearFirst: Boolean,
+        inputChannel: RpaInputChannel,
+        focusPoint: RpaRect?,
+    ): Result<Unit> {
+        focusPoint?.let { point ->
+            val (w, h) = screenSize() ?: (0 to 0)
+            if (w <= 0 || h <= 0) {
+                return Result.failure(IllegalStateException("input_focus_missing"))
             }
+            shizuku.tap((point.left * w).toInt(), (point.top * h).toInt())
+        }
+        if (clearFirst) {
+            val cleared = runCatching { shizuku.clearInput() }.getOrNull()
             if (cleared?.isFailure == true) {
-                Result.failure(
+                return Result.failure(
                     IllegalStateException("clear_input_failed: ${cleared.exceptionOrNull()?.message}"),
                 )
-            } else {
-                shizuku.type(text)
             }
         }
+        return when (inputChannel) {
+            RpaInputChannel.CLIPBOARD_PASTE -> pasteViaClipboard(text)
+            RpaInputChannel.SHELL_INPUT -> shizuku.type(text)
+        }
+    }
+
+    /** 剪贴板粘贴：setPrimaryClip + KEYCODE_PASTE；粘贴完成后恢复旧剪贴板，不留用户剪贴板残余。 */
+    private suspend fun pasteViaClipboard(text: String): Result<Unit> {
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+            ?: return Result.failure(IllegalStateException("clipboard_unavailable"))
+        val previous = runCatching { clipboard.primaryClip }.getOrNull()
+        val written = runCatching {
+            clipboard.setPrimaryClip(ClipData.newPlainText("rpa-input", text))
+        }
+        if (written.isFailure) {
+            return Result.failure(
+                IllegalStateException("clipboard_write_failed: ${written.exceptionOrNull()?.message}"),
+            )
+        }
+        val pasted = shizuku.paste()
+        delay(CLIPBOARD_RESTORE_DELAY_MS)
+        runCatching {
+            if (previous != null) {
+                clipboard.setPrimaryClip(previous)
+            }
+        }
+        return pasted
     }
 
     override suspend fun pressKey(key: String, line: RpaLine): Result<Unit> = when (line) {
@@ -253,16 +435,27 @@ class RpaAndroidDevice @Inject constructor(
         RpaLine.VISION -> target.vision?.let { locateVision(scriptId, it) }
     }
 
-    override suspend fun textLines(line: RpaLine): List<String> = when (line) {
-        RpaLine.A11Y -> a11yTextLines()
+    override suspend fun textLines(
+        line: RpaLine,
+        readScope: RpaSelector?,
+        ocrRegion: RpaRect?,
+    ): List<String> = when (line) {
+        RpaLine.A11Y -> a11yTextLines(readScope)
         RpaLine.VISION -> {
             val frame = visionFrame() ?: return emptyList()
-            ocrLines(frame).map { it.text }
+            val region = ocrRegion?.toRect(frame.width, frame.height)
+            ocrLines(frame)
+                .filter { region == null || region.contains(it.centerX, it.centerY) }
+                .map { it.text }
         }
     }
 
     override suspend fun foregroundPackage(line: RpaLine): String? = when (line) {
-        RpaLine.A11Y -> bridge.foregroundPackage()
+        // A11Y 根节点查询必须走有界探针（见 [boundedProbe]）：对无响应窗口的
+        // binder 查询会无限挂起（2026-10-31 真机实测前台探针卡 24 分钟把整条
+        // 运行拖死），超时按「未知」返回，由轮询预算兜底收口 launch_timeout。
+        RpaLine.A11Y -> boundedProbe(A11Y_PROBE_TIMEOUT_MS) { bridge.foregroundPackage() }
+        // VISION 线走 shell `dumpsys` 通道，[ShizukuInjector] 自带单命令超时。
         RpaLine.VISION -> shizuku.foregroundPackage()
     }
 
@@ -333,7 +526,10 @@ class RpaAndroidDevice @Inject constructor(
 
     private suspend fun locateA11y(spec: RpaA11ySpec): RpaHit? = withContext(Dispatchers.Main) {
         if (AssistsService.getOrNull() == null) return@withContext null
-        val nodes = runCatching { AssistsCore.getAllNodes() }.getOrDefault(emptyList())
+        // 节点树直查同样可能在 binder 层无限挂起（见 [boundedProbe]），超时取空
+        // 树让本步按 target_timeout 收口，绝不把整条运行挂死。
+        val nodes = boundedProbe(A11Y_PROBE_TIMEOUT_MS) { AssistsCore.getAllNodes() }
+            ?: emptyList()
         val (screenW, screenH) = screenSize() ?: (0 to 0)
         val candidates = ArrayList<Candidate>()
         var order = 0
@@ -507,19 +703,41 @@ class RpaAndroidDevice @Inject constructor(
         }
     }
 
-    private suspend fun a11yTextLines(): List<String> = withContext(Dispatchers.Main) {
-        runCatching {
-            AssistsCore.getAllNodes().asSequence()
-                .filter { it.isVisibleToUser }
-                .mapNotNull { node ->
-                    node.text?.toString()?.takeIf { text -> text.isNotBlank() }
-                        ?: node.contentDescription?.toString()?.takeIf { text -> text.isNotBlank() }
+    /**
+     * A11Y 线取屏文本：readScope 非空时只读 scope 节点范围内的文本（按节点
+     * bounds 中心过滤，禁跨范围取值）；scope 节点未命中时读空，不退回整屏。
+     */
+    private suspend fun a11yTextLines(readScope: RpaSelector? = null): List<String> =
+        withContext(Dispatchers.Main) {
+            runCatching {
+                // 同 locateA11y：直查经有界探针，超时取空不挂死调用方。
+                val nodes = (boundedProbe(A11Y_PROBE_TIMEOUT_MS) { AssistsCore.getAllNodes() }
+                    ?: emptyList<AccessibilityNodeInfo>()).filter { it.isVisibleToUser }
+                val scoped = if (readScope == null || readScope.isEmpty()) {
+                    nodes
+                } else {
+                    val scopeBounds = nodes.firstOrNull { matches(it, readScope) }
+                        ?.let { node ->
+                            val bounds = Rect()
+                            node.getBoundsInScreen(bounds)
+                            bounds
+                        } ?: return@runCatching emptyList<String>()
+                    nodes.filter { node ->
+                        val bounds = Rect()
+                        node.getBoundsInScreen(bounds)
+                        !bounds.isEmpty && scopeBounds.contains(bounds.centerX(), bounds.centerY())
+                    }
                 }
-                .distinct()
-                .take(400)
-                .toList()
-        }.getOrDefault(emptyList())
-    }
+                scoped.asSequence()
+                    .mapNotNull { node ->
+                        node.text?.toString()?.takeIf { text -> text.isNotBlank() }
+                            ?: node.contentDescription?.toString()?.takeIf { text -> text.isNotBlank() }
+                    }
+                    .distinct()
+                    .take(400)
+                    .toList()
+            }.getOrDefault(emptyList())
+        }
 
     /** VISION 线帧源：Shizuku screencap 优先，其次投影；绝不用 a11y 截图。 */
     private suspend fun visionFrame(): Bitmap? =
@@ -531,10 +749,39 @@ class RpaAndroidDevice @Inject constructor(
         RpaLine.VISION -> shizuku.available
     }
 
+    /** [boundedProbe] 专用线程池：守护线程，承接可能永久卡死的 binder 查询。 */
+    private val probeExecutor: ExecutorService = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "rpa-a11y-probe").apply { isDaemon = true }
+    }
+
+    /**
+     * 有界 a11y 查询（spec §六 有界干净退出的执行面保障）：无障碍节点 / 根节点
+     * 查询在目标窗口无响应时会在 binder 层**无限挂起**（协程取消无法打断阻塞的
+     * binder 调用），2026-10-31 真机实测前台探针卡 24 分钟拖死整条运行。任何
+     * a11y 直查都必须经本方法包一层：[timeoutMs] 内拿不到结果按「未知」（null）
+     * 返回，由调用方的轮询预算收口成稳定错误码；卡死的查询线程是守护线程，
+     * 不阻塞调用方、不碍进程退出。
+     */
+    private suspend fun <T> boundedProbe(timeoutMs: Long, block: () -> T): T? =
+        withContext(Dispatchers.IO) {
+            val future = probeExecutor.submit(Callable { block() })
+            try {
+                future.get(timeoutMs, TimeUnit.MILLISECONDS)
+            } catch (e: TimeoutException) {
+                future.cancel(true)
+                null
+            } catch (e: Exception) {
+                null
+            }
+        }
+
     private suspend fun awaitForeground(packageName: String, line: RpaLine): Boolean {
-        repeat(FOREGROUND_POLLS) {
-            delay(FOREGROUND_POLL_MS)
+        // 墙钟预算（原「20 次 × 250ms」在探针阻塞时会被无限放大）：预算耗尽
+        // 即干净失败 launch_timeout，冷启动慢的 App 也够等（10s）。
+        val deadline = System.currentTimeMillis() + FOREGROUND_BUDGET_MS
+        while (System.currentTimeMillis() < deadline) {
             if (foregroundPackage(line) == packageName) return true
+            delay(FOREGROUND_POLL_MS)
         }
         return false
     }
@@ -603,11 +850,16 @@ class RpaAndroidDevice @Inject constructor(
     )
 
     private companion object {
-        const val FOREGROUND_POLLS = 20
+        const val FOREGROUND_BUDGET_MS = 10_000L
         const val FOREGROUND_POLL_MS = 250L
+        const val A11Y_PROBE_TIMEOUT_MS = 2_000L
         const val CLOSE_POLLS = 10
         const val CLOSE_POLL_MS = 200L
         const val LAUNCH_SETTLE_MS = 1_200L
+        const val LAUNCH_SHELL_TIMEOUT_MS = 5_000L
+        const val INPUT_READY_BUDGET_MS = 3_000L
+        const val INPUT_READY_POLL_MS = 200L
         const val OCR_JPEG_QUALITY = 90
+        const val CLIPBOARD_RESTORE_DELAY_MS = 300L
     }
 }

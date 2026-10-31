@@ -1003,7 +1003,6 @@ private fun RpaApp(
             } else {
                 RpaPropertyScreen(
                     script = active,
-                    capabilities = capabilities,
                     runState = runState,
                     onBack = { scope.launch { leaveToLibrary() } },
                     onEdit = { modeGateVisible = true },
@@ -1049,8 +1048,6 @@ private fun RpaApp(
                     onDescriptionChange = { description ->
                         scope.launch { persist(active.copy(description = description)) }
                     },
-                    onRefreshCapabilities = { refreshCapabilities() },
-                    onOpenShizuku = onOpenShizuku,
                 )
                 if (modeGateVisible) {
                     RpaModeGateDialog(

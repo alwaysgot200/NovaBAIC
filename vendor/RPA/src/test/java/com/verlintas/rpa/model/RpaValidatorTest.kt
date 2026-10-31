@@ -191,6 +191,238 @@ class RpaValidatorTest {
         )
     }
 
+    // ------------------------------ 分线通道参数（D 类） ------------------------------
+
+    @Test
+    fun emptyLineParamSelectorsAreReported() {
+        val empty = RpaSelector()
+        listOf(
+            RpaAction.LAUNCH_APP to "param_ready_selector_invalid",
+            RpaAction.SWIPE to "param_anchor_selector_invalid",
+        ).forEach { (action, code) ->
+            val issues = validate(
+                step(
+                    "s1",
+                    action,
+                    params = if (action == RpaAction.LAUNCH_APP) {
+                        RpaParams(packageName = "com.example.app")
+                    } else {
+                        RpaParams(direction = RpaDirection.UP)
+                    },
+                    lineParams = when (code) {
+                        "param_ready_selector_invalid" -> RpaLineParams(
+                            a11y = RpaA11yLineParams(readySelector = empty),
+                        )
+                        else -> RpaLineParams(a11y = RpaA11yLineParams(anchorSelector = empty))
+                    },
+                ),
+            )
+            assertHasCode(issues, code)
+        }
+        val input = validate(
+            step(
+                "s1",
+                RpaAction.INPUT_TEXT,
+                params = RpaParams(text = "hi"),
+                lineParams = RpaLineParams(a11y = RpaA11yLineParams(inputSelector = empty)),
+            ),
+        )
+        assertHasCode(input, "param_input_selector_invalid")
+        val assertText = validate(
+            step(
+                "s1",
+                RpaAction.ASSERT_TEXT,
+                expect = RpaExpect(text = "hi"),
+                lineParams = RpaLineParams(a11y = RpaA11yLineParams(readScope = empty)),
+            ),
+        )
+        assertHasCode(assertText, "param_read_scope_invalid")
+    }
+
+    @Test
+    fun invalidLineParamPointsAreReported() {
+        val focus = validate(
+            step(
+                "s1",
+                RpaAction.INPUT_TEXT,
+                params = RpaParams(text = "hi"),
+                lineParams = RpaLineParams(
+                    vision = RpaVisionLineParams(focusPoint = RpaRect(left = 2f, top = 0.5f)),
+                ),
+            ),
+        )
+        assertHasCode(focus, "param_focus_point_invalid")
+
+        val swipe = validate(
+            step(
+                "s1",
+                RpaAction.SWIPE,
+                params = RpaParams(direction = RpaDirection.UP),
+                lineParams = RpaLineParams(
+                    vision = RpaVisionLineParams(
+                        startPoint = RpaRect(left = -0.5f, top = 0.5f),
+                        endPoint = RpaRect(left = 1.5f, top = 0.2f),
+                    ),
+                ),
+            ),
+        )
+        assertHasCode(swipe, "param_start_point_invalid")
+        assertHasCode(swipe, "param_end_point_invalid")
+
+        val region = validate(
+            step(
+                "s1",
+                RpaAction.ASSERT_TEXT,
+                expect = RpaExpect(text = "hi"),
+                lineParams = RpaLineParams(
+                    vision = RpaVisionLineParams(
+                        ocrRegion = RpaRect(0.5f, 0.5f, 0.5f, 0.9f),
+                    ),
+                ),
+            ),
+        )
+        assertHasCode(region, "param_ocr_region_invalid")
+
+        // ROI 四值可越界（图11「103%」）：越界但有面积的区域不报错。
+        val validRegion = validate(
+            step(
+                "s1",
+                RpaAction.ASSERT_TEXT,
+                expect = RpaExpect(text = "hi"),
+                lineParams = RpaLineParams(
+                    vision = RpaVisionLineParams(ocrRegion = RpaRect(-0.1f, 0f, 1.1f, 1f)),
+                ),
+            ),
+        )
+        assertNoCode(validRegion, "param_ocr_region_invalid")
+    }
+
+    @Test
+    fun dualModeRequiresBothLineParamsSides() {
+        // 只写 a11y 侧 → 报缺 vision 侧（B10 双写约束）。
+        val missingVision = validate(
+            step(
+                "s1",
+                RpaAction.INPUT_TEXT,
+                params = RpaParams(text = "hi"),
+                lineParams = RpaLineParams(
+                    a11y = RpaA11yLineParams(inputSelector = RpaSelector(editableOnly = true)),
+                ),
+            ),
+            mode = RpaMode.DUAL,
+        )
+        assertHasCode(missingVision, "mode_dual_missing_vision_line_params")
+        assertNoCode(missingVision, "mode_dual_missing_a11y_line_params")
+
+        // 只写 vision 侧 → 报缺 a11y 侧。
+        val missingA11y = validate(
+            step(
+                "s1",
+                RpaAction.INPUT_TEXT,
+                params = RpaParams(text = "hi"),
+                lineParams = RpaLineParams(
+                    vision = RpaVisionLineParams(inputChannel = RpaInputChannel.SHELL_INPUT),
+                ),
+            ),
+            mode = RpaMode.DUAL,
+        )
+        assertHasCode(missingA11y, "mode_dual_missing_a11y_line_params")
+        assertNoCode(missingA11y, "mode_dual_missing_vision_line_params")
+
+        // 两侧都写 → 不报。
+        val both = validate(
+            step(
+                "s1",
+                RpaAction.LAUNCH_APP,
+                params = RpaParams(packageName = "com.example.app"),
+                lineParams = RpaLineParams(
+                    a11y = RpaA11yLineParams(readySelector = RpaSelector(text = "首页")),
+                    vision = RpaVisionLineParams(readyText = "首页"),
+                ),
+            ),
+            mode = RpaMode.DUAL,
+        )
+        assertNoCode(both, "mode_dual_missing_a11y_line_params")
+        assertNoCode(both, "mode_dual_missing_vision_line_params")
+    }
+
+    @Test
+    fun singleModeAllowsMissingOtherLineParams() {
+        // 单模式只写本线、另一线允许缺失（§〇.2 模式兼容）。
+        val a11yOnly = validate(
+            step(
+                "s1",
+                RpaAction.INPUT_TEXT,
+                params = RpaParams(text = "hi"),
+                lineParams = RpaLineParams(
+                    a11y = RpaA11yLineParams(inputSelector = RpaSelector(editableOnly = true)),
+                ),
+            ),
+            mode = RpaMode.A11Y,
+        )
+        assertNoCode(a11yOnly, "mode_dual_missing_vision_line_params")
+        assertNoCode(a11yOnly, "mode_dual_missing_a11y_line_params")
+
+        val visionOnly = validate(
+            step(
+                "s1",
+                RpaAction.INPUT_TEXT,
+                params = RpaParams(text = "hi"),
+                lineParams = RpaLineParams(
+                    vision = RpaVisionLineParams(inputChannel = RpaInputChannel.SHELL_INPUT),
+                ),
+            ),
+            mode = RpaMode.VISION,
+        )
+        assertNoCode(visionOnly, "mode_dual_missing_a11y_line_params")
+        assertNoCode(visionOnly, "mode_dual_missing_vision_line_params")
+    }
+
+    @Test
+    fun defaultLineParamsPassWithoutDualWarnings() {
+        // 旧脚本（lineParams 全默认）零回归：任何模式都不报分线缺侧。
+        listOf(RpaMode.A11Y, RpaMode.VISION, RpaMode.DUAL).forEach { mode ->
+            val issues = validate(
+                step(
+                    "s1",
+                    RpaAction.INPUT_TEXT,
+                    params = RpaParams(text = "hi"),
+                ),
+                mode = mode,
+            )
+            assertNoCode(issues, "mode_dual_missing_a11y_line_params")
+            assertNoCode(issues, "mode_dual_missing_vision_line_params")
+        }
+    }
+
+    // ------------------------------ 就绪预检（B1/B5） ------------------------------
+
+    @Test
+    fun readinessReportsAppMissingAndScreenLocked() {
+        val script = RpaScript(
+            id = "s",
+            name = "就绪脚本",
+            mode = RpaMode.A11Y,
+            appPackage = "com.example.app",
+            steps = listOf(step("s1", RpaAction.COMMENT)),
+        )
+        val caps = RpaCapabilities(a11yReady = true)
+
+        val appMissing = RpaReadiness.check(script, caps, appInstalled = { false })
+        assertHasCode(appMissing, "app_missing")
+        assertTrue(RpaReadiness.hasErrors(appMissing))
+
+        val locked = RpaReadiness.check(script, caps, screenLocked = { true })
+        assertHasCode(locked, "screen_locked")
+        assertTrue(RpaReadiness.hasErrors(locked))
+
+        // 默认探针（未接入）不误报：旧调用方零回归。
+        val ok = RpaReadiness.check(script, caps)
+        assertNoCode(ok, "app_missing")
+        assertNoCode(ok, "screen_locked")
+        assertFalse(RpaReadiness.hasErrors(ok))
+    }
+
     // ------------------------------ 夹具 ------------------------------
 
     private fun validate(
@@ -213,12 +445,16 @@ class RpaValidatorTest {
         params: RpaParams = RpaParams(),
         target: RpaTarget? = null,
         runCondition: RpaStepCondition = RpaStepCondition.None,
+        expect: RpaExpect? = null,
+        lineParams: RpaLineParams = RpaLineParams(),
     ): RpaStep = RpaStep(
         id = id,
         action = action,
         params = params,
         target = target,
         runCondition = runCondition,
+        expect = expect,
+        lineParams = lineParams,
     )
 
     private fun assertHasCode(issues: List<RpaIssue>, code: String) {

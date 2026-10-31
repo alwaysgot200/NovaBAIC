@@ -165,7 +165,8 @@ internal fun RpaLibraryScreen(
 
     /**
      * 新建前置门（用户定案）：a11y / 无 a11y 至少一条线路就绪即可新建；
-     * 两条都缺才弹就绪门给直达修复入口。新建后的可选模式按就绪情况过滤。
+     * 两条都缺才弹就绪门给直达修复入口。弹框内三枚模式芯片恒显示，未就绪的
+     * 模式置灰 + 简洁原因 + 修复入口（规格 §4.1）。
      */
     fun requestCreate() {
         if (anyReady) {
@@ -362,6 +363,8 @@ internal fun RpaLibraryScreen(
                 creating = false
                 onCreate(name, mode, pkg)
             },
+            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+            onOpenShizuku = onOpenShizuku,
         )
     }
 
@@ -1184,8 +1187,9 @@ internal fun ImportConfirmDialog(
 }
 
 /**
- * 新建脚本弹框（用户定案 2026-10-30）：模式选项按就绪情况过滤——哪条线路就绪
- * 就给哪条（DUAL 需两条都就绪），未就绪的模式不出现，免得建完无法运行。
+ * 新建脚本弹框（规格 §4.1）：三枚模式芯片恒显示，前置不具备的模式置灰不可选 +
+ * 一行简洁原因 + 直达修复按钮（去开启无障碍 / 打开 Shizuku）；就绪变化经
+ * 能力刷新自动解灰，「确定」只放行已就绪的模式。
  */
 @Composable
 private fun CreateScriptDialog(
@@ -1193,19 +1197,33 @@ private fun CreateScriptDialog(
     capabilities: RpaCapabilities,
     onDismiss: () -> Unit,
     onConfirm: (name: String, mode: RpaMode, appPackage: String) -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
+    onOpenShizuku: () -> Unit,
 ) {
     val a11yReady = capabilities.a11yModeReady()
     val visionReady = capabilities.visionModeReady()
-    val selectableModes = remember(a11yReady, visionReady) {
-        buildList {
-            if (a11yReady) add(RpaMode.A11Y)
-            if (visionReady) add(RpaMode.VISION)
-            if (a11yReady && visionReady) add(RpaMode.DUAL)
+    val a11yReason = stringResource(R.string.float_rpa_mode_disabled_a11y)
+    val visionReason = stringResource(R.string.float_rpa_mode_disabled_vision)
+    val dualReason = stringResource(R.string.float_rpa_mode_disabled_dual)
+    // 置灰集：A11Y 看无障碍、VISION 看 Shizuku、DUAL 需两条线路都就绪。
+    val disabledModes = remember(a11yReady, visionReady, a11yReason, visionReason, dualReason) {
+        buildMap {
+            if (!a11yReady) put(RpaMode.A11Y, a11yReason)
+            if (!visionReady) put(RpaMode.VISION, visionReason)
+            if (!a11yReady || !visionReady) put(RpaMode.DUAL, dualReason)
         }
     }
     var name by remember { mutableStateOf("") }
-    var mode by remember(selectableModes) {
-        mutableStateOf(selectableModes.firstOrNull { it == RpaMode.DUAL } ?: selectableModes.first())
+    var mode by remember {
+        mutableStateOf(
+            when {
+                a11yReady && visionReady -> RpaMode.DUAL
+                a11yReady -> RpaMode.A11Y
+                visionReady -> RpaMode.VISION
+                // 弹框只在至少一条线路就绪时打开（requestCreate 门），此处兜底不空崩溃。
+                else -> RpaMode.A11Y
+            },
+        )
     }
     var appPackage by remember { mutableStateOf(defaultPackage) }
 
@@ -1221,9 +1239,27 @@ private fun CreateScriptDialog(
                 )
                 RpaModeSelector(
                     mode = mode,
-                    modes = selectableModes,
+                    modes = RpaMode.entries,
+                    disabledModes = disabledModes,
                     onMode = { mode = it },
                 )
+                // 修复入口（§4.1）：缺哪条线路就给哪条的直达按钮。
+                if (!a11yReady) {
+                    OutlinedButton(
+                        onClick = onOpenAccessibilitySettings,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.float_rpa_gate_go_a11y))
+                    }
+                }
+                if (!visionReady) {
+                    OutlinedButton(
+                        onClick = onOpenShizuku,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.float_rpa_open_shizuku))
+                    }
+                }
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -1242,7 +1278,7 @@ private fun CreateScriptDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = name.isNotBlank(),
+                enabled = name.isNotBlank() && mode !in disabledModes,
                 onClick = { onConfirm(name.trim(), mode, appPackage.trim()) },
             ) {
                 Text(stringResource(R.string.float_rpa_new_confirm))

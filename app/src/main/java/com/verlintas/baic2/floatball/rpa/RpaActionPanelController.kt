@@ -238,10 +238,14 @@ internal class RpaActionPanelController(
         applyEditLayout()
     }
 
-    /** 吸附态跟随：编辑窗 x 对齐列表窗、y 接壤列表窗正下方（§7.5）。 */
+    /**
+     * 吸附态跟随：编辑窗 x 对齐列表窗、y 接壤列表窗正下方（§7.5）。
+     * 两窗内容各有 8dp 阴影留白，定位时上提 2×留白让卡片边缘直接贴合、无缝隙
+     * （用户定案 2026-10-31：不要 gap）。
+     */
     private fun placeEditBelowList() {
         editX = windowX
-        editY = windowY + listMeasuredHeightPx()
+        editY = windowY + listMeasuredHeightPx() - shadowPadPx * 2
         applyEditLayout()
     }
 

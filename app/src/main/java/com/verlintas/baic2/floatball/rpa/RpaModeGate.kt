@@ -51,8 +51,11 @@ import com.verlintas.rpa.model.RpaScript
  *
  * - **A11Y 硬前置**：选「无障碍」模式且无障碍服务未开启 → 「进入编辑」禁用，
  *   给出「去开启无障碍」直达系统设置（返回后宿主 `ON_RESUME` 自动复检徽标）。
- * - **双模 / 视觉缺项仅警告**：Shizuku / 录屏 / OCR 未就绪只提示「仅影响运行，
- *   不影响编辑」，不阻断进入编辑（阻运行归运行就绪门，与本门分工）。
+ * - **双模 / 视觉缺项仅警告**：Shizuku 未就绪只提示「仅影响运行，不影响编辑」，
+ *   不阻断进入编辑（阻运行归运行就绪门，与本门分工）。
+ * - **就绪状态不向用户暴露技术细节（用户定案 2026-10-31）**：只显示无障碍 /
+ *   Shizuku 两个徽标；录屏 / OCR 不展示——录屏抽帧由 Shizuku 在运行时自动拉起
+ *   （appops 静默授权），就绪口径已并入 Shizuku，无需单独呈现条件。
  */
 @Composable
 internal fun RpaModeGateDialog(
@@ -93,11 +96,6 @@ internal fun RpaModeGateDialog(
                 ) {
                     RpaStatusBadge(stringResource(R.string.float_rpa_cap_a11y), capabilities.a11yReady)
                     RpaStatusBadge(stringResource(R.string.float_rpa_cap_shizuku), capabilities.shizukuReady)
-                    RpaStatusBadge(
-                        stringResource(R.string.float_rpa_cap_projection),
-                        capabilities.projectionReady,
-                    )
-                    RpaStatusBadge(stringResource(R.string.float_rpa_cap_ocr), capabilities.ocrReady)
                 }
                 // a11y 报因双态（§7.4）：未开启 →「去开启」；已启用未连接 →「重试连接」
                 // 自愈重绑 + 「去开启无障碍」手动兜底。A11Y 模式阻编辑，双模仅警告。

@@ -184,6 +184,9 @@ private val StepVisualHeight = 36.dp
 private val StepHitHeight = 48.dp
 private val StepGap = 4.dp
 
+/** 「+ 添加动作」行与底栏按钮的紧凑高（用户定案 2026-10-31：不许大而贴边）。 */
+private val CompactButtonHeight = 40.dp
+
 /** 步骤列表固定高（§7.5）：3 × (48+4)dp = 156dp，更多步骤内部滚动。 */
 private val StepListHeight = (StepHitHeight + StepGap) * 3
 
@@ -356,7 +359,7 @@ internal data class StepRowState(
 
 @Composable
 private fun StepArea(state: RpaActionPanelState, actions: RpaActionPanelActions, modifier: Modifier = Modifier) {
-    Column(modifier.padding(horizontal = 8.dp)) {
+    Column(modifier.padding(horizontal = 12.dp)) {
         // 列表固定 3 行高（§7.5）：更多步骤内部滚动，窗口高保持内容自适应。
         Box(Modifier.fillMaxWidth().height(StepListHeight)) {
             if (state.steps.isEmpty()) {
@@ -534,7 +537,7 @@ private fun AddStepRow(actions: RpaActionPanelActions) {
     Box(
         Modifier
             .fillMaxWidth()
-            .height(StepHitHeight)
+            .height(CompactButtonHeight)
             .drawBehind {
                 drawRoundRect(
                     color = InkBoard.Outline,
@@ -569,14 +572,14 @@ private fun PanelBottomBar(state: RpaActionPanelState, actions: RpaActionPanelAc
         Modifier
             .fillMaxWidth()
             .height(56.dp)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // ▶ 运行 / ■ 停止：Baic2 主色 filled 主键。
         Surface(
             modifier = Modifier
                 .weight(1f)
-                .height(48.dp)
+                .height(CompactButtonHeight)
                 .clickable { if (running) actions.onStop() else actions.onRun() },
             shape = RoundedCornerShape(12.dp),
             color = MaterialTheme.colorScheme.primary,
@@ -600,7 +603,7 @@ private fun PanelBottomBar(state: RpaActionPanelState, actions: RpaActionPanelAc
         Column(
             Modifier
                 .weight(1f)
-                .height(48.dp)
+                .height(CompactButtonHeight)
                 .clickable(enabled = false, onClick = {}),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,

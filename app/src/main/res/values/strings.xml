@@ -134,7 +134,7 @@
     <string name="float_shizuku_action_regrant">重新执行</string>
     <string name="float_shizuku_go_settings">去设置</string>
     <string name="float_shizuku_grant_ok">授权成功：投影授权框已静默。</string>
-    <string name="float_shizuku_error_title">执行失败——若提示权限不足，请先检查前置第 1 条（USB 调试（安全设置））。</string>
+    <string name="float_shizuku_error_title">执行失败——若提示权限不足，请先检查前置设置：开启「无线调试」并成功启动 Shizuku。</string>
     <string name="float_shizuku_install_title">第一步 · 安装 Shizuku</string>
     <string name="float_shizuku_install_hint">安装包已内置在本应用中，点击上方按钮即可安装；系统会弹出安装确认，需手动点「安装」。</string>
     <string name="float_shizuku_install_installed">已安装版本 %1$s</string>
@@ -146,7 +146,6 @@
     <string name="float_shizuku_install_failed">安装程序未能启动，请重试或稍后重启应用。</string>
     <string name="float_shizuku_install_corrupt">内置安装包校验失败，请重新安装本应用。</string>
     <string name="float_shizuku_prereq_title">前置设置（一次性，决定成败）</string>
-    <string name="float_shizuku_prereq_dev">开发者选项里打开「USB 调试（安全设置）」（部分机型如小米 / 红米需要它）——不开它，自动点击等命令会权限不足。</string>
     <string name="float_shizuku_prereq_wifi_adb">开发者选项里打开「无线调试」。先打开开发者选项：进入「设置 → 关于手机（关于本机）」，连续多次单击「Android 版本号」（约 7 次），就会出现开发者选项。没有电脑时，Shizuku「通过无线调试启动」是唯一的启动口，无线调试不开就起不来。注意无线调试跑在 WLAN 上：先连稳定的 Wi-Fi 再开，Wi-Fi 一断系统会自动把它关回去；启动成功后 Shizuku 常驻到手机重启，之后关掉无线调试不影响使用。</string>
     <string name="float_shizuku_wifi_state_on">无线调试当前：已开启——请趁开着完成配对与启动。</string>
     <string name="float_shizuku_wifi_state_off">无线调试当前：未开启。打开后若又自动关闭，多因 Wi-Fi 未连接 / 断开或省电断网——先连稳定 Wi-Fi 再开。</string>
@@ -881,10 +880,9 @@
     <string name="float_companion_disabled">自动档总闸未开启，请先在设置中确认风险并开启</string>
     <!-- R1 三模执行通道与就绪门（§17.2/§20.1） -->
     <string name="float_settings_executor_section">执行通道</string>
-    <string name="float_settings_executor_hint">自动：无障碍 → 手势粘贴 → Shizuku 依次降级，均不可用转起草档。</string>
+    <string name="float_settings_executor_hint">自动：无障碍 → Shizuku → 手势粘贴 依次降级，均不可用转起草档。</string>
     <string name="float_settings_executor_auto">自动降级</string>
     <string name="float_settings_executor_a11y">仅无障碍</string>
-    <string name="float_settings_executor_gesture">手势粘贴</string>
     <string name="float_settings_executor_shizuku">Shizuku 免无障碍</string>
     <string name="float_settings_readiness_checking">正在逐项检测就绪状态…</string>
     <!-- 2026-10-20 通报方案 §4：H 接管/G 达成铃声通报。 -->
@@ -1239,12 +1237,9 @@
     <string name="float_rpa_tool_design_desc">脚本库、拖拽编排、运行</string>
     <string name="float_rpa_tool_quickfind">以图找图</string>
     <string name="float_rpa_tool_quickfind_desc">选图后在当前屏幕定位并给出坐标</string>
-    <string name="float_rpa_mode_a11y">开启无障碍（a11y）</string>
-    <string name="float_rpa_mode_a11y_hint">仅使用无障碍节点定位与手势执行；Shizuku 与视觉定位不可用。</string>
-    <string name="float_rpa_mode_vision">无 a11y（视觉）</string>
-    <string name="float_rpa_mode_vision_hint">仅使用 Shizuku 注入 + 截屏抽帧 + OCR / 模板找图；无障碍定位不可用。</string>
+    <string name="float_rpa_mode_a11y">a11y（无障碍）</string>
+    <string name="float_rpa_mode_vision">无 a11y（shizuku）</string>
     <string name="float_rpa_mode_dual">双模式</string>
-    <string name="float_rpa_mode_dual_hint">每个需要定位的动作必须同时配置 a11y 与视觉两套方案；运行时优先 a11y，失败显式回退视觉。</string>
     <string name="float_rpa_line_a11y">a11y 线路</string>
     <string name="float_rpa_line_vision">视觉线路</string>
     <string name="float_rpa_action_launch_app">启动 App</string>
@@ -1333,12 +1328,10 @@
     <string name="float_rpa_issue_generic">校验失败（%1$s）</string>
 
     <!-- RPA 自动化：脚本库 -->
-    <string name="float_rpa_library_hint">先确定执行模式再编排动作；运行时按从上到下顺序执行。</string>
+    <string name="float_rpa_library_hint">运行时按从上到下顺序执行。</string>
     <string name="float_rpa_capabilities">运行能力</string>
     <string name="float_rpa_cap_a11y">无障碍</string>
     <string name="float_rpa_cap_shizuku">Shizuku</string>
-    <string name="float_rpa_cap_vision_ready">视觉线路就绪：Shizuku 注入 + 抽帧 + OCR 可用</string>
-    <string name="float_rpa_cap_vision_missing">视觉线路未就绪：请授权 Shizuku（录屏只提供抽帧，不能注入点击）</string>
     <string name="float_rpa_cap_ocr">OCR</string>
     <string name="float_rpa_cap_projection">录屏</string>
     <string name="float_rpa_cap_refresh">刷新</string>
@@ -1883,6 +1876,31 @@
     <string name="float_rpa_stepdlg_error_var_row">变量名不能为空，且只能含字母数字 _ . -</string>
     <string name="float_rpa_stepdlg_error_goto_missing">跳转到需要选择目标步骤</string>
     <string name="float_rpa_stepdlg_error_custom_missing">请选择自定义动作</string>
+
+    <!-- 双模式参数设计（规格 §四/§五）：新建模式置灰 + 动作编辑分线分组与 D 类通道字段 -->
+    <string name="float_rpa_mode_disabled_a11y">无障碍未开启</string>
+    <string name="float_rpa_mode_disabled_vision">Shizuku 未就绪</string>
+    <string name="float_rpa_mode_disabled_dual">需两条线路都就绪</string>
+    <string name="float_rpa_mode_disabled_reason">%1$s：%2$s</string>
+    <string name="float_rpa_lineparam_unavailable">暂不可用</string>
+    <string name="float_rpa_lineparam_ready">就绪判定</string>
+    <string name="float_rpa_lineparam_input_selector">输入框</string>
+    <string name="float_rpa_lineparam_append_mode">追加写入</string>
+    <string name="float_rpa_lineparam_input_channel">输入通道</string>
+    <string name="float_rpa_input_channel_clipboard">剪贴板粘贴</string>
+    <string name="float_rpa_input_channel_shell">模拟输入</string>
+    <string name="float_rpa_lineparam_clear_before">输入前清空</string>
+    <string name="float_rpa_lineparam_focus_point">先点位置</string>
+    <string name="float_rpa_lineparam_anchor_selector">锚定节点</string>
+    <string name="float_rpa_lineparam_start_point">起点</string>
+    <string name="float_rpa_lineparam_end_point">终点</string>
+    <string name="float_rpa_lineparam_read_scope">读屏范围</string>
+    <string name="float_rpa_lineparam_scope_all">空 = 全屏</string>
+    <string name="float_rpa_stepdlg_tap_node">目标节点</string>
+    <string name="float_rpa_stepdlg_tap_text_a11y">目标文字</string>
+    <string name="float_rpa_stepdlg_tap_text_vision">识别文字</string>
+    <string name="float_rpa_lineparam_region_tl">区域左上</string>
+    <string name="float_rpa_lineparam_region_br">区域右下</string>
 
     <!-- p2-4 运行条件子弹框（§7.6） -->
     <string name="float_rpa_cond_title">运行条件</string>

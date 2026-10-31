@@ -1082,13 +1082,9 @@ private fun AutoExecutorSection(
             onClick = { prefs.setAutoExecutorChannel(InjectorSelector.CONFIG_A11Y) },
             label = { Text(stringResource(R.string.float_settings_executor_a11y)) },
         )
-        // 手势粘贴：免 Shizuku、免 a11y 节点树（微信这类节点黑洞 IM 的唯一可用
-        // 本地通道，2026-10-27 真机验证）。无就绪门——只要有 a11y 手势权限即可用。
-        FilterChip(
-            selected = settings.autoExecutorChannel == InjectorSelector.CONFIG_GESTURE,
-            onClick = { prefs.setAutoExecutorChannel(InjectorSelector.CONFIG_GESTURE) },
-            label = { Text(stringResource(R.string.float_settings_executor_gesture)) },
-        )
+        // 手势粘贴 G 不进通道选项（用户定案 2026-10-31）：它是「发文字到输入框」
+        // 组件的注入实现之一，归无 a11y 纯视觉操作组件体系，由自动降级链末档自动
+        // 选用，不作为用户设置项（CONFIG_GESTURE 仅存自动链与演示复测锁定用途）。
         FilterChip(
             selected = settings.autoExecutorChannel == InjectorSelector.CONFIG_SHIZUKU,
             onClick = { runCheck() },
@@ -1176,7 +1172,7 @@ private fun AutoExecutorSection(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (fixAction != null) scheme.primary else scheme.onSurfaceVariant,
                                 modifier = (if (fixAction != null) {
-                                    Modifier.clickable { fixAction?.invoke() }
+                                    Modifier.clickable { fixAction() }
                                 } else {
                                     Modifier
                                 }).padding(6.dp),

@@ -19,6 +19,7 @@
 
 package com.verlintas.rpa.store
 
+import com.verlintas.rpa.model.RpaA11yLineParams
 import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaCompareOp
@@ -29,6 +30,8 @@ import com.verlintas.rpa.model.RpaExpect
 import com.verlintas.rpa.model.RpaFailurePolicy
 import com.verlintas.rpa.model.RpaFlowKind
 import com.verlintas.rpa.model.RpaGlobalSetting
+import com.verlintas.rpa.model.RpaInputChannel
+import com.verlintas.rpa.model.RpaLineParams
 import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaParams
@@ -41,6 +44,7 @@ import com.verlintas.rpa.model.RpaTarget
 import com.verlintas.rpa.model.RpaVarAssign
 import com.verlintas.rpa.model.RpaVarSource
 import com.verlintas.rpa.model.RpaVarType
+import com.verlintas.rpa.model.RpaVisionLineParams
 import com.verlintas.rpa.model.RpaVisionKind
 import com.verlintas.rpa.model.RpaVisionLocator
 import com.verlintas.rpa.model.RpaVisionSpec
@@ -99,6 +103,33 @@ class RpaCodecTest {
         assertEquals(RpaGlobalSetting(), script.global)
         assertTrue(script.customActions.isEmpty())
         assertEquals(RpaStepCondition.None, script.steps[0].runCondition)
+    }
+
+    @Test
+    fun oldJsonWithoutLineParamsGetsDefaults() {
+        // 旧脚本（无 lineParams）解码取全默认值：零迁移、零语义漂移。
+        val script = RpaJsonCodec.decode(V1_JSON.toByteArray(Charsets.UTF_8))
+        script.steps.forEach { step ->
+            assertEquals("step=${step.id}", RpaLineParams(), step.lineParams)
+        }
+    }
+
+    @Test
+    fun jsonRejectsNewerSchemaVersion() {
+        // §7.6：高版本文件导入低版本 App → 报「文件版本较新」拒绝导入。
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            RpaJsonCodec.decode(V3_JSON.toByteArray(Charsets.UTF_8))
+        }
+        assertEquals("schema_version_too_new: 3", failure.message)
+    }
+
+    @Test
+    fun xmlRejectsNewerSchemaVersion() {
+        val future = richScript().copy(schemaVersion = 3)
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            RpaXmlCodec.decode(RpaXmlCodec.encode(future))
+        }
+        assertEquals("schema_version_too_new: 3", failure.message)
     }
 
     // ------------------------------ `.rpa` 包 ------------------------------
@@ -220,6 +251,17 @@ class RpaCodecTest {
                     op = RpaCompareOp.GE,
                     rhs = "5",
                 ),
+                // D 类分线通道参数全字段（readySelector/readyText）。
+                lineParams = RpaLineParams(
+                    a11y = RpaA11yLineParams(
+                        readySelector = RpaSelector(
+                            text = "首页",
+                            textMatch = RpaMatchMode.EXACT,
+                            clickableOnly = true,
+                        ),
+                    ),
+                    vision = RpaVisionLineParams(readyText = "首页"),
+                ),
             ),
             RpaStep(
                 id = "s2",
@@ -239,6 +281,11 @@ class RpaCodecTest {
                             value = "3",
                         ),
                     ),
+                ),
+                // D 类分线通道参数（readScope/ocrRegion）。
+                lineParams = RpaLineParams(
+                    a11y = RpaA11yLineParams(readScope = RpaSelector(viewId = "status_bar")),
+                    vision = RpaVisionLineParams(ocrRegion = RpaRect(0f, 0f, 1f, 0.2f)),
                 ),
             ),
             RpaStep(
@@ -287,6 +334,18 @@ class RpaCodecTest {
                     durationMs = 300,
                     holdMs = 100,
                 ),
+                // D 类分线通道参数（anchorSelector/startPoint/endPoint +
+                // inputChannel/clearBeforeInput/focusPoint 全字段覆盖）。
+                lineParams = RpaLineParams(
+                    a11y = RpaA11yLineParams(anchorSelector = RpaSelector(text = "列表")),
+                    vision = RpaVisionLineParams(
+                        inputChannel = RpaInputChannel.SHELL_INPUT,
+                        clearBeforeInput = false,
+                        focusPoint = RpaRect(0.5f, 0.9f),
+                        startPoint = RpaRect(0.5f, 0.7f),
+                        endPoint = RpaRect(0.5f, 0.2f),
+                    ),
+                ),
             ),
         ),
         global = RpaGlobalSetting(
@@ -310,6 +369,13 @@ class RpaCodecTest {
                             text = "聊天",
                             match = RpaMatchMode.CONTAINS,
                         ),
+                        // D 类分线通道参数（inputSelector）。
+                        lineParams = RpaLineParams(
+                            a11y = RpaA11yLineParams(
+                                inputSelector = RpaSelector(editableOnly = true),
+                                appendMode = true,
+                            ),
+                        ),
                     ),
                 ),
             ),
@@ -330,6 +396,17 @@ class RpaCodecTest {
                 { "id": "s2", "action": "COMMENT", "unknownField": "ignored" }
               ],
               "legacyTopLevel": { "anything": true }
+            }
+        """.trimIndent()
+
+        /** 高版本文件（schemaVersion=3）：导入必须拒绝（§7.6）。 */
+        val V3_JSON = """
+            {
+              "schemaVersion": 3,
+              "id": "future-1",
+              "name": "未来版本脚本",
+              "mode": "A11Y",
+              "steps": [ { "id": "s1", "action": "COMMENT" } ]
             }
         """.trimIndent()
     }

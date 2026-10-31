@@ -96,15 +96,6 @@ internal fun rpaModeLabel(mode: RpaMode): String = stringResource(
 )
 
 @Composable
-internal fun rpaModeHint(mode: RpaMode): String = stringResource(
-    when (mode) {
-        RpaMode.A11Y -> R.string.float_rpa_mode_a11y_hint
-        RpaMode.VISION -> R.string.float_rpa_mode_vision_hint
-        RpaMode.DUAL -> R.string.float_rpa_mode_dual_hint
-    },
-)
-
-@Composable
 internal fun rpaLineLabel(line: RpaLine): String = stringResource(
     when (line) {
         RpaLine.A11Y -> R.string.float_rpa_line_a11y
@@ -357,12 +348,17 @@ internal fun RpaA11yNotice(
     }
 }
 
+/**
+ * 模式选择芯片组（规格 §4.1）：模式芯片恒显示；前置不具备的模式（[disabledModes]）
+ * 置灰不可选，芯片下方逐模式给一行简洁原因（不进技术原理），修复入口由调用方提供。
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun RpaModeSelector(
     mode: RpaMode,
     enabled: Boolean = true,
     modes: List<RpaMode> = RpaMode.entries,
+    disabledModes: Map<RpaMode, String> = emptyMap(),
     onMode: (RpaMode) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -372,16 +368,24 @@ internal fun RpaModeSelector(
                 FilterChip(
                     selected = mode == candidate,
                     onClick = { onMode(candidate) },
-                    enabled = enabled,
+                    enabled = enabled && candidate !in disabledModes,
                     label = { Text(rpaModeLabel(candidate)) },
                 )
             }
         }
-        Text(
-            text = rpaModeHint(mode),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // 置灰原因行（§4.1）：格式「模式：原因」，只报简洁口径。
+        modes.forEach { candidate ->
+            val reason = disabledModes[candidate] ?: return@forEach
+            Text(
+                text = stringResource(
+                    R.string.float_rpa_mode_disabled_reason,
+                    rpaModeLabel(candidate),
+                    reason,
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

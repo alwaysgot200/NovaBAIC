@@ -19,7 +19,10 @@
 
 package com.verlintas.baic2.floatball.rpa
 
+import android.content.Context
+import android.content.Intent
 import android.graphics.BitmapFactory
+import android.provider.Settings
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -80,19 +83,26 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.verlintas.baic2.R
 import com.verlintas.baic2.designsystem.Baic2Theme
+import com.verlintas.baic2.floatball.shizuku.ShizukuGrantActivity
 import com.verlintas.rpa.model.RpaAction
+import com.verlintas.rpa.model.RpaA11yLineParams
 import com.verlintas.rpa.model.RpaA11ySpec
+import com.verlintas.rpa.model.RpaCapabilities
 import com.verlintas.rpa.model.RpaCatalog
 import com.verlintas.rpa.model.RpaCompareOp
 import com.verlintas.rpa.model.RpaFlowKind
 import com.verlintas.rpa.model.RpaIds
+import com.verlintas.rpa.model.RpaInputChannel
 import com.verlintas.rpa.model.RpaLimits
+import com.verlintas.rpa.model.RpaLine
+import com.verlintas.rpa.model.RpaLineParams
 import com.verlintas.rpa.model.RpaMatchMode
-import com.verlintas.rpa.model.RpaMode
+import com.verlintas.rpa.model.RpaModePolicy
 import com.verlintas.rpa.model.RpaParams
 import com.verlintas.rpa.model.RpaPickKind
 import com.verlintas.rpa.model.RpaPickPurpose
 import com.verlintas.rpa.model.RpaPickRequest
+import com.verlintas.rpa.model.RpaRect
 import com.verlintas.rpa.model.RpaScript
 import com.verlintas.rpa.model.RpaSelector
 import com.verlintas.rpa.model.RpaStep
@@ -102,9 +112,14 @@ import com.verlintas.rpa.model.RpaVarAssign
 import com.verlintas.rpa.model.RpaVarSource
 import com.verlintas.rpa.model.RpaVarType
 import com.verlintas.rpa.model.RpaVisionKind
+import com.verlintas.rpa.model.RpaVisionLineParams
 import com.verlintas.rpa.model.RpaVisionLocator
 import com.verlintas.rpa.model.RpaVisionSpec
 import com.verlintas.rpa.store.RpaScriptStore
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -117,6 +132,8 @@ import kotlinx.coroutines.launch
  * - **载体 = 动作编辑浮窗**（§7.5 双浮窗下位，第二 overlay 窗口）：窗口 chrome
  *   （标题栏拖动 / ✕ 取消编辑）由 [RpaActionEditWindow] 提供，这里只画内容；
  *   字段区内部滚动（固定高窗口内 [Column] + verticalScroll），底部按钮行固定；
+ * - 字段区按四类参数三段式（规格 §一）：公共段（A 尾部 + B 载荷）→ a11y（无障碍）组
+ *   → 无 a11y（shizuku）组，C/D 类分线参数各归各线，R1/R2 置灰（§4.3）；
  * - 动作类型下拉是 UI 概念清单（裁定⑦）：点击三兄弟 = `TAP` + 不同目标种类，
  *   模型枚举零增量；切换类型用 [RpaCatalog.defaultStep] 重建字段，保留公共尾部；
  * - 坐标 / 图片位置的「...」次级钮：屏幕取点走 [RpaPickRequest] 回调（宿主交给
@@ -142,14 +159,15 @@ internal fun RpaStepDialog(
 
     Baic2Theme(darkTheme = true) {
         Box(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize()) {
+            // 窗口内容统一留白（用户定案 2026-10-31）：字段与底部按钮不许贴边。
+            Column(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp)) {
                 ActionHeader(
                     form = form,
                     onFormChange = { form = it },
                     step = step,
                 )
                 InkDivider()
-                // 字段区内部滚动（§7.6）：动态字段 + 公共尾部 + 校验报错。
+                // 字段区内部滚动（§7.6）：公共段 + a11y 组 + 无 a11y 组 + 校验报错。
                 Column(
                     Modifier
                         .weight(1f)
@@ -164,11 +182,6 @@ internal fun RpaStepDialog(
                         onArmPick = onArmPick,
                         onOpenVisionPanel = onOpenVisionPanel,
                         onOpenAppPicker = { showAppPicker = true },
-                    )
-                    InkDivider()
-                    TailFields(
-                        form = form,
-                        onFormChange = { form = it },
                         onOpenCondition = { showCondition = true },
                     )
                     ErrorList(errors)
@@ -236,6 +249,9 @@ private fun conceptOf(step: RpaStep): StepConcept = when (step.action) {
         when {
             primary?.kind == RpaVisionKind.TEMPLATE -> StepConcept.TAP_IMAGE
             primary?.kind == RpaVisionKind.OCR_TEXT -> StepConcept.TAP_TEXT
+            // 坐标补 a11y 选择器后（§4.2 两侧分写）不得被 a11y 文字翻转成「点击文字」：
+            // 只要视觉侧是比例坐标就保持「点击(坐标)」，视觉侧缺席才看 a11y 文字。
+            primary?.kind == RpaVisionKind.RATIO -> StepConcept.TAP_POINT
             step.target?.a11y?.selectors?.any { !it.text.isNullOrBlank() } == true -> StepConcept.TAP_TEXT
             else -> StepConcept.TAP_POINT
         }
@@ -308,7 +324,13 @@ private fun stepConceptDesc(concept: StepConcept, otherAction: RpaAction): Strin
 
 // ── 表单状态（字符串进 UI，确认时合成 RpaStep）────────────────────────
 
-/** 步骤编辑表单：文本字段保留原文，确认时经 [build] 合成整步（含 repeat / condition）。 */
+/**
+ * 步骤编辑表单：文本字段保留原文，确认时经 [build] 合成整步（含 repeat / condition）。
+ *
+ * 四类参数框架（规格 §一）分三段承载：公共段（A 尾部 + B 载荷）/ a11yPart（C 的
+ * a11y 组 + D 的 a11y 字段）/ visionPart（C 的 vision 组 + D 的 vision 字段）。
+ * 点击三兄弟两侧分写（§4.2）：a11y 首条选择器与视觉文字各归各线，不再一条文本混写。
+ */
 internal data class StepForm(
     val concept: StepConcept,
     val otherAction: RpaAction = RpaAction.TAP,
@@ -316,13 +338,16 @@ internal data class StepForm(
     val packageName: String = "",
     val restart: Boolean = false,
     val closeOnly: Boolean = false,
-    // 点击三兄弟
+    // 点击三兄弟（按下时间为公共载荷）
     val posX: String = "",
     val posY: String = "",
     val holdMs: String = "",
     val templateId: String = "",
-    val tapText: String = "",
-    val tapMatch: RpaMatchMode = RpaMatchMode.CONTAINS,
+    /** a11y 侧首条选择器；null = 未动 → [build] 时保留原首条。 */
+    val tapA11ySelector: RpaSelector? = null,
+    /** 无 a11y 侧识别文字（OCR），与 a11y 侧文字分线各写。 */
+    val tapVisionText: String = "",
+    val tapVisionMatch: RpaMatchMode = RpaMatchMode.CONTAINS,
     val matchIndex: String = "",
     // 设置变量
     val assignments: List<RpaVarAssign> = emptyList(),
@@ -334,13 +359,37 @@ internal data class StepForm(
     // 复合动作
     val customActionId: String = "",
     val customArgValues: Map<String, String> = emptyMap(),
+    // D 类分线通道参数（规格 §五 RpaStep.lineParams）：a11y 侧
+    val readySelector: RpaSelector? = null,
+    val inputSelector: RpaSelector? = null,
+    val appendMode: Boolean = false,
+    val anchorSelector: RpaSelector? = null,
+    val readScope: RpaSelector? = null,
+    // D 类分线通道参数：无 a11y 侧（点/区域存百分比文本，空 = 未设置）
+    val readyText: String = "",
+    val inputChannel: RpaInputChannel = RpaInputChannel.CLIPBOARD_PASTE,
+    val clearBeforeInput: Boolean = true,
+    val focusX: String = "",
+    val focusY: String = "",
+    val startX: String = "",
+    val startY: String = "",
+    val endX: String = "",
+    val endY: String = "",
+    val ocrLeft: String = "",
+    val ocrTop: String = "",
+    val ocrRight: String = "",
+    val ocrBottom: String = "",
     // 公共尾部
     val waitAfterSec: String = "0",
     val repeat: String = "",
     val condition: RpaStepCondition = RpaStepCondition.None,
 ) {
 
-    /** 合成整步：只替换本概念管辖的字段，其余（id / label / 超时等）沿用 [base]。 */
+    /**
+     * 合成整步：只替换本概念管辖的字段，其余（id / label / 超时等）沿用 [base]。
+     * build() 按 §一 四类分写：B 载荷 → params、C 定位 → target.a11y / target.vision
+     * 各归各线、D 通道 → lineParams（规格 §五）。
+     */
     fun build(base: RpaStep): RpaStep {
         var params = base.params
         var target = base.target
@@ -352,8 +401,10 @@ internal data class StepForm(
             )
 
             StepConcept.TAP_POINT -> {
+                // 两侧分写（§4.2）：a11y 只写节点选择器，vision 只写比例坐标，互不混写。
                 val visionBase = base.target?.vision ?: RpaVisionSpec()
                 target = (base.target ?: RpaTarget()).copy(
+                    a11y = mergedTapA11y(base.target?.a11y),
                     vision = visionBase.copy(
                         primary = (visionBase.primary).copy(
                             kind = RpaVisionKind.RATIO,
@@ -368,8 +419,10 @@ internal data class StepForm(
             }
 
             StepConcept.TAP_IMAGE -> {
+                // 两侧分写：a11y 节点选择器补写，vision 只写模板定位。
                 val visionBase = base.target?.vision ?: RpaVisionSpec()
                 target = (base.target ?: RpaTarget()).copy(
+                    a11y = mergedTapA11y(base.target?.a11y),
                     vision = visionBase.copy(
                         primary = (visionBase.primary).copy(
                             kind = RpaVisionKind.TEMPLATE,
@@ -382,23 +435,16 @@ internal data class StepForm(
             }
 
             StepConcept.TAP_TEXT -> {
-                // 文本目标：a11y 文本节点优先、OCR 文本兜底（§4.1 点击文字）。
-                val a11yBase = base.target?.a11y
-                val selectors = a11yBase?.selectors ?: emptyList()
-                val first = (selectors.firstOrNull() ?: RpaSelector()).copy(
-                    text = tapText.trim().ifBlank { null },
-                    textMatch = tapMatch,
-                )
+                // 两侧分写（§4.2）：a11y 首条选择器只写文字/匹配，vision 只写 OCR 识别
+                // 文字，不再一条文本混写两线。
                 val visionBase = base.target?.vision ?: RpaVisionSpec()
                 target = (base.target ?: RpaTarget()).copy(
-                    a11y = (a11yBase ?: RpaA11ySpec()).copy(
-                        selectors = listOf(first) + selectors.drop(1),
-                    ),
+                    a11y = mergedTapA11y(base.target?.a11y),
                     vision = visionBase.copy(
                         primary = (visionBase.primary).copy(
                             kind = RpaVisionKind.OCR_TEXT,
-                            ocrText = tapText.trim().ifBlank { null },
-                            ocrMatch = tapMatch,
+                            ocrText = tapVisionText.trim().ifBlank { null },
+                            ocrMatch = tapVisionMatch,
                             matchIndex = matchIndex.trim().toIntOrNull(),
                         ),
                     ),
@@ -429,6 +475,24 @@ internal data class StepForm(
             action = concept.modelAction(base.action),
             params = params,
             target = target,
+            lineParams = RpaLineParams(
+                a11y = RpaA11yLineParams(
+                    readySelector = readySelector?.takeIf { !it.isEmpty() },
+                    inputSelector = inputSelector?.takeIf { !it.isEmpty() },
+                    appendMode = appendMode,
+                    anchorSelector = anchorSelector?.takeIf { !it.isEmpty() },
+                    readScope = readScope?.takeIf { !it.isEmpty() },
+                ),
+                vision = RpaVisionLineParams(
+                    readyText = readyText.trim().ifBlank { null },
+                    inputChannel = inputChannel,
+                    clearBeforeInput = clearBeforeInput,
+                    focusPoint = pointFromPercents(focusX, focusY),
+                    startPoint = pointFromPercents(startX, startY),
+                    endPoint = pointFromPercents(endX, endY),
+                    ocrRegion = rectFromPercents(ocrLeft, ocrTop, ocrRight, ocrBottom),
+                ),
+            ),
             delayAfterMs = if (concept.hasWaitTail) {
                 secTextToMs(waitAfterSec)
             } else {
@@ -443,11 +507,27 @@ internal data class StepForm(
         )
     }
 
+    /**
+     * 点击三兄弟 a11y 侧分写：null = 未动 → 保留原首条；非 null → 替换首条
+     * （编辑成空选择器则删除首条），其余条原样保留。
+     */
+    private fun mergedTapA11y(base: RpaA11ySpec?): RpaA11ySpec? {
+        val edited = tapA11ySelector ?: return base
+        val selectors = base?.selectors ?: emptyList()
+        val normalized = edited.copy(text = edited.text?.trim()?.ifBlank { null })
+        val updated = if (normalized.isEmpty()) {
+            selectors.drop(1)
+        } else {
+            listOf(normalized) + selectors.drop(1)
+        }
+        return (base ?: RpaA11ySpec()).copy(selectors = updated)
+    }
+
     companion object {
 
         fun of(step: RpaStep): StepForm {
             val primary = step.target?.vision?.primary
-            val a11yText = step.target?.a11y?.selectors?.firstOrNull { !it.text.isNullOrBlank() }
+            val lineParams = step.lineParams
             return StepForm(
                 concept = conceptOf(step),
                 otherAction = step.action,
@@ -462,8 +542,9 @@ internal data class StepForm(
                 holdMs = step.params.holdMs?.toString() ?: "100",
                 templateId = primary?.takeIf { it.kind == RpaVisionKind.TEMPLATE }?.templateId
                     .orEmpty(),
-                tapText = primary?.ocrText?.takeIf { it.isNotBlank() } ?: a11yText?.text.orEmpty(),
-                tapMatch = primary?.ocrMatch ?: a11yText?.textMatch ?: RpaMatchMode.CONTAINS,
+                tapA11ySelector = step.target?.a11y?.selectors?.firstOrNull(),
+                tapVisionText = primary?.ocrText.orEmpty(),
+                tapVisionMatch = primary?.ocrMatch ?: RpaMatchMode.CONTAINS,
                 matchIndex = primary?.matchIndex?.toString().orEmpty(),
                 assignments = step.params.assignments,
                 flowKind = step.params.flowKind ?: RpaFlowKind.GOTO,
@@ -471,6 +552,24 @@ internal data class StepForm(
                 url = step.params.url.orEmpty(),
                 customActionId = step.params.customActionId.orEmpty(),
                 customArgValues = step.params.customArgValues,
+                readySelector = lineParams.a11y.readySelector,
+                inputSelector = lineParams.a11y.inputSelector,
+                appendMode = lineParams.a11y.appendMode,
+                anchorSelector = lineParams.a11y.anchorSelector,
+                readScope = lineParams.a11y.readScope,
+                readyText = lineParams.vision.readyText.orEmpty(),
+                inputChannel = lineParams.vision.inputChannel,
+                clearBeforeInput = lineParams.vision.clearBeforeInput,
+                focusX = lineParams.vision.focusPoint?.left?.let(::ratioToText).orEmpty(),
+                focusY = lineParams.vision.focusPoint?.top?.let(::ratioToText).orEmpty(),
+                startX = lineParams.vision.startPoint?.left?.let(::ratioToText).orEmpty(),
+                startY = lineParams.vision.startPoint?.top?.let(::ratioToText).orEmpty(),
+                endX = lineParams.vision.endPoint?.left?.let(::ratioToText).orEmpty(),
+                endY = lineParams.vision.endPoint?.top?.let(::ratioToText).orEmpty(),
+                ocrLeft = lineParams.vision.ocrRegion?.left?.let(::ratioToText).orEmpty(),
+                ocrTop = lineParams.vision.ocrRegion?.top?.let(::ratioToText).orEmpty(),
+                ocrRight = lineParams.vision.ocrRegion?.right?.let(::ratioToText).orEmpty(),
+                ocrBottom = lineParams.vision.ocrRegion?.bottom?.let(::ratioToText).orEmpty(),
                 waitAfterSec = msToSecText(step.delayAfterMs),
                 repeat = if (step.repeat > 1) step.repeat.toString() else "",
                 condition = step.runCondition,
@@ -502,6 +601,28 @@ private fun secTextToMs(text: String): Long =
     ((text.trim().toDoubleOrNull() ?: 0.0) * 1000.0).roundToLong()
         .coerceIn(0L, RpaLimits.MAX_DELAY_MS)
 
+/**
+ * 百分比坐标对 → 点（退化矩形：right=left、bottom=top，中心解释与坐标解释一致，
+ * 与 T1 模型对齐口径）。两轴都空 = 未设置。
+ */
+private fun pointFromPercents(x: String, y: String): RpaRect? {
+    if (x.isBlank() && y.isBlank()) return null
+    val ratioX = textToRatio(x)
+    val ratioY = textToRatio(y)
+    return RpaRect(left = ratioX, top = ratioY, right = ratioX, bottom = ratioY)
+}
+
+/** 左上/右下百分比对 → 归一化区域（可越界，与 RpaRect 同口径）；全空 = 未设置。 */
+private fun rectFromPercents(left: String, top: String, right: String, bottom: String): RpaRect? {
+    if (left.isBlank() && top.isBlank() && right.isBlank() && bottom.isBlank()) return null
+    return RpaRect(
+        left = textToRatio(left),
+        top = textToRatio(top),
+        right = textToRatio(right),
+        bottom = textToRatio(bottom),
+    )
+}
+
 // ── 行内校验（不合法禁用「确定」）──────────────────────────────────────
 
 @Composable
@@ -528,13 +649,20 @@ private fun formErrors(form: StepForm, script: RpaScript): List<String> {
             }
 
         StepConcept.TAP_POINT -> {
-            checkPercent(form.posX)
-            checkPercent(form.posY)
+            // R1 防死锁：视觉线不在脚本模式内时坐标段置灰无法改，跳过坐标校验。
+            if (RpaModePolicy.lineEnabled(script.mode, RpaLine.VISION)) {
+                checkPercent(form.posX)
+                checkPercent(form.posY)
+            }
             checkNumber(form.holdMs)
         }
 
         StepConcept.TAP_TEXT -> {
-            if (form.tapText.isBlank()) errors += stringResource(R.string.float_rpa_issue_text)
+            // 两侧分写后两侧（各自可编辑侧）都空才报错，单侧有目标即放行。
+            val a11yConfigured = form.tapA11ySelector?.isEmpty() == false
+            if (!a11yConfigured && form.tapVisionText.isBlank()) {
+                errors += stringResource(R.string.float_rpa_issue_text)
+            }
             checkNumber(form.holdMs)
             checkNumber(form.matchIndex)
         }
@@ -573,6 +701,35 @@ private fun formErrors(form: StepForm, script: RpaScript): List<String> {
 
         StepConcept.TAP_IMAGE -> checkNumber(form.holdMs)
         StepConcept.OTHER -> Unit
+    }
+    // D 类通道可选百分比校验（规格 §一矩阵按动作取用）：非空才查，区间沿用 RpaLimits；
+    // R1 同口径防死锁——视觉线不在模式内时整段置灰，不拦「确定」。
+    fun checkOptionalPercentPair(x: String, y: String) {
+        if (x.isBlank() && y.isBlank()) return
+        checkPercent(x)
+        checkPercent(y)
+    }
+    if (RpaModePolicy.lineEnabled(script.mode, RpaLine.VISION)) {
+        when (form.concept.modelAction(form.otherAction)) {
+            RpaAction.INPUT_TEXT -> checkOptionalPercentPair(form.focusX, form.focusY)
+            RpaAction.SWIPE, RpaAction.SCROLL -> {
+                checkOptionalPercentPair(form.startX, form.startY)
+                checkOptionalPercentPair(form.endX, form.endY)
+            }
+
+            RpaAction.ASSERT_TEXT -> {
+                checkOptionalPercentPair(form.ocrLeft, form.ocrTop)
+                checkOptionalPercentPair(form.ocrRight, form.ocrBottom)
+            }
+
+            RpaAction.SET_VARIABLE ->
+                if (form.assignments.any { it.source == RpaVarSource.UI_READ }) {
+                    checkOptionalPercentPair(form.ocrLeft, form.ocrTop)
+                    checkOptionalPercentPair(form.ocrRight, form.ocrBottom)
+                }
+
+            else -> Unit
+        }
     }
     if (form.concept.hasWaitTail) checkNumber(form.waitAfterSec)
     if (form.concept.hasRepeatTail) checkNumber(form.repeat)
@@ -911,20 +1068,29 @@ internal fun <T> InkDropdown(
     }
 }
 
-/** 「...」次级动作钮（屏幕取点 / 找图面板）。 */
+/** 「...」次级动作钮（屏幕取点 / 找图面板）；置灰时随组只读（OnSurfaceDisabled 色）。 */
 @Composable
-internal fun EllipsisButton(description: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+internal fun EllipsisButton(
+    description: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
     Box(
         modifier
             .height(40.dp)
             .clip(FieldShape)
             .background(InkDialog.Outline)
             .semantics { contentDescription = description }
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = "...", style = InkTextStyles.Body, color = InkDialog.OnSurface)
+        Text(
+            text = "...",
+            style = InkTextStyles.Body,
+            color = if (enabled) InkDialog.OnSurface else InkDialog.OnSurfaceDisabled,
+        )
     }
 }
 
@@ -978,6 +1144,190 @@ internal fun DialogButtons(
         }
     }
 }
+
+// ── 分线参数组（T4：四类参数分段 + R1/R2 置灰，规格 §一/§4.3）────────
+
+/** 取 [RpaAndroidDevice] 的 Hilt 入口：弹框不在注入容器宿主内，走 EntryPoint 自取。 */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+internal interface RpaDialogDeviceEntryPoint {
+    fun rpaAndroidDevice(): RpaAndroidDevice
+}
+
+/**
+ * 线路就绪快照（R2 依据）：订阅 [RpaAndroidDevice.readinessChanges] 刷新能力。
+ * 取不到设备时返回 null = 不置灰（不因 UI 侧兜底拦住编辑）。
+ */
+@Composable
+private fun rememberLineReadiness(): RpaCapabilities? {
+    val context = LocalContext.current
+    val device = remember(context) {
+        runCatching {
+            EntryPointAccessors.fromApplication(
+                context.applicationContext,
+                RpaDialogDeviceEntryPoint::class.java,
+            ).rpaAndroidDevice()
+        }.getOrNull()
+    }
+    var capabilities by remember(device) { mutableStateOf(device?.capabilities) }
+    LaunchedEffect(device) {
+        if (device != null) {
+            device.readinessChanges.collect { capabilities = device.capabilities }
+        }
+    }
+    return capabilities
+}
+
+/**
+ * 分线参数组（§4.3 三段式）：组头口径固定「a11y（无障碍）/ 无 a11y（shizuku）」；
+ * R1（模式不含该线）整组灰只读，R2（前置不具备）灰 + 「暂不可用」+ 修复入口。
+ */
+@Composable
+private fun LineSection(
+    line: RpaLine,
+    greyed: Boolean,
+    unready: Boolean,
+    onFix: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    InkDivider()
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(
+                if (line == RpaLine.A11Y) {
+                    R.string.float_rpa_mode_a11y
+                } else {
+                    R.string.float_rpa_mode_vision
+                },
+            ),
+            style = InkTextStyles.Section,
+            color = if (greyed) InkDialog.OnSurfaceDisabled else InkDialog.OnSurface,
+        )
+        if (unready) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.float_rpa_lineparam_unavailable),
+                style = InkTextStyles.Badge,
+                color = InkDialog.Warn,
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        if (unready) {
+            FixButton(
+                label = stringResource(
+                    if (line == RpaLine.A11Y) {
+                        R.string.float_rpa_gate_go_a11y
+                    } else {
+                        R.string.float_rpa_open_shizuku
+                    },
+                ),
+                onClick = onFix,
+            )
+        }
+    }
+    Column(Modifier.fillMaxWidth(), content = content)
+}
+
+/** R2 修复入口药丸钮（28dp 高，复用既有跳转目标的短文案）。 */
+@Composable
+private fun FixButton(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .height(28.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.dp, InkDialog.Outline, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text = label, style = InkTextStyles.Badge, color = InkDialog.OnSurface)
+    }
+}
+
+/**
+ * C 类选择器行（§4.2 两侧分写）：文字 + 匹配方式 + 可选尾随钮；空 = 未设置。
+ * 匹配方式下拉固定宽（InkDropdown 内部行是 fillMaxWidth，弹性宽会挤掉尾随钮）。
+ */
+@Composable
+private fun SelectorFields(
+    label: String,
+    selector: RpaSelector?,
+    enabled: Boolean,
+    onChange: (RpaSelector) -> Unit,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    val base = selector ?: RpaSelector()
+    FieldRow(label) {
+        InkTextField(
+            value = base.text.orEmpty(),
+            onValueChange = { onChange(base.copy(text = it.ifBlank { null })) },
+            enabled = enabled,
+            placeholder = stringResource(R.string.float_rpa_stepdlg_optional),
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(4.dp))
+        InkDropdown(
+            selectedLabel = rpaMatchLabel(base.textMatch),
+            options = RpaMatchMode.entries,
+            labelOf = { rpaMatchLabel(it) },
+            onSelect = { onChange(base.copy(textMatch = it)) },
+            modifier = Modifier.width(96.dp),
+            enabled = enabled,
+        )
+        if (trailing != null) {
+            Spacer(Modifier.width(4.dp))
+            trailing()
+        }
+    }
+}
+
+/** D 类百分比坐标对（先点位置 / 起止点 / 区域角点）：X% + Y% + 可选尾随钮；全空 = 未设置。 */
+@Composable
+private fun PercentPairRow(
+    label: String,
+    x: String,
+    y: String,
+    enabled: Boolean,
+    onX: (String) -> Unit,
+    onY: (String) -> Unit,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    FieldRow(label) {
+        InkTextField(
+            value = x,
+            onValueChange = onX,
+            enabled = enabled,
+            placeholder = stringResource(R.string.float_rpa_stepdlg_axis_x),
+            keyboardType = KeyboardType.Decimal,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(4.dp))
+        InkTextField(
+            value = y,
+            onValueChange = onY,
+            enabled = enabled,
+            placeholder = stringResource(R.string.float_rpa_stepdlg_axis_y),
+            keyboardType = KeyboardType.Decimal,
+            modifier = Modifier.weight(1f),
+        )
+        if (trailing != null) {
+            Spacer(Modifier.width(4.dp))
+            trailing()
+        }
+    }
+}
+
+/** 输入通道文案（D 类无 a11y 侧）。 */
+@Composable
+private fun inputChannelLabel(channel: RpaInputChannel): String = stringResource(
+    when (channel) {
+        RpaInputChannel.CLIPBOARD_PASTE -> R.string.float_rpa_input_channel_clipboard
+        RpaInputChannel.SHELL_INPUT -> R.string.float_rpa_input_channel_shell
+    },
+)
 
 // ── 弹框内容：动作类型行 + 动态字段区 + 公共尾部 ──────────────────────
 
@@ -1059,6 +1409,11 @@ private fun StepForm.rebuildFor(concept: StepConcept, step: RpaStep): StepForm {
     )
 }
 
+/**
+ * 动态字段区（§一 四类参数三段式）：公共段（B 载荷 + A 尾部）→ a11y 组（C 定位 +
+ * D a11y 通道）→ 无 a11y 组（C 定位 + D vision 通道）。R1/R2 置灰由 [LineSection]
+ * 承载；D 字段按动作矩阵（§一）取用，触达入口 kind 随所在分线给（§4.2）。
+ */
 @Composable
 private fun StepFields(
     form: StepForm,
@@ -1068,12 +1423,53 @@ private fun StepFields(
     onArmPick: (RpaPickRequest) -> Unit,
     onOpenVisionPanel: () -> Unit,
     onOpenAppPicker: () -> Unit,
+    onOpenCondition: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val capabilities = rememberLineReadiness()
+    val effectiveAction = form.concept.modelAction(form.otherAction)
+    val a11yInMode = RpaModePolicy.lineEnabled(script.mode, RpaLine.A11Y)
+    val visionInMode = RpaModePolicy.lineEnabled(script.mode, RpaLine.VISION)
+    val a11yReady = capabilities?.a11yModeReady() ?: true
+    val visionReady = capabilities?.visionModeReady() ?: true
+    // R1（模式不含该线）整组灰只读；R2（前置不具备）灰 + 「暂不可用」+ 修复入口（§4.3）。
+    val a11yEditable = a11yInMode && a11yReady
+    val visionEditable = visionInMode && visionReady
+    // D 类分线通道按动作矩阵取用（§一）：LAUNCH_APP/OPEN_CHAT→就绪判定、
+    // INPUT_TEXT→输入、SWIPE/SCROLL→锚定/起止点、ASSERT_TEXT/SET_VARIABLE(UI_READ)→读屏范围。
+    val showReady = effectiveAction == RpaAction.LAUNCH_APP || effectiveAction == RpaAction.OPEN_CHAT
+    val showInput = effectiveAction == RpaAction.INPUT_TEXT
+    val showAnchor = effectiveAction == RpaAction.SWIPE || effectiveAction == RpaAction.SCROLL
+    val showRead = effectiveAction == RpaAction.ASSERT_TEXT ||
+        (effectiveAction == RpaAction.SET_VARIABLE &&
+            form.assignments.any { it.source == RpaVarSource.UI_READ })
+    val showLineFields = form.concept.isTapFamily || showReady || showInput || showAnchor || showRead
+    // R2 修复入口（复用既有跳转）：a11y = 系统无障碍设置，无 a11y = Shizuku 授权页。
+    val onFixA11y: () -> Unit = {
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+    val onFixVision: () -> Unit = {
+        runCatching {
+            context.startActivity(
+                Intent(context, ShizukuGrantActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
+    // ① 公共段：B 动作载荷 + A 尾部（TailFields 随公共段，规格 §一「A/B 在公共段」）。
     when (form.concept) {
         StepConcept.LAUNCH_APP -> LaunchAppFields(form, onFormChange, onOpenAppPicker)
-        StepConcept.TAP_POINT -> TapPointFields(form, onFormChange, step, script, onArmPick)
-        StepConcept.TAP_IMAGE -> TapImageFields(form, onFormChange, step, script, onArmPick, onOpenVisionPanel)
-        StepConcept.TAP_TEXT -> TapTextFields(form, onFormChange)
+        StepConcept.TAP_POINT,
+        StepConcept.TAP_IMAGE,
+        StepConcept.TAP_TEXT,
+        -> HoldMsField(form, onFormChange)
+
         StepConcept.SET_VARIABLE -> SetVariableFields(form, onFormChange)
         StepConcept.CONTROL_FLOW -> ControlFlowFields(form, onFormChange, step, script)
         StepConcept.OPEN_LINK -> OpenLinkFields(form, onFormChange)
@@ -1084,6 +1480,160 @@ private fun StepFields(
             color = InkDialog.OnSurfaceMuted,
             modifier = Modifier.padding(vertical = 8.dp),
         )
+    }
+    InkDivider()
+    TailFields(form, onFormChange, onOpenCondition)
+    if (!showLineFields) return
+
+    // ② a11y（无障碍）组：C 的 a11y 选择器 + D 的 a11y 通道。
+    LineSection(
+        line = RpaLine.A11Y,
+        greyed = !a11yEditable,
+        unready = a11yInMode && !a11yReady,
+        onFix = onFixA11y,
+    ) {
+        if (form.concept.isTapFamily) {
+            TapA11yFields(form, onFormChange, step, script, onArmPick, enabled = a11yEditable)
+        }
+        if (showReady) {
+            SelectorFields(
+                label = stringResource(R.string.float_rpa_lineparam_ready),
+                selector = form.readySelector,
+                enabled = a11yEditable,
+                onChange = { onFormChange(form.copy(readySelector = it)) },
+            )
+        }
+        if (showInput) {
+            SelectorFields(
+                label = stringResource(R.string.float_rpa_lineparam_input_selector),
+                selector = form.inputSelector,
+                enabled = a11yEditable,
+                onChange = { onFormChange(form.copy(inputSelector = it)) },
+            )
+            InkCheckRow(
+                checked = form.appendMode,
+                label = stringResource(R.string.float_rpa_lineparam_append_mode),
+                onCheckedChange = { onFormChange(form.copy(appendMode = it)) },
+                enabled = a11yEditable,
+            )
+        }
+        if (showAnchor) {
+            SelectorFields(
+                label = stringResource(R.string.float_rpa_lineparam_anchor_selector),
+                selector = form.anchorSelector,
+                enabled = a11yEditable,
+                onChange = { onFormChange(form.copy(anchorSelector = it)) },
+            )
+        }
+        if (showRead) {
+            SelectorFields(
+                label = stringResource(R.string.float_rpa_lineparam_read_scope),
+                selector = form.readScope,
+                enabled = a11yEditable,
+                onChange = { onFormChange(form.copy(readScope = it)) },
+            )
+            Text(
+                text = stringResource(R.string.float_rpa_lineparam_scope_all),
+                style = InkTextStyles.Badge,
+                color = InkDialog.OnSurfaceDisabled,
+                modifier = Modifier.padding(start = 64.dp, top = 2.dp, bottom = 4.dp),
+            )
+        }
+    }
+
+    // ③ 无 a11y（shizuku）组：C 的 vision 定位 + D 的 vision 通道。
+    LineSection(
+        line = RpaLine.VISION,
+        greyed = !visionEditable,
+        unready = visionInMode && !visionReady,
+        onFix = onFixVision,
+    ) {
+        when (form.concept) {
+            StepConcept.TAP_POINT -> TapPointFields(
+                form, onFormChange, step, script, onArmPick, enabled = visionEditable,
+            )
+
+            StepConcept.TAP_IMAGE -> TapImageFields(
+                form, onFormChange, step, script, onArmPick, onOpenVisionPanel,
+                enabled = visionEditable,
+            )
+
+            StepConcept.TAP_TEXT -> TapTextVisionFields(form, onFormChange, enabled = visionEditable)
+            else -> Unit
+        }
+        if (showReady) {
+            FieldRow(stringResource(R.string.float_rpa_lineparam_ready)) {
+                InkTextField(
+                    value = form.readyText,
+                    onValueChange = { onFormChange(form.copy(readyText = it)) },
+                    enabled = visionEditable,
+                    placeholder = stringResource(R.string.float_rpa_stepdlg_optional),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        if (showInput) {
+            FieldRow(stringResource(R.string.float_rpa_lineparam_input_channel)) {
+                InkDropdown(
+                    selectedLabel = inputChannelLabel(form.inputChannel),
+                    options = RpaInputChannel.entries,
+                    labelOf = { inputChannelLabel(it) },
+                    onSelect = { onFormChange(form.copy(inputChannel = it)) },
+                    modifier = Modifier.weight(1f),
+                    enabled = visionEditable,
+                )
+            }
+            InkCheckRow(
+                checked = form.clearBeforeInput,
+                label = stringResource(R.string.float_rpa_lineparam_clear_before),
+                onCheckedChange = { onFormChange(form.copy(clearBeforeInput = it)) },
+                enabled = visionEditable,
+            )
+            PercentPairRow(
+                label = stringResource(R.string.float_rpa_lineparam_focus_point),
+                x = form.focusX,
+                y = form.focusY,
+                enabled = visionEditable,
+                onX = { onFormChange(form.copy(focusX = it)) },
+                onY = { onFormChange(form.copy(focusY = it)) },
+            )
+        }
+        if (showAnchor) {
+            PercentPairRow(
+                label = stringResource(R.string.float_rpa_lineparam_start_point),
+                x = form.startX,
+                y = form.startY,
+                enabled = visionEditable,
+                onX = { onFormChange(form.copy(startX = it)) },
+                onY = { onFormChange(form.copy(startY = it)) },
+            )
+            PercentPairRow(
+                label = stringResource(R.string.float_rpa_lineparam_end_point),
+                x = form.endX,
+                y = form.endY,
+                enabled = visionEditable,
+                onX = { onFormChange(form.copy(endX = it)) },
+                onY = { onFormChange(form.copy(endY = it)) },
+            )
+        }
+        if (showRead) {
+            PercentPairRow(
+                label = stringResource(R.string.float_rpa_lineparam_region_tl),
+                x = form.ocrLeft,
+                y = form.ocrTop,
+                enabled = visionEditable,
+                onX = { onFormChange(form.copy(ocrLeft = it)) },
+                onY = { onFormChange(form.copy(ocrTop = it)) },
+            )
+            PercentPairRow(
+                label = stringResource(R.string.float_rpa_lineparam_region_br),
+                x = form.ocrRight,
+                y = form.ocrBottom,
+                enabled = visionEditable,
+                onX = { onFormChange(form.copy(ocrRight = it)) },
+                onY = { onFormChange(form.copy(ocrBottom = it)) },
+            )
+        }
     }
 }
 
@@ -1135,6 +1685,7 @@ private fun LaunchAppFields(
     )
 }
 
+/** 点击(坐标) vision 侧 C 定位（§4.2 两侧分写）：点击位置 + 屏幕取点（kind=VISION）。 */
 @Composable
 private fun TapPointFields(
     form: StepForm,
@@ -1142,33 +1693,29 @@ private fun TapPointFields(
     step: RpaStep,
     script: RpaScript,
     onArmPick: (RpaPickRequest) -> Unit,
+    enabled: Boolean,
 ) {
-    val pickDesc = stringResource(R.string.float_rpa_stepdlg_pick_point)
-    FieldRow(stringResource(R.string.float_rpa_stepdlg_tap_pos)) {
-        InkTextField(
-            value = form.posX,
-            onValueChange = { onFormChange(form.copy(posX = it)) },
-            placeholder = stringResource(R.string.float_rpa_stepdlg_axis_x),
-            keyboardType = KeyboardType.Decimal,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(4.dp))
-        InkTextField(
-            value = form.posY,
-            onValueChange = { onFormChange(form.copy(posY = it)) },
-            placeholder = stringResource(R.string.float_rpa_stepdlg_axis_y),
-            keyboardType = KeyboardType.Decimal,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(4.dp))
-        EllipsisButton(
-            description = pickDesc,
-            // 屏幕取点：构造拾取请求交宿主 arm（唯一拾取通道 = RpaPickCoordinator.arm），
-            // purpose=POINT 让回填写 RATIO 坐标，保持「点击(坐标)」概念不翻转。
-            onClick = { onArmPick(buildPickRequest(step, script, RpaPickPurpose.POINT)) },
-        )
-    }
-    HoldMsField(form, onFormChange)
+    PercentPairRow(
+        label = stringResource(R.string.float_rpa_stepdlg_tap_pos),
+        x = form.posX,
+        y = form.posY,
+        enabled = enabled,
+        onX = { onFormChange(form.copy(posX = it)) },
+        onY = { onFormChange(form.copy(posY = it)) },
+        trailing = {
+            EllipsisButton(
+                description = stringResource(R.string.float_rpa_stepdlg_pick_point),
+                // 触达入口按所在分线给 kind（§4.2）：无 a11y 组 = 视觉取点；purpose=POINT
+                // 回填 RATIO 坐标，保持「点击(坐标)」概念不翻转。
+                onClick = {
+                    onArmPick(
+                        buildPickRequest(step, script, RpaPickPurpose.POINT, RpaPickKind.VISION),
+                    )
+                },
+                enabled = enabled,
+            )
+        },
+    )
 }
 
 @Composable
@@ -1179,6 +1726,7 @@ private fun TapImageFields(
     script: RpaScript,
     onArmPick: (RpaPickRequest) -> Unit,
     onOpenVisionPanel: () -> Unit,
+    enabled: Boolean,
 ) {
     val context = LocalContext.current
     val store = remember(context) { RpaScriptStore(File(context.filesDir, "rpa")) }
@@ -1244,14 +1792,17 @@ private fun TapImageFields(
         // 图片位置双入口（§7.9）：「...」弹「图片拾取 / 找图面板」二选一。
         Box {
             var showEntry by remember { mutableStateOf(false) }
-            EllipsisButton(description = visionDesc, onClick = { showEntry = true })
+            EllipsisButton(description = visionDesc, onClick = { showEntry = true }, enabled = enabled)
             DropdownMenu(expanded = showEntry, onDismissRequest = { showEntry = false }) {
                 DropdownMenuItem(
                     text = { Text(pickImageDesc) },
                     onClick = {
                         showEntry = false
-                        // 图片拾取：直拉以图找图拾取模式（purpose=TEMPLATE 回填模板）。
-                        onArmPick(buildPickRequest(step, script, RpaPickPurpose.TEMPLATE))
+                        // 图片拾取：直拉以图找图拾取模式（kind=VISION 视觉拾取，
+                        // purpose=TEMPLATE 回填模板）。
+                        onArmPick(
+                            buildPickRequest(step, script, RpaPickPurpose.TEMPLATE, RpaPickKind.VISION),
+                        )
                     },
                 )
                 DropdownMenuItem(
@@ -1264,7 +1815,6 @@ private fun TapImageFields(
             }
         }
     }
-    HoldMsField(form, onFormChange)
 }
 
 @Composable
@@ -1280,34 +1830,76 @@ private fun HoldMsField(form: StepForm, onFormChange: (StepForm) -> Unit) {
     }
 }
 
+/**
+ * 点击三兄弟 a11y 侧 C 定位（§4.2 两侧分写）：目标节点/目标文字选择器 +
+ * 屏幕取点（触达入口 kind=A11Y 节点拾取，回填选择器）。
+ */
 @Composable
-private fun TapTextFields(form: StepForm, onFormChange: (StepForm) -> Unit) {
-    FieldRow(stringResource(R.string.float_rpa_stepdlg_text)) {
+private fun TapA11yFields(
+    form: StepForm,
+    onFormChange: (StepForm) -> Unit,
+    step: RpaStep,
+    script: RpaScript,
+    onArmPick: (RpaPickRequest) -> Unit,
+    enabled: Boolean,
+) {
+    SelectorFields(
+        label = stringResource(
+            if (form.concept == StepConcept.TAP_TEXT) {
+                R.string.float_rpa_stepdlg_tap_text_a11y
+            } else {
+                R.string.float_rpa_stepdlg_tap_node
+            },
+        ),
+        selector = form.tapA11ySelector,
+        enabled = enabled,
+        onChange = { onFormChange(form.copy(tapA11ySelector = it)) },
+        trailing = {
+            EllipsisButton(
+                description = stringResource(R.string.float_rpa_stepdlg_pick_point),
+                // 触达入口按所在分线给 kind（§4.2）：a11y 组 = 节点拾取。
+                onClick = {
+                    onArmPick(
+                        buildPickRequest(step, script, RpaPickPurpose.POINT, RpaPickKind.A11Y),
+                    )
+                },
+                enabled = enabled,
+            )
+        },
+    )
+}
+
+/** 点击文字 vision 侧 C 定位（§4.2 两侧分写）：识别文字 + 匹配方式 + 匹配第几。 */
+@Composable
+private fun TapTextVisionFields(form: StepForm, onFormChange: (StepForm) -> Unit, enabled: Boolean) {
+    FieldRow(stringResource(R.string.float_rpa_stepdlg_tap_text_vision)) {
         InkTextField(
-            value = form.tapText,
-            onValueChange = { onFormChange(form.copy(tapText = it)) },
+            value = form.tapVisionText,
+            onValueChange = { onFormChange(form.copy(tapVisionText = it)) },
+            enabled = enabled,
             modifier = Modifier.weight(1f),
         )
     }
     FieldRow(stringResource(R.string.float_rpa_prop_match)) {
         InkDropdown(
-            selectedLabel = rpaMatchLabel(form.tapMatch),
+            selectedLabel = rpaMatchLabel(form.tapVisionMatch),
             options = RpaMatchMode.entries,
             labelOf = { rpaMatchLabel(it) },
-            onSelect = { onFormChange(form.copy(tapMatch = it)) },
+            onSelect = { onFormChange(form.copy(tapVisionMatch = it)) },
             modifier = Modifier.weight(1f),
+            enabled = enabled,
         )
     }
     FieldRow(stringResource(R.string.float_rpa_stepdlg_match_index)) {
         InkTextField(
             value = form.matchIndex,
             onValueChange = { onFormChange(form.copy(matchIndex = it)) },
+            enabled = enabled,
             placeholder = stringResource(R.string.float_rpa_stepdlg_optional),
             keyboardType = KeyboardType.Number,
             modifier = Modifier.weight(1f),
         )
     }
-    HoldMsField(form, onFormChange)
 }
 
 @Composable
@@ -1951,19 +2543,21 @@ private fun AppPickerDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
 // ── 拾取请求（唯一拾取通道 = RpaPickCoordinator.arm，宿主接线）────────
 
 /**
- * 构造拾取请求（v5 §7.9）：kind 按脚本模式选线（A11Y 脚本走 a11y 拾取，其余走视觉拾取），
- * 交宿主 `RpaPickCoordinator.arm`。[purpose] 决定回填目标种类——屏幕取点回填 RATIO
- * 坐标（保持「点击(坐标)」概念不翻转），图片拾取回填 TEMPLATE 模板。
+ * 构造拾取请求（v5 §7.9）：kind 按触达入口所在分线给（a11y 组 = 节点拾取 /
+ * 无 a11y 组 = 视觉拾取，与 §4.2 两侧分写一致），交宿主 `RpaPickCoordinator.arm`。
+ * [purpose] 决定回填目标种类——屏幕取点回填 RATIO 坐标（保持「点击(坐标)」概念
+ * 不翻转），图片拾取回填 TEMPLATE 模板。
  */
 private fun buildPickRequest(
     step: RpaStep,
     script: RpaScript,
     purpose: RpaPickPurpose,
+    kind: RpaPickKind,
 ): RpaPickRequest = RpaPickRequest(
     requestId = RpaIds.newId("pick"),
     scriptId = script.id,
     stepId = step.id,
-    kind = if (script.mode == RpaMode.A11Y) RpaPickKind.A11Y else RpaPickKind.VISION,
+    kind = kind,
     scriptName = script.name,
     stepLabel = step.label,
     createdAt = System.currentTimeMillis(),

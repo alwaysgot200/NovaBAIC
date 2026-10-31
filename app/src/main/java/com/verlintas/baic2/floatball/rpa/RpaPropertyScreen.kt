@@ -66,7 +66,6 @@ import androidx.compose.ui.unit.dp
 import com.verlintas.baic2.R
 import com.verlintas.baic2.floatball.AdvisorPage
 import com.verlintas.baic2.floatball.DeleteConfirmDialog
-import com.verlintas.rpa.model.RpaCapabilities
 import com.verlintas.rpa.model.RpaScript
 import com.verlintas.rpa.store.RpaExportFormat
 import com.verlintas.rpa.store.RpaJsonCodec
@@ -78,8 +77,8 @@ import java.util.Locale
  * 本地脚本详情页（方案 §7.2 图10）：
  *
  * `← | 本地脚本详情 | ⋮` 顶栏（[AdvisorPage] 统一骨架）；头部 64dp 图标 +
- * 名称 + 「N 个动作 · X KB」；区块依次为 脚本描述 → 运行环境（模式徽标 +
- * 就绪徽标）→ 基本信息；「脚本市场 · 云备份」按「即将开放」禁用占位（不放
+ * 名称 + 「N 个动作 · X KB」；区块依次为 脚本描述 → 运行环境（模式徽标）→
+ * 基本信息；「脚本市场 · 云备份」按「即将开放」禁用占位（不放
  * 空区块、不做假入口）；底部固定操作条 `[分享][云备份][上传市场] + [编辑][运行]`。
  *
  * 「编辑」不直接进编辑器——先过 [RpaModeGateDialog] 模式确认门（§7.4），
@@ -91,7 +90,6 @@ import java.util.Locale
 @Composable
 internal fun RpaPropertyScreen(
     script: RpaScript,
-    capabilities: RpaCapabilities,
     runState: RpaRunController.State,
     onBack: () -> Unit,
     onEdit: () -> Unit,
@@ -102,8 +100,6 @@ internal fun RpaPropertyScreen(
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
     onDescriptionChange: (String) -> Unit,
-    onRefreshCapabilities: () -> Unit,
-    onOpenShizuku: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -166,12 +162,7 @@ internal fun RpaPropertyScreen(
             ) {
                 PropertyHeader(script)
                 PropertyDescription(script) { showDescriptionEdit = true }
-                PropertyEnvironment(
-                    script = script,
-                    capabilities = capabilities,
-                    onRefreshCapabilities = onRefreshCapabilities,
-                    onOpenShizuku = onOpenShizuku,
-                )
+                PropertyEnvironment(script)
                 PropertyBasicInfo(script)
                 PropertyComingSoonRows()
                 Spacer(Modifier.height(4.dp))
@@ -320,61 +311,13 @@ private fun PropertyDescription(script: RpaScript, onEditDescription: () -> Unit
     }
 }
 
-/** 区块二：运行环境（模式徽标 + 就绪徽标 + 授权指引）。 */
+/** 区块二：运行环境（用户定案 2026-10-31）：只简洁显示脚本模式，技术细节只留方案文档。 */
 @Composable
-private fun PropertyEnvironment(
-    script: RpaScript,
-    capabilities: RpaCapabilities,
-    onRefreshCapabilities: () -> Unit,
-    onOpenShizuku: () -> Unit,
-) {
+private fun PropertyEnvironment(script: RpaScript) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         RpaSectionTitle(stringResource(R.string.float_rpa_property_env))
         RpaCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                RpaModeBadge(script.mode)
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onRefreshCapabilities) {
-                    Text(stringResource(R.string.float_rpa_gate_refresh))
-                }
-            }
-            Text(
-                text = rpaModeHint(script.mode),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                RpaStatusBadge(stringResource(R.string.float_rpa_cap_a11y), capabilities.a11yReady)
-                RpaStatusBadge(
-                    stringResource(R.string.float_rpa_cap_shizuku),
-                    capabilities.shizukuReady,
-                )
-                RpaStatusBadge(
-                    stringResource(R.string.float_rpa_cap_projection),
-                    capabilities.projectionReady,
-                )
-                RpaStatusBadge(stringResource(R.string.float_rpa_cap_ocr), capabilities.ocrReady)
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = stringResource(
-                    if (capabilities.visionReady) {
-                        R.string.float_rpa_cap_vision_ready
-                    } else {
-                        R.string.float_rpa_cap_vision_missing
-                    }
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            // 无 a11y 线缺项修复入口统一指向 Shizuku 设置页（用户定案：录屏抽帧
-            // 由 Shizuku 走通后自动完成，不设「授权录屏」人工按钮）。
-            if (!capabilities.shizukuReady) {
-                OutlinedButton(onClick = onOpenShizuku, modifier = Modifier.padding(top = 6.dp)) {
-                    Text(stringResource(R.string.float_rpa_open_shizuku))
-                }
-            }
+            RpaModeBadge(script.mode)
         }
     }
 }

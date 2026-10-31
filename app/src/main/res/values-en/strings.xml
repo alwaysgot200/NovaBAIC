@@ -820,7 +820,7 @@
     <!-- 设置：执行通道与就绪门 -->
     <string name="float_settings_executor_a11y">Accessibility only</string>
     <string name="float_settings_executor_auto">Auto fallback</string>
-    <string name="float_settings_executor_hint">Auto: accessibility → gesture paste → Shizuku fallback in order; falls back to draft mode when none is available.</string>
+    <string name="float_settings_executor_hint">Auto: accessibility → Shizuku → gesture paste fallback in order; falls back to draft mode when none is available.</string>
     <string name="float_settings_executor_section">Execution channel</string>
     <string name="float_settings_executor_shizuku">Shizuku (no accessibility)</string>
     <string name="float_settings_readiness_blocked">Some items are missing, so the current channel is kept. Follow each item’s hint or action; returning here re-checks automatically. Or tap “Re-check” — it switches when all green.</string>
@@ -864,7 +864,7 @@
     <string name="float_shizuku_action_permission">Grant Shizuku permission</string>
     <string name="float_shizuku_action_regrant">Re-run</string>
     <string name="float_shizuku_action_upgrade">Upgrade Shizuku</string>
-    <string name="float_shizuku_error_title">Failed — if it reports insufficient permission, check prerequisite #1 (USB debugging (Security settings)) first.</string>
+    <string name="float_shizuku_error_title">Failed — if it reports insufficient permission, first check the prerequisites: turn on “Wireless debugging” and start Shizuku successfully.</string>
     <string name="float_shizuku_executing">Working…</string>
     <string name="float_shizuku_go_settings">Open settings</string>
     <string name="float_shizuku_grant_ok">Granted: the projection dialog is now silent.</string>
@@ -883,7 +883,6 @@
     <string name="float_shizuku_pair_2">Tap “Pair device with pairing code” and note the 6-digit code shown</string>
     <string name="float_shizuku_pair_3">Back in Shizuku, enter the pairing code and it starts</string>
     <string name="float_shizuku_pair_title">Wireless pairing in three steps</string>
-    <string name="float_shizuku_prereq_dev">Turn on “USB debugging (Security settings)” in developer options (required on some devices such as Xiaomi/Redmi) — without it, commands like auto-tap fail with insufficient permission.</string>
     <string name="float_shizuku_prereq_wifi_adb">Turn on “Wireless debugging” in developer options. To open developer options: go to “Settings → About phone” and tap the “Android version” entry about 7 times until developer options appear. Without a PC, “Start via wireless debugging” is the only shell bootstrap for Shizuku; it cannot start with wireless debugging off. Note wireless debugging runs over WLAN: connect stable Wi-Fi first, or the system turns it back off once Wi-Fi drops. After Shizuku starts it runs until reboot, so wireless debugging may be turned off afterwards.</string>
     <string name="float_shizuku_wifi_state_on">Wireless debugging: currently ON — finish pairing and starting now.</string>
     <string name="float_shizuku_wifi_state_off">Wireless debugging: currently OFF. If it turns itself off right after being opened, the cause is usually missing/disconnected Wi-Fi or power saving cutting the network — connect stable Wi-Fi first.</string>
@@ -1147,12 +1146,9 @@
     <string name="float_rpa_tool_design_desc">Script library, drag-and-drop editing, and runs</string>
     <string name="float_rpa_tool_quickfind">Image search</string>
     <string name="float_rpa_tool_quickfind_desc">Pick an image, locate it on screen, and get its coordinates</string>
-    <string name="float_rpa_mode_a11y">Accessibility (a11y)</string>
-    <string name="float_rpa_mode_a11y_hint">Uses only accessibility nodes for targeting and gestures; Shizuku and visual targeting are unavailable.</string>
-    <string name="float_rpa_mode_vision">No a11y (vision)</string>
-    <string name="float_rpa_mode_vision_hint">Uses only Shizuku injection + screen frames + OCR / template matching; accessibility targeting is unavailable.</string>
+    <string name="float_rpa_mode_a11y">a11y (accessibility)</string>
+    <string name="float_rpa_mode_vision">No a11y (shizuku)</string>
     <string name="float_rpa_mode_dual">Dual mode</string>
-    <string name="float_rpa_mode_dual_hint">Every targeting action must define both a11y and vision plans; at run time a11y is tried first, with explicit vision fallback.</string>
     <string name="float_rpa_line_a11y">a11y line</string>
     <string name="float_rpa_line_vision">Vision line</string>
     <string name="float_rpa_action_launch_app">Launch app</string>
@@ -1233,12 +1229,10 @@
     <string name="float_rpa_issue_generic">Validation failed (%1$s)</string>
 
     <!-- RPA automation: script library, editor, properties -->
-    <string name="float_rpa_library_hint">Choose the execution mode before adding actions; actions run from top to bottom.</string>
+    <string name="float_rpa_library_hint">Actions run from top to bottom.</string>
     <string name="float_rpa_capabilities">Run capabilities</string>
     <string name="float_rpa_cap_a11y">Accessibility</string>
     <string name="float_rpa_cap_shizuku">Shizuku</string>
-    <string name="float_rpa_cap_vision_ready">Vision line ready: Shizuku injection + frames + OCR available</string>
-    <string name="float_rpa_cap_vision_missing">Vision line not ready: authorize Shizuku (screen capture only provides frames; it cannot inject taps)</string>
     <string name="float_rpa_cap_ocr">OCR</string>
     <string name="float_rpa_cap_projection">Screen capture</string>
     <string name="float_rpa_cap_refresh">Refresh</string>
@@ -1800,6 +1794,31 @@
     <string name="float_rpa_stepdlg_error_var_row">Variable name cannot be empty and may only contain letters, digits, _ . -</string>
     <string name="float_rpa_stepdlg_error_goto_missing">“Jump to” requires a target step</string>
     <string name="float_rpa_stepdlg_error_custom_missing">Please choose a custom action</string>
+
+    <!-- Dual-mode action params (spec §4/§5): create-dialog mode graying + per-line edit groups -->
+    <string name="float_rpa_mode_disabled_a11y">Accessibility not enabled</string>
+    <string name="float_rpa_mode_disabled_vision">Shizuku not ready</string>
+    <string name="float_rpa_mode_disabled_dual">Both lines must be ready</string>
+    <string name="float_rpa_mode_disabled_reason">%1$s: %2$s</string>
+    <string name="float_rpa_lineparam_unavailable">Unavailable</string>
+    <string name="float_rpa_lineparam_ready">Ready check</string>
+    <string name="float_rpa_lineparam_input_selector">Input field</string>
+    <string name="float_rpa_lineparam_append_mode">Append text</string>
+    <string name="float_rpa_lineparam_input_channel">Input channel</string>
+    <string name="float_rpa_input_channel_clipboard">Clipboard paste</string>
+    <string name="float_rpa_input_channel_shell">Simulated input</string>
+    <string name="float_rpa_lineparam_clear_before">Clear before input</string>
+    <string name="float_rpa_lineparam_focus_point">Tap to focus</string>
+    <string name="float_rpa_lineparam_anchor_selector">Anchor node</string>
+    <string name="float_rpa_lineparam_start_point">Start point</string>
+    <string name="float_rpa_lineparam_end_point">End point</string>
+    <string name="float_rpa_lineparam_read_scope">Screen read scope</string>
+    <string name="float_rpa_lineparam_scope_all">Empty = full screen</string>
+    <string name="float_rpa_stepdlg_tap_node">Target node</string>
+    <string name="float_rpa_stepdlg_tap_text_a11y">Target text</string>
+    <string name="float_rpa_stepdlg_tap_text_vision">Recognized text</string>
+    <string name="float_rpa_lineparam_region_tl">Region top-left</string>
+    <string name="float_rpa_lineparam_region_br">Region bottom-right</string>
     <string name="float_rpa_cond_title">Run condition</string>
     <string name="float_rpa_cond_none">Not set</string>
     <string name="float_rpa_cond_variable">Variable comparison</string>
@@ -1835,5 +1854,4 @@
     <string name="float_settings_pace_standard">Standard 3~10 s</string>
     <string name="float_settings_pace_human">Human-like 8~90 s</string>
     <string name="float_settings_pace_patient">Relaxed 30~180 s</string>
-    <string name="float_settings_executor_gesture">Gesture paste</string>
 </resources>

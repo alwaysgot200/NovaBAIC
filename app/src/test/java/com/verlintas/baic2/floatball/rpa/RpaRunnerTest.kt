@@ -26,9 +26,11 @@ import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaCapabilities
 import com.verlintas.rpa.model.RpaFailurePolicy
 import com.verlintas.rpa.model.RpaHit
+import com.verlintas.rpa.model.RpaInputChannel
 import com.verlintas.rpa.model.RpaLine
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaParams
+import com.verlintas.rpa.model.RpaRect
 import com.verlintas.rpa.model.RpaRunEvent
 import com.verlintas.rpa.model.RpaScript
 import com.verlintas.rpa.model.RpaSelector
@@ -85,12 +87,16 @@ class RpaRunnerTest {
         target: RpaTarget = a11yTarget(),
         retries: Int = 0,
         onFailure: RpaFailurePolicy = RpaFailurePolicy.STOP,
+        // 定位按步轮询的「等待目标」预算；恒 miss / 首枪 miss 的用例压到一轮询
+        // 间隔（300ms）之内，每次尝试恰好一枪，既保语义又不拖慢套件。
+        timeoutMs: Long = 5_000,
     ) = RpaStep(
         id = id,
         action = RpaAction.TAP,
         target = target,
         retries = retries,
         onFailure = onFailure,
+        timeoutMs = timeoutMs,
     )
 
     @Test
@@ -140,7 +146,11 @@ class RpaRunnerTest {
         )
         val events = mutableListOf<RpaRunEvent>()
         val result = RpaRunner(device).run(
-            script(mode = RpaMode.DUAL, steps = listOf(tapStep(target = dualTarget()))),
+            script(
+                mode = RpaMode.DUAL,
+                // 恒 miss 侧压缩等待预算，防轮询拖慢（语义不受影响）。
+                steps = listOf(tapStep(target = dualTarget(), timeoutMs = 200)),
+            ),
         ) { events += it }
 
         assertTrue(result.detail, result.ok)
@@ -157,8 +167,9 @@ class RpaRunnerTest {
         val stopped = RpaRunner(stopDevice).run(
             script(
                 steps = listOf(
-                    tapStep(id = "s1", onFailure = RpaFailurePolicy.STOP),
-                    tapStep(id = "s2"),
+                    // 恒 miss：压缩等待预算防轮询拖慢。
+                    tapStep(id = "s1", onFailure = RpaFailurePolicy.STOP, timeoutMs = 200),
+                    tapStep(id = "s2", timeoutMs = 200),
                 ),
             ),
         ) { stopEvents += it }
@@ -172,8 +183,8 @@ class RpaRunnerTest {
         val continued = RpaRunner(continueDevice).run(
             script(
                 steps = listOf(
-                    tapStep(id = "s1", onFailure = RpaFailurePolicy.CONTINUE),
-                    tapStep(id = "s2"),
+                    tapStep(id = "s1", onFailure = RpaFailurePolicy.CONTINUE, timeoutMs = 200),
+                    tapStep(id = "s2", timeoutMs = 200),
                 ),
             ),
         ) { continueEvents += it }
@@ -194,7 +205,9 @@ class RpaRunnerTest {
         )
         val events = mutableListOf<RpaRunEvent>()
         val result = RpaRunner(device).run(
-            script(steps = listOf(tapStep(retries = 1))),
+            // timeoutMs 压到一轮询间隔内 = 每次尝试恰好一次定位，
+            // 保住「首试 miss、重试命中」的重试语义（定位已按步轮询）。
+            script(steps = listOf(tapStep(retries = 1, timeoutMs = 200))),
         ) { events += it }
 
         assertTrue(result.detail, result.ok)
@@ -252,6 +265,10 @@ class RpaRunnerTest {
             text: String,
             line: RpaLine,
             clearFirst: Boolean,
+            inputSelector: RpaSelector?,
+            appendMode: Boolean,
+            inputChannel: RpaInputChannel,
+            focusPoint: RpaRect?,
         ): Result<Unit> = Result.success(Unit)
 
         override suspend fun pressKey(key: String, line: RpaLine): Result<Unit> =
@@ -263,7 +280,11 @@ class RpaRunnerTest {
         override suspend fun locate(scriptId: String, target: RpaTarget, line: RpaLine): RpaHit? =
             locate(target, line)
 
-        override suspend fun textLines(line: RpaLine): List<String> = textLines
+        override suspend fun textLines(
+            line: RpaLine,
+            readScope: RpaSelector?,
+            ocrRegion: RpaRect?,
+        ): List<String> = textLines
 
         override suspend fun foregroundPackage(line: RpaLine): String? = foreground
 

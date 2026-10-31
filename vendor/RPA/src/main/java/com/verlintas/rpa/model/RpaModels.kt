@@ -315,6 +315,11 @@ data class RpaRect(
     )
 
     fun isValid(): Boolean = widthRatio > 0.005f && heightRatio > 0.005f
+
+    /** 作比例点用（left=xRatio、top=yRatio）：坐标在容忍区间（-0.2..1.2）内才算有效。 */
+    fun isRatioPoint(): Boolean =
+        left in RpaLimits.RATIO_MIN..RpaLimits.RATIO_MAX &&
+            top in RpaLimits.RATIO_MIN..RpaLimits.RATIO_MAX
 }
 
 /** 绝对像素边界（节点快照用，展示 / 快照兜底点击）。 */
@@ -433,6 +438,89 @@ data class RpaTarget(
     val vision: RpaVisionSpec? = null,
 )
 
+/** 输入通道（D 类「无 a11y」INPUT_TEXT 专有，§一）。 */
+@Serializable
+enum class RpaInputChannel {
+
+    /** 剪贴板写入 + KEYCODE_PASTE（中文 / 含空白文本的默认通道）。 */
+    CLIPBOARD_PASTE,
+
+    /** shell `input text`（纯 ASCII 直输）。 */
+    SHELL_INPUT,
+}
+
+/**
+ * D 类分线通道参数的 a11y 侧（§五）：「怎么执行」随线变化的节点参数。
+ * 只允许 a11y 线消费；vision 线执行时禁止读取（§〇.2 两线互不引用）。
+ */
+@Serializable
+data class RpaA11yLineParams(
+
+    /** 启动完成判定（LAUNCH_APP / OPEN_CHAT）：等待节点出现（选填）。 */
+    val readySelector: RpaSelector? = null,
+
+    /** 目标输入框（INPUT_TEXT）：空 = 沿用当前焦点。 */
+    val inputSelector: RpaSelector? = null,
+
+    /** 写入方式（INPUT_TEXT）：false = 替换（SET_TEXT），true = 追加。 */
+    val appendMode: Boolean = false,
+
+    /** 手势锚点（SWIPE / SCROLL）：以节点为锚点滑动（选填）。 */
+    val anchorSelector: RpaSelector? = null,
+
+    /** 读屏来源范围（ASSERT_TEXT / SET_VARIABLE(UI_READ)）：空 = 全屏。 */
+    val readScope: RpaSelector? = null,
+) {
+    /** 双写判定：任一选择器非空引用或 appendMode 开启即算「已配置本线」。 */
+    fun isConfigured(): Boolean =
+        readySelector != null || inputSelector != null || anchorSelector != null ||
+            readScope != null || appendMode
+}
+
+/**
+ * D 类分线通道参数的无 a11y（vision）侧（§五）：「怎么执行」随线变化的
+ * 视觉 / 注入参数。只允许 vision 线消费，禁止跨线取值。
+ * 比例点约定：[focusPoint] / [startPoint] / [endPoint] 取 left=xRatio、top=yRatio。
+ */
+@Serializable
+data class RpaVisionLineParams(
+
+    /** 启动完成判定（LAUNCH_APP / OPEN_CHAT）：等待屏幕出现文本（OCR，选填）。 */
+    val readyText: String? = null,
+
+    /** 输入通道（INPUT_TEXT）。 */
+    val inputChannel: RpaInputChannel = RpaInputChannel.CLIPBOARD_PASTE,
+
+    /** 输入前清空原内容（全选 + 删除，INPUT_TEXT）。 */
+    val clearBeforeInput: Boolean = true,
+
+    /** 输入前先点一下焦点（INPUT_TEXT，比例点，选填）。 */
+    val focusPoint: RpaRect? = null,
+
+    /** 滑动起止点（SWIPE / SCROLL，比例点；缺省按方向 + 距离居中换算）。 */
+    val startPoint: RpaRect? = null,
+    val endPoint: RpaRect? = null,
+
+    /** OCR 读取区域（ASSERT_TEXT / SET_VARIABLE(UI_READ)）。 */
+    val ocrRegion: RpaRect? = null,
+) {
+    /** 双写判定：任一字段偏离默认值即算「已配置本线」。 */
+    fun isConfigured(): Boolean =
+        readyText != null || inputChannel != RpaInputChannel.CLIPBOARD_PASTE ||
+            !clearBeforeInput || focusPoint != null || startPoint != null ||
+            endPoint != null || ocrRegion != null
+}
+
+/**
+ * 一步的 D 类分线通道参数（§五）：两线各自演进，全默认可省略（旧脚本
+ * 零迁移，schemaVersion 保持 2）。引擎按当前线只取本线字段，禁止跨线取值。
+ */
+@Serializable
+data class RpaLineParams(
+    val a11y: RpaA11yLineParams = RpaA11yLineParams(),
+    val vision: RpaVisionLineParams = RpaVisionLineParams(),
+)
+
 /** 动作参数（按动作取用其中一部分；未使用字段保持 null）。 */
 @Serializable
 data class RpaParams(
@@ -505,6 +593,9 @@ data class RpaStep(
 
     /** 运行条件（图6-图9）；不满足跳过该步并记日志，不算失败。 */
     val runCondition: RpaStepCondition = RpaStepCondition.None,
+
+    /** D 类分线通道参数（§五）：全默认可省略，旧 JSON 天然兼容。 */
+    val lineParams: RpaLineParams = RpaLineParams(),
 ) {
     fun needsTarget(): Boolean = RpaCatalog.needsTarget(action)
 }
@@ -601,6 +692,23 @@ fun RpaStep.referencedVariables(): Set<String> = buildSet {
         listOfNotNull(target?.vision?.primary, target?.vision?.fallback).forEach { locator ->
             locator.ocrText?.let(::add)
         }
+        // D 类分线通道参数同样支持变量：就绪文本 / 各节点选择器文本都要计入声明检查。
+        listOfNotNull(
+            lineParams.a11y.readySelector,
+            lineParams.a11y.inputSelector,
+            lineParams.a11y.anchorSelector,
+            lineParams.a11y.readScope,
+        ).forEach { selector ->
+            addAll(
+                listOfNotNull(
+                    selector.text,
+                    selector.viewId,
+                    selector.description,
+                    selector.className,
+                ),
+            )
+        }
+        lineParams.vision.readyText?.let(::add)
     }
     // Android 的 ICU 正则不接受转义花括号 `\{`（桌面 JVM 可以），用 `Regex`
     // 会在设备上抛 PatternSyntaxException，直接击穿编辑器首帧。这里改为纯字符串
@@ -672,6 +780,20 @@ fun RpaVisionSpec.resolve(variables: Map<String, String>): RpaVisionSpec = copy(
 fun RpaTarget.resolve(variables: Map<String, String>): RpaTarget = copy(
     a11y = a11y?.copy(selectors = a11y.selectors.map { it.resolve(variables) }),
     vision = vision?.resolve(variables),
+)
+
+/**
+ * 执行前展开 D 类分线通道参数里的变量（选择器文本 + readyText）；
+ * 比例点 / 枚举 / 布尔是结构值，不参与变量替换。
+ */
+fun RpaLineParams.resolve(variables: Map<String, String>): RpaLineParams = copy(
+    a11y = a11y.copy(
+        readySelector = a11y.readySelector?.resolve(variables),
+        inputSelector = a11y.inputSelector?.resolve(variables),
+        anchorSelector = a11y.anchorSelector?.resolve(variables),
+        readScope = a11y.readScope?.resolve(variables),
+    ),
+    vision = vision.copy(readyText = resolveVariables(vision.readyText, variables)),
 )
 
 /** 一次定位命中。 */

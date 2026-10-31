@@ -19,9 +19,12 @@
 
 package com.verlintas.baic2.floatball.rpa
 
+import com.verlintas.rpa.model.RpaA11yLineParams
 import com.verlintas.rpa.model.RpaA11ySpec
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaIds
+import com.verlintas.rpa.model.RpaInputChannel
+import com.verlintas.rpa.model.RpaLineParams
 import com.verlintas.rpa.model.RpaMatchMode
 import com.verlintas.rpa.model.RpaMode
 import com.verlintas.rpa.model.RpaParams
@@ -32,6 +35,7 @@ import com.verlintas.rpa.model.RpaSelector
 import com.verlintas.rpa.model.RpaStep
 import com.verlintas.rpa.model.RpaTarget
 import com.verlintas.rpa.model.RpaVisionKind
+import com.verlintas.rpa.model.RpaVisionLineParams
 import com.verlintas.rpa.model.RpaVisionLocator
 import com.verlintas.rpa.model.RpaVisionSpec
 
@@ -71,6 +75,21 @@ object RpaWechatHelloFixture {
                 params = RpaParams(packageName = imPackage),
                 timeoutMs = 15_000,
                 delayAfterMs = launchDelayMs,
+                // 启动完成判定（spec §2.1）：a11y 等「微信」文本节点出现，
+                // 无 a11y 等屏幕出现「微信」（OCR）。2026-10-31 真机取证：微信
+                // 8.x 树里带文本的节点均 clickable=false（可点击的是外层容器），
+                // 故与拾取回填 toRpaSelector 同语义只设 enabledOnly——点击按
+                // 坐标派发，落点天然命中容器。
+                lineParams = RpaLineParams(
+                    a11y = RpaA11yLineParams(
+                        readySelector = RpaSelector(
+                            text = "微信",
+                            textMatch = RpaMatchMode.CONTAINS,
+                            enabledOnly = true,
+                        ),
+                    ),
+                    vision = RpaVisionLineParams(readyText = "微信"),
+                ),
             ),
             step(
                 action = RpaAction.TAP,
@@ -111,6 +130,9 @@ object RpaWechatHelloFixture {
                     clearFirst = true,
                 ),
                 timeoutMs = 5_000,
+                // 输入通道（spec §2.1）：a11y 沿用焦点替换写入；无 a11y 剪贴板
+                // 粘贴 + 先清空（全选+删除），不预点焦点。
+                lineParams = INPUT_LINE_PARAMS,
             ),
             step(
                 action = RpaAction.TAP,
@@ -118,10 +140,17 @@ object RpaWechatHelloFixture {
                 target = RpaTarget(
                     a11y = RpaA11ySpec(
                         selectors = listOf(
+                            // 2026-10-31 真机取证（微信 8.0.79 FTS 结果页）：搜索
+                            // 框 EditText 的 text 也恰为刚输入的完整联系人名，单靠
+                            // CONTAINS 会先命中搜索框（点空、不进聊天页）；「包含:」
+                            // 聊天记录行的 text 也含全名。结果行名节点是 TextView
+                            // （com.tencent.mm:id/odf）且 text 恰为完整显示名，
+                            // 故 EXACT + TextView 双条件唯一锁定联系人行。
                             RpaSelector(
                                 text = "\${contactName}",
-                                textMatch = RpaMatchMode.CONTAINS,
-                                clickableOnly = true,
+                                textMatch = RpaMatchMode.EXACT,
+                                className = "android.widget.TextView",
+                                enabledOnly = true,
                             ),
                         ),
                         pick = RpaPick.FIRST,
@@ -175,6 +204,8 @@ object RpaWechatHelloFixture {
                 label = "输入你好",
                 params = RpaParams(text = "你好", clearFirst = true),
                 timeoutMs = 5_000,
+                // 同「输入联系人」的输入通道设计（spec §2.1 步骤6）。
+                lineParams = INPUT_LINE_PARAMS,
             ),
             step(
                 action = RpaAction.TAP,
@@ -221,6 +252,20 @@ object RpaWechatHelloFixture {
         updatedAt = now,
     )
 
+    /**
+     * INPUT_TEXT 步骤的 D 类分线通道参数（spec §2.1 步骤3/6 同款）：a11y
+     * inputSelector=空（沿用焦点）、appendMode=替换（SET_TEXT）；无 a11y
+     * inputChannel=CLIPBOARD_PASTE、clearBeforeInput=是、focusPoint=不预点。
+     */
+    private val INPUT_LINE_PARAMS = RpaLineParams(
+        a11y = RpaA11yLineParams(inputSelector = null, appendMode = false),
+        vision = RpaVisionLineParams(
+            inputChannel = RpaInputChannel.CLIPBOARD_PASTE,
+            clearBeforeInput = true,
+            focusPoint = null,
+        ),
+    )
+
     private fun step(
         action: RpaAction,
         label: String,
@@ -228,6 +273,7 @@ object RpaWechatHelloFixture {
         target: RpaTarget? = null,
         timeoutMs: Long = 5_000,
         delayAfterMs: Long = 0,
+        lineParams: RpaLineParams = RpaLineParams(),
     ): RpaStep = RpaStep(
         id = RpaIds.newId("step"),
         action = action,
@@ -236,5 +282,6 @@ object RpaWechatHelloFixture {
         target = target,
         timeoutMs = timeoutMs,
         delayAfterMs = delayAfterMs,
+        lineParams = lineParams,
     )
 }
