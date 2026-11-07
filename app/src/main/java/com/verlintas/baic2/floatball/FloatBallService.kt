@@ -1119,6 +1119,8 @@ class FloatBallService : Service() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                // 保留完整堆栈：生产混淆包里 message 往往难以定位，堆栈可回溯
+                Log.e("FloatBallService", "one shot failed", error)
                 screenAdvisor.reportUnexpected(error.message ?: "unknown")
                 ensureSplit()
             } finally {

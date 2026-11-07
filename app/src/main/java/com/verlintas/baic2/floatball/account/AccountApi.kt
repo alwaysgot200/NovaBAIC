@@ -78,12 +78,14 @@ class AccountApi @Inject constructor(
 
     /**
      * 注册结果（`POST /api/v1/auth/register-company`）。
-     * [activationRequired] 为 false 表示产品注册「注册即用」，不需要激活邮件；
-     * [message] 为服务端成功文案（注册即用口径）。
+     * 服务端统一要求邮箱验证：[activationRequired] 恒为 true，
+     * [mailSent] 表示本轮验证邮件是否发出，[message] 为服务端成功文案。
      */
     data class RegisterResult(
         val tenantId: String?,
         val activationRequired: Boolean,
+        /** 验证邮件是否发送成功（false 时引导用户重发） */
+        val mailSent: Boolean,
         val message: String?,
     )
 
@@ -214,8 +216,8 @@ class AccountApi @Inject constructor(
      * 注册好参谋账号（`POST /api/v1/auth/register-company`）。
      *
      * 只提交产品注册必需字段：邮箱（即登录账号）、密码、确认密码、图形验证码；
-     * 昵称/企业名称/联系电话由服务端按邮箱前缀生成默认值。`productId=haocanmou`
-     * 使注册即用（不绑 tenant_admin、不发激活邮件），只绑好参谋产品角色。
+     * 昵称/企业名称/联系电话由服务端按邮箱前缀生成默认值。服务端注册后统一
+     * 签发激活令牌并发送验证邮件，**邮箱验证通过后才可登录**（activationRequired）。
      * 服务端限流每分钟 5 次；失败抛 [AccountException]（[AccountException.serverMsg]
      * 为 DTO 校验/业务原因原文，UI 直接展示）。
      */
@@ -248,8 +250,31 @@ class AccountApi @Inject constructor(
                 RegisterResult(
                     tenantId = obj["tenantId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() },
                     activationRequired = obj["activationRequired"]?.jsonPrimitive?.content != "false",
+                    mailSent = obj["mailSent"]?.jsonPrimitive?.content != "false",
                     message = message?.takeIf { it.isNotBlank() },
                 )
+            }
+        } catch (e: AccountException) {
+            throw e
+        } catch (e: Exception) {
+            throw AccountException(REASON_NETWORK, cause = e)
+        }
+    }
+
+    /**
+     * 重新发送邮箱验证邮件（`POST /api/v1/auth/activation/resend`）。
+     * 服务端按邮箱重新签发令牌（旧链接作废）并限流每分钟 5 次；
+     * 邮箱不存在时静默成功（防账号枚举）。
+     */
+    suspend fun resendActivation(email: String): Unit = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject { put("email", email) }
+        val request = Request.Builder()
+            .url("${origin()}/api/v1/auth/activation/resend")
+            .post(payload.toString().toRequestBody(JSON_MEDIA))
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                envelope(response.code, response.body?.string().orEmpty())
             }
         } catch (e: AccountException) {
             throw e

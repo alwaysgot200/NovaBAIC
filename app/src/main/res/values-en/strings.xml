@@ -1017,7 +1017,7 @@
     <string name="float_account_register_action">No account? Register</string>
     <string name="float_account_register_title">Register account</string>
     <string name="float_account_register_heading">Create a 好参谋 account</string>
-    <string name="float_account_register_subtitle">Sign in right after registering; no email activation needed</string>
+    <string name="float_account_register_subtitle">Verify your email after registering, then sign in</string>
     <string name="float_account_register_email_hint">Email account</string>
     <string name="float_account_register_email_placeholder">Sign-in account, globally unique</string>
     <string name="float_account_register_password_placeholder">8-20 characters with upper and lower case letters and digits</string>
@@ -1031,8 +1031,11 @@
     <string name="float_account_register_submit_busy">Registering…</string>
     <string name="float_account_register_have_account">Already have an account?</string>
     <string name="float_account_register_login">Back to sign in</string>
-    <string name="float_account_register_success_title">Registered, account activated</string>
-    <string name="float_account_register_success_body">Account %1$s can sign in now</string>
+    <string name="float_account_register_success_title">Registered, please verify your email</string>
+    <string name="float_account_register_success_body">A verification email has been sent to %1$s. Open the link in it, then sign in</string>
+    <string name="float_account_register_success_mail_failed">Account %1$s was created, but the verification email failed to send. Tap below to resend</string>
+    <string name="float_account_register_resend_action">Resend verification email</string>
+    <string name="float_account_register_resend_ok">Verification email resent, please check your inbox</string>
     <string name="float_account_register_success_action">Sign in now</string>
     <string name="float_account_error_network">Network error, please try again later</string>
     <string name="float_account_offline">Cannot connect to the network</string>

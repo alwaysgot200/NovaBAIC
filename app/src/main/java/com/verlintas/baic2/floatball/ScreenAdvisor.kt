@@ -806,6 +806,15 @@ class ScreenAdvisor @Inject constructor(
         _direction.update { it.copy(selected = value) }
     }
 
+    /**
+     * AI 服务是否已配置（单次/连续回合入口的前置检查）。
+     *
+     * 生产上曾出现「未配置上游服务时点单次直接抛混淆后的 NPE」：感知与回合
+     * 之前先把空配置挡在入口，统一落 no_config 状态提示，不再深层抛错。
+     */
+    private suspend fun isServiceConfigured(): Boolean =
+        runCatching { agentRepository.resolveConfig(null) }.getOrNull() != null
+
     /** 清除即时方向，回到仅按长期目标参谋。 */
     fun clearDirection() {
         directionSelected.remove(_direction.value.key)
@@ -895,6 +904,13 @@ class ScreenAdvisor @Inject constructor(
         preheated: String?,
         awaitProjection: Boolean = false,
     ): Flow<Event> = flow {
+        // 未配置 AI 服务：在感知/回合之前直接给出 no_config 提示，
+        // 避免深层空配置解引用（生产偶发混淆后的 NPE）打断单击。
+        if (!isServiceConfigured()) {
+            _transcript.updateStatus(Status.Error(REASON_NO_CONFIG))
+            emit(Event.Failed(REASON_NO_CONFIG))
+            return@flow
+        }
         // 多屏上滑拼接（§6.6）：像素路径且前置条件全满足时，先滚动采集多屏，
         // 成功则直接进入回合；返回 null 静默回退现行单屏感知阶梯。
         val stitched = tryMultiScreenStitch(preheated)

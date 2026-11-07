@@ -131,9 +131,9 @@ class AccountManager @Inject constructor(
     }
 
     /**
-     * 注册好参谋账号（productId=haocanmou，注册即用）。成功返回服务端结果；
+     * 注册好参谋账号（productId=haocanmou，需邮箱验证后激活）。成功返回服务端结果；
      * 失败抛 [AccountException]（REASON_* + 服务端原因），由展示层映射文案。
-     * 注册不自动登录——成功后回登录页由用户登录（登录门口径不变）。
+     * 注册不自动登录——验证邮箱后再由用户登录（登录门口径不变）。
      */
     suspend fun register(
         email: String,
@@ -142,6 +142,9 @@ class AccountManager @Inject constructor(
         code: String?,
         uuid: String?,
     ): AccountApi.RegisterResult = api.register(email, password, confirmPassword, code, uuid)
+
+    /** 重发邮箱验证邮件（注册成功卡片上用户未收到邮件时使用）。 */
+    suspend fun resendActivation(email: String) = api.resendActivation(email)
 
     /**
      * 装包登录门：仅“全新安装”强制先登录；覆盖升级必须保留登录态。

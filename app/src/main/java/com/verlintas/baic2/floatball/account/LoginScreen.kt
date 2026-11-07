@@ -434,6 +434,9 @@ private fun RegisterScreen(
     var errorText by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var registeredEmail by remember { mutableStateOf<String?>(null) }
+    var registeredMailSent by remember { mutableStateOf(true) }
+    var resending by remember { mutableStateOf(false) }
+    var resendHint by remember { mutableStateOf<String?>(null) }
 
     suspend fun refreshCaptcha() {
         captchaLoading = true
@@ -466,8 +469,10 @@ private fun RegisterScreen(
                     code = captchaCode.takeIf { captcha?.enabled == true && it.isNotBlank() },
                     uuid = captcha?.uuid?.takeIf { captcha?.enabled == true },
                 )
-            }.onSuccess {
+            }.onSuccess { result ->
                 busy = false
+                registeredMailSent = result.mailSent
+                resendHint = null
                 registeredEmail = email.trim().lowercase()
             }.onFailure { e ->
                 busy = false
@@ -482,6 +487,28 @@ private fun RegisterScreen(
                 // 验证码用后即焚：失败后立刻换一张，避免重复提交已消费的旧码
                 refreshCaptcha()
             }
+        }
+    }
+
+    /** 未收到验证邮件时重发（服务端重签令牌，旧链接作废） */
+    fun resend() {
+        val target = registeredEmail ?: return
+        if (resending) return
+        resending = true
+        resendHint = null
+        scope.launch {
+            runCatching { accountManager.resendActivation(target) }
+                .onSuccess {
+                    resending = false
+                    registeredMailSent = true
+                    resendHint = context.getString(R.string.float_account_register_resend_ok)
+                }
+                .onFailure { e ->
+                    resending = false
+                    val exception = e as? AccountException
+                    resendHint = exception?.serverMsg?.takeIf { it.isNotBlank() }
+                        ?: context.getString(R.string.float_account_error_network)
+                }
         }
     }
 
@@ -504,8 +531,22 @@ private fun RegisterScreen(
                     if (doneEmail != null) {
                         RegisterSuccessCard(
                             email = doneEmail,
+                            mailSent = registeredMailSent,
+                            onResend = { resend() },
+                            resending = resending,
                             onLogin = { onRegistered(doneEmail) },
                         )
+                        resendHint?.let { hint ->
+                            Text(
+                                text = hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = scheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = Baic2Spacing.md),
+                            )
+                        }
                     } else {
                         Text(
                             text = stringResource(R.string.float_account_register_heading),
@@ -758,10 +799,13 @@ private fun RegisterScreen(
     }
 }
 
-/** 注册成功卡片：账号已开通（注册即用），一键回登录页并预填邮箱。 */
+/** 注册成功卡片：提示完成邮箱验证，未收到邮件可重发；登录入口预填邮箱。 */
 @Composable
 private fun RegisterSuccessCard(
     email: String,
+    mailSent: Boolean,
+    onResend: () -> Unit,
+    resending: Boolean,
     onLogin: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -798,12 +842,23 @@ private fun RegisterSuccessCard(
             )
             Spacer(Modifier.height(Baic2Spacing.sm))
             Text(
-                text = stringResource(R.string.float_account_register_success_body, email),
+                text = stringResource(
+                    if (mailSent) {
+                        R.string.float_account_register_success_body
+                    } else {
+                        R.string.float_account_register_success_mail_failed
+                    },
+                    email,
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = scheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            Spacer(Modifier.height(Baic2Spacing.xl))
+            Spacer(Modifier.height(Baic2Spacing.md))
+            TextButton(onClick = onResend, enabled = !resending) {
+                Text(stringResource(R.string.float_account_register_resend_action))
+            }
+            Spacer(Modifier.height(Baic2Spacing.md))
             Button(
                 onClick = onLogin,
                 shape = RoundedCornerShape(12.dp),
