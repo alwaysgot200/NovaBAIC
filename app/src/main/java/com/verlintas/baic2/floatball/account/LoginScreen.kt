@@ -52,6 +52,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -88,6 +89,7 @@ import com.verlintas.baic2.R
 import com.verlintas.baic2.designsystem.Baic2Spacing
 import com.verlintas.baic2.floatball.AdvisorPage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -390,6 +392,19 @@ private fun isValidRegisterEmail(value: String): Boolean {
     return trimmed.length in 6..50 && RegisterEmailRegex.matches(trimmed)
 }
 
+/** 注册手机号（与服务端 PHONE_PATTERN 一致：1 开头的 11 位号码）。 */
+private val RegisterPhoneRegex = Regex("^1\\d{10}$")
+
+private fun isValidRegisterPhone(value: String): Boolean = RegisterPhoneRegex.matches(value.trim())
+
+/** 短信验证码（服务端 DTO 固定 6 位数字）。 */
+private val RegisterSmsCodeRegex = Regex("^\\d{6}$")
+
+private fun isValidRegisterSmsCode(value: String): Boolean = RegisterSmsCodeRegex.matches(value.trim())
+
+/** 发送成功后的倒计时秒数（与服务端 `sms:cool` 60 秒冷却对齐）。 */
+private const val SmsCountdownSeconds = 60
+
 /**
  * 注册密码（服务端 `IsStrongPassword` 默认规则与 `Length(6,20)` 的交集）：
  * 8-20 位，且同时包含大写字母、小写字母与数字。
@@ -403,9 +418,10 @@ private fun isStrongRegisterPassword(value: String): Boolean =
 /**
  * 原生注册页（替代内嵌站点 WebView 方案）。
  *
- * 四字段：邮箱（即登录账号）、密码、确认密码、图形验证码；昵称/企业名称/联系电话
- * 由服务端按邮箱前缀生成默认值（商业化方案 §5.2 注册即用，productId=haocanmou，
- * 只绑好参谋产品角色、不发激活邮件）。注册成功回登录页并预填邮箱。
+ * 字段：邮箱（即登录账号）、手机号 + 短信验证码（服务端必填，防刷并确立通知主号）、
+ * 密码、确认密码、图形验证码；昵称/企业名称由服务端按邮箱前缀生成默认值
+ * （商业化方案 §5.2，productId=haocanmou 只绑好参谋产品角色）。短信验证不替代
+ * 邮箱激活：注册后仍需点验证邮件才能登录。注册成功回登录页并预填邮箱。
  *
  * 输入法与键盘：Compose 原生输入框没有 WebView 的插入点异常（字符从行首倒插），
  * 外层 [imePadding] 在软键盘弹出时把表单整体上移，聚焦输入框始终可见可编辑。
@@ -420,6 +436,8 @@ private fun RegisterScreen(
     val context = LocalContext.current
     val scheme = MaterialTheme.colorScheme
     var email by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var smsCode by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -428,10 +446,15 @@ private fun RegisterScreen(
     var captcha by remember { mutableStateOf<AccountApi.Captcha?>(null) }
     var captchaLoading by remember { mutableStateOf(false) }
     var emailError by remember { mutableStateOf(false) }
+    var phoneError by remember { mutableStateOf(false) }
+    var smsError by remember { mutableStateOf(false) }
     var passwordError by remember { mutableStateOf(false) }
     var confirmError by remember { mutableStateOf(false) }
     var codeError by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
+    var smsHint by remember { mutableStateOf<String?>(null) }
+    var smsSending by remember { mutableStateOf(false) }
+    var smsCountdown by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var registeredEmail by remember { mutableStateOf<String?>(null) }
     var registeredMailSent by remember { mutableStateOf(true) }
@@ -448,12 +471,65 @@ private fun RegisterScreen(
 
     LaunchedEffect(Unit) { refreshCaptcha() }
 
+    // 发送成功后的本地倒计时，与服务端 60 秒冷却同步；归零后按钮恢复可点。
+    LaunchedEffect(smsCountdown) {
+        if (smsCountdown > 0) {
+            delay(1_000)
+            smsCountdown -= 1
+        }
+    }
+
     fun validate(): Boolean {
         emailError = !isValidRegisterEmail(email)
+        phoneError = !isValidRegisterPhone(phone)
+        smsError = !isValidRegisterSmsCode(smsCode)
         passwordError = !isStrongRegisterPassword(password)
         confirmError = password != confirmPassword
         codeError = captcha?.enabled == true && captchaCode.isBlank()
-        return !emailError && !passwordError && !confirmError && !codeError
+        return !emailError && !phoneError && !smsError &&
+            !passwordError && !confirmError && !codeError
+    }
+
+    /** 发送注册短信验证码：先做本地校验，图形验证码开启时复用当前 code/uuid。 */
+    fun sendSms() {
+        if (busy || smsSending || smsCountdown > 0) return
+        phoneError = !isValidRegisterPhone(phone)
+        if (phoneError) return
+        if (captcha?.enabled == true && captchaCode.isBlank()) {
+            codeError = true
+            errorText = context.getString(R.string.float_account_register_error_code)
+            return
+        }
+        smsSending = true
+        errorText = null
+        smsHint = null
+        scope.launch {
+            runCatching {
+                accountManager.sendSmsCode(
+                    phone = phone.trim(),
+                    code = captchaCode.takeIf { captcha?.enabled == true && it.isNotBlank() },
+                    uuid = captcha?.uuid?.takeIf { captcha?.enabled == true },
+                )
+            }.onSuccess {
+                smsSending = false
+                smsCode = ""
+                smsError = false
+                smsHint = context.getString(R.string.float_account_register_sms_sent)
+                smsCountdown = SmsCountdownSeconds
+            }.onFailure { e ->
+                smsSending = false
+                val exception = e as? AccountException
+                errorText = exception?.serverMsg?.takeIf { it.isNotBlank() } ?: context.getString(
+                    when (exception?.reason) {
+                        AccountApi.REASON_NETWORK -> R.string.float_account_error_network
+                        AccountApi.REASON_BAD_RESPONSE -> R.string.float_account_error_bad_response
+                        else -> R.string.float_account_error_server
+                    },
+                )
+                // 图文验证码可能已被用户看错：失败后换一张，避免用废图反复重试
+                refreshCaptcha()
+            }
+        }
     }
 
     fun submit() {
@@ -464,6 +540,8 @@ private fun RegisterScreen(
             runCatching {
                 accountManager.register(
                     email = email.trim().lowercase(),
+                    phone = phone.trim(),
+                    smsCode = smsCode.trim(),
                     password = password,
                     confirmPassword = confirmPassword,
                     code = captchaCode.takeIf { captcha?.enabled == true && it.isNotBlank() },
@@ -696,6 +774,35 @@ private fun RegisterScreen(
                                         .padding(top = Baic2Spacing.md),
                                 )
 
+                                OutlinedTextField(
+                                    value = phone,
+                                    onValueChange = {
+                                        phone = it.filter { ch -> ch.isDigit() }.take(11)
+                                        phoneError = false
+                                        errorText = null
+                                        smsHint = null
+                                    },
+                                    label = { Text(stringResource(R.string.float_account_register_phone_hint)) },
+                                    placeholder = {
+                                        Text(stringResource(R.string.float_account_register_phone_placeholder))
+                                    },
+                                    singleLine = true,
+                                    enabled = !busy,
+                                    isError = phoneError,
+                                    supportingText = if (phoneError) {
+                                        { Text(stringResource(R.string.float_account_register_error_phone)) }
+                                    } else {
+                                        null
+                                    },
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Phone,
+                                        imeAction = ImeAction.Next,
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = Baic2Spacing.md),
+                                )
+
                                 if (captcha?.enabled == true) {
                                     Row(
                                         modifier = Modifier
@@ -741,6 +848,69 @@ private fun RegisterScreen(
                                             .align(Alignment.End)
                                             .padding(top = Baic2Spacing.xs)
                                             .clickable { scope.launch { refreshCaptcha() } },
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = Baic2Spacing.md),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(Baic2Spacing.sm),
+                                ) {
+                                    OutlinedTextField(
+                                        value = smsCode,
+                                        onValueChange = {
+                                            smsCode = it.filter { ch -> ch.isDigit() }.take(6)
+                                            smsError = false
+                                            errorText = null
+                                        },
+                                        label = { Text(stringResource(R.string.float_account_register_sms_hint)) },
+                                        placeholder = {
+                                            Text(stringResource(R.string.float_account_register_sms_placeholder))
+                                        },
+                                        singleLine = true,
+                                        enabled = !busy,
+                                        isError = smsError,
+                                        supportingText = if (smsError) {
+                                            { Text(stringResource(R.string.float_account_register_error_sms)) }
+                                        } else {
+                                            null
+                                        },
+                                        keyboardOptions = KeyboardOptions(
+                                            keyboardType = KeyboardType.Number,
+                                            imeAction = ImeAction.Done,
+                                        ),
+                                        keyboardActions = KeyboardActions(onDone = { submit() }),
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    OutlinedButton(
+                                        onClick = { sendSms() },
+                                        enabled = !busy && !smsSending && smsCountdown == 0,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.height(56.dp),
+                                    ) {
+                                        Text(
+                                            text = when {
+                                                smsSending -> stringResource(
+                                                    R.string.float_account_register_sms_sending,
+                                                )
+                                                smsCountdown > 0 -> stringResource(
+                                                    R.string.float_account_register_sms_countdown,
+                                                    smsCountdown,
+                                                )
+                                                else -> stringResource(R.string.float_account_register_send_sms)
+                                            },
+                                            style = MaterialTheme.typography.labelLarge,
+                                        )
+                                    }
+                                }
+                                smsHint?.let { hint ->
+                                    Text(
+                                        text = hint,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = scheme.primary,
+                                        modifier = Modifier.padding(top = Baic2Spacing.xs),
                                     )
                                 }
 

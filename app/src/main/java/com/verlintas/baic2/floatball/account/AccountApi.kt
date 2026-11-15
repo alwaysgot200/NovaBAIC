@@ -174,6 +174,39 @@ class AccountApi @Inject constructor(
         }.getOrElse { Captcha(enabled = false, uuid = "", image = "") }
     }
 
+    /**
+     * 发送注册短信验证码（`POST /api/v1/auth/sms-code`，scene=register 免登录）。
+     *
+     * 服务端在开启图形验证码时只校验不消费 [code]/[uuid]（注册提交时同一张图再用一次），
+     * 同一手机号 60 秒冷却、每日与每 IP 均有限流；失败抛 [AccountException]，
+     * [AccountException.serverMsg] 为「发送过于频繁」「验证码错误」等服务端原因原文。
+     */
+    suspend fun sendSmsCode(
+        phone: String,
+        code: String?,
+        uuid: String?,
+    ): Unit = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject {
+            put("phone", phone)
+            put("scene", SMS_SCENE_REGISTER)
+            if (!code.isNullOrBlank()) put("code", code)
+            if (!uuid.isNullOrBlank()) put("uuid", uuid)
+        }
+        val request = Request.Builder()
+            .url("${origin()}/api/v1/auth/sms-code")
+            .post(payload.toString().toRequestBody(JSON_MEDIA))
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                envelope(response.code, response.body?.string().orEmpty())
+            }
+        } catch (e: AccountException) {
+            throw e
+        } catch (e: Exception) {
+            throw AccountException(REASON_NETWORK, cause = e)
+        }
+    }
+
     suspend fun login(
         username: String,
         password: String,
@@ -215,14 +248,16 @@ class AccountApi @Inject constructor(
     /**
      * 注册好参谋账号（`POST /api/v1/auth/register-company`）。
      *
-     * 只提交产品注册必需字段：邮箱（即登录账号）、密码、确认密码、图形验证码；
-     * 昵称/企业名称/联系电话由服务端按邮箱前缀生成默认值。服务端注册后统一
+     * 只提交产品注册必需字段：邮箱（即登录账号）、手机号 + 短信验证码、密码、确认密码、
+     * 图形验证码；昵称/企业名称由服务端按邮箱前缀生成默认值。服务端注册后统一
      * 签发激活令牌并发送验证邮件，**邮箱验证通过后才可登录**（activationRequired）。
      * 服务端限流每分钟 5 次；失败抛 [AccountException]（[AccountException.serverMsg]
      * 为 DTO 校验/业务原因原文，UI 直接展示）。
      */
     suspend fun register(
         email: String,
+        phone: String,
+        smsCode: String,
         password: String,
         confirmPassword: String,
         code: String?,
@@ -230,6 +265,8 @@ class AccountApi @Inject constructor(
     ): RegisterResult = withContext(Dispatchers.IO) {
         val payload = buildJsonObject {
             put("email", email)
+            put("phone", phone)
+            put("smsCode", smsCode)
             put("password", password)
             put("confirmPassword", confirmPassword)
             put("productId", PRODUCT_ID)
@@ -491,6 +528,9 @@ class AccountApi @Inject constructor(
         const val RECHARGE_URL = "https://www.80fafa.com/Goods/EB827AC2D47CA617"
 
         const val GRANT_TYPE = "password"
+
+        /** 短信验证码场景：注册（免登录，需图形验证码兜底防刷）。 */
+        private const val SMS_SCENE_REGISTER = "register"
 
         /** 错误原因常量（展示层映射 strings.xml 文案）。 */
         const val REASON_NETWORK = "REASON_NETWORK"

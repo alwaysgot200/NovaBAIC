@@ -137,11 +137,18 @@ class AccountManager @Inject constructor(
      */
     suspend fun register(
         email: String,
+        phone: String,
+        smsCode: String,
         password: String,
         confirmPassword: String,
         code: String?,
         uuid: String?,
-    ): AccountApi.RegisterResult = api.register(email, password, confirmPassword, code, uuid)
+    ): AccountApi.RegisterResult =
+        api.register(email, phone, smsCode, password, confirmPassword, code, uuid)
+
+    /** 发送注册短信验证码（图形验证码开启时 [code]/[uuid] 必填，仅校验不消费）。 */
+    suspend fun sendSmsCode(phone: String, code: String?, uuid: String?) =
+        api.sendSmsCode(phone, code, uuid)
 
     /** 重发邮箱验证邮件（注册成功卡片上用户未收到邮件时使用）。 */
     suspend fun resendActivation(email: String) = api.resendActivation(email)

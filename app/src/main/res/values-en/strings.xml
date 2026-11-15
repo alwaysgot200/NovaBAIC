@@ -1023,6 +1023,16 @@
     <string name="float_account_register_password_placeholder">8-20 characters with upper and lower case letters and digits</string>
     <string name="float_account_register_confirm_hint">Confirm password</string>
     <string name="float_account_register_captcha_tip">Hard to read? Tap the image to refresh</string>
+    <string name="float_account_register_phone_hint">Phone number</string>
+    <string name="float_account_register_phone_placeholder">11-digit phone number for SMS code</string>
+    <string name="float_account_register_sms_hint">SMS code</string>
+    <string name="float_account_register_sms_placeholder">6-digit SMS code</string>
+    <string name="float_account_register_send_sms">Send code</string>
+    <string name="float_account_register_sms_sending">Sending…</string>
+    <string name="float_account_register_sms_countdown">Resend in %1$ds</string>
+    <string name="float_account_register_sms_sent">Code sent, please check your SMS</string>
+    <string name="float_account_register_error_phone">Enter a valid phone number</string>
+    <string name="float_account_register_error_sms">Enter the 6-digit SMS code</string>
     <string name="float_account_register_error_email">Enter a valid email address</string>
     <string name="float_account_register_error_password">Password must be 8-20 characters with upper and lower case letters and digits</string>
     <string name="float_account_register_error_confirm">The two passwords do not match</string>
