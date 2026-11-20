@@ -5,5 +5,7 @@
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">localhost</domain>
         <domain includeSubdomains="false">127.0.0.1</domain>
+        <!-- 局域网测试服务器（autojs6_Management GitLab CI 部署，server.origin.test） -->
+        <domain includeSubdomains="false">192.168.1.27</domain>
     </domain-config>
 </network-security-config>
