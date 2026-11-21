@@ -406,7 +406,8 @@ git mergetool / 手工解决
 
 - GitLab `http://192.168.1.101` 项目 **#69**，分支 `laocanmou`；tag 必须指向分支 tip（verify 作业强制校验）。
 - 签名密钥不进 CI 变量：build 作业用 `CI_JOB_TOKEN` 稀疏克隆私有 Secrets 仓；PAT 只存本机
-  `d:\work\Secrets\ci\gitlab-pat.env`（scope=api），工程仓库零密钥。
+  `d:\work\Secrets\ci\gitlab-pat.env`（固定 `trae-baic2-ci`，scope=api，永不过期，已入 Secrets 仓；
+  禁止再建临时 PAT），工程仓库零密钥。
 - 产物只落本机 `releases/vX.Y.Z/`（`.gitignore` 整目录忽略）；CI 侧 build 产物保留 30 天。
 - 模拟器在 1.100 宿主常驻（KVM + ARM 翻译），作业容器走 docker 桥网关 `:5555`；本机走
   SSH 隧道 `127.0.0.1:15555`（`ci-install` / `ci-login` 自动建立）。
