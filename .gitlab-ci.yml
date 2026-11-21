@@ -132,8 +132,11 @@ device:
     - '"$ADB" -s "$TARGET" uninstall com.verlintas.baic2 || true'
     - ./gradlew :app:assembleDebug --parallel
     - ./gradlew :app:connectedDebugAndroidTest --parallel || TEST_RC=$?
+    # AGP 会把 assumeTrue 的「前置不满足」写成 failure；该脚本还原为跳过，
+    # 只有真实断言失败才失败，并把逐条用例打进日志（容器结束即删，日志是唯一现场）。
+    - bash tools/ci-check-androidtest.sh "${TEST_RC:-0}" || CHECK_RC=$?
     - bash tools/ci-smoke.sh app/build/outputs/apk/debug/app-debug.apk ci-out
-    - test "${TEST_RC:-0}" = "0"
+    - test "${CHECK_RC:-0}" = "0"
   artifacts:
     when: always
     expire_in: 14 days
