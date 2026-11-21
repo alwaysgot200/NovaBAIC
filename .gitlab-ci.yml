@@ -16,7 +16,10 @@ default:
 variables:
   ANDROID_HOME: /opt/android-sdk
   ANDROID_SDK_ROOT: /opt/android-sdk
-  GIT_SUBMODULE_STRATEGY: recursive
+  # 1.100 到 github.com 的 HTTPS 克隆会被 TLS 中断（GnuTLS -110），
+  # 且 vendor/assists 不是 Gradle 模块、构建走 Maven AAR，
+  # 三检查也不扫描 vendor，这里不拉 submodule。
+  GIT_SUBMODULE_STRATEGY: none
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.parallel=true"
 
 # ---- 质量门：标签校验 + 仓库三检查 + 单测 + lint ----
