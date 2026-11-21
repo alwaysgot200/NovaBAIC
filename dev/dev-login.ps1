@@ -62,7 +62,7 @@ if ($Reset) {
 if ([string]::IsNullOrWhiteSpace($Origin)) {
     $conf = Join-Path $Root 'server-config.properties'
     if (-not (Test-Path $conf)) { throw "缺少 $conf，无法读取测试环境地址" }
-    $line = Get-Content $conf | Where-Object { $_ -match '^\s*server\.origin\.test\s*=' } | Select-Object -First 1
+    $line = Get-Content -Encoding UTF8 $conf | Where-Object { $_ -match '^\s*server\.origin\.test\s*=' } | Select-Object -First 1
     if (-not $line) { throw 'server-config.properties 缺少 server.origin.test' }
     $Origin = ($line -split '=', 2)[1].Trim()
 }
