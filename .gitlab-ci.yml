@@ -29,10 +29,9 @@ verify:
     - set -euo pipefail
     - |
       if [ -n "${CI_COMMIT_TAG:-}" ]; then
-        TAG_COMMIT="$(git rev-list -n1 "$CI_COMMIT_TAG")"
         TIP_COMMIT="$(git ls-remote "$CI_REPOSITORY_URL" refs/heads/laocanmou | awk '{print $1}')"
-        echo "标签 $CI_COMMIT_TAG -> $TAG_COMMIT；laocanmou tip -> $TIP_COMMIT"
-        if [ -z "$TIP_COMMIT" ] || [ "$TAG_COMMIT" != "$TIP_COMMIT" ]; then
+        echo "标签 $CI_COMMIT_TAG -> $CI_COMMIT_SHA；laocanmou tip -> $TIP_COMMIT"
+        if [ -z "$TIP_COMMIT" ] || [ "$CI_COMMIT_SHA" != "$TIP_COMMIT" ]; then
           echo "标签没有指向 laocanmou 最新提交，拒绝发布。"
           exit 1
         fi
@@ -81,8 +80,8 @@ build:
       set -a; . ./signing.env; set +a
       mkdir -p ci-keystore
       printf '%s' "$BAIC2_KEYSTORE_BASE64" | base64 -d > ci-keystore/baic2-release.keystore
+      export BAIC2_KEYSTORE_PATH="$CI_PROJECT_DIR/ci-keystore/baic2-release.keystore"
     - ./gradlew :app:assembleRelease :app:assembleDebug -Pbaic.versionName="$BAIC_VERSION_NAME" -Pbaic.versionCode="$BAIC_VERSION_CODE" --parallel
-    - export BAIC2_KEYSTORE_PATH="$CI_PROJECT_DIR/ci-keystore/baic2-release.keystore"
     - |
       set -euo pipefail
       APK="$(ls app/build/outputs/apk/release/*.apk | head -n1)"
