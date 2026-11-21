@@ -445,3 +445,73 @@ git mergetool / 手工解决
    - 驱动坐标以 screencap 像素为准（`dumpsys window` mAttrs y 与实绘差 104px
      状态栏 inset）；adb 注入三分法：`tap`=普通 View click、`motionevent
      DOWN/UP`=GestureDetector 单击、`swipe` 会触发扇形拖拽 bug 禁用于浮窗。
+
+---
+
+## 9. 测试环境免登录（仅限 192.168.1.27 测试包）
+
+> **仅用于开发/功能测试。** 免登录开关由 `AccountApi.TEST_LOGIN_ENABLED`
+> （`!SERVER_ORIGIN.startsWith("https://")`）硬控：生产 https 发行包恒不放行，
+> `debugToken` 会被直接忽略。禁止为测试再新增其他绕过登录门的入口。
+
+### 机制
+
+1. 测试服已关闭图形验证码（`sys_config` 的 `sys.account.captchaEnabled=false`），
+   `POST <origin>/api/v1/auth/login`（`clientId=haocanmou`、`grantType=password`）可直接换 token；
+2. `MainActivity` 冷启动时把 `debugToken/debugUsername/debugExpireSeconds` 交给
+   `AccountManager.debugInjectFromIntent`：写入 `float_account` 偏好、消费装包登录门，
+   等价于正常登录完成；
+3. 脚本 `dev/dev-login.ps1` 把「读取测试 origin → 登录取 token → adb 注入冷启动 → 校验会话」串成一条命令。
+
+### 用法
+
+```powershell
+# 前提：server-config.properties 的 server.origin.test=http://192.168.1.27
+# 且 debug 构建用测试 origin（server.env 留空时 debug 自动走 test）
+
+.\build-client.ps1 build                       # 构建 debug APK
+.\dev\dev-login.ps1 -Install                   # 安装 + 注入登录 + 冷启动
+.\dev\dev-login.ps1                            # 仅注入已安装的测试包
+.\dev\dev-login.ps1 -Email ricky.ruixiwu@gmail.com
+.\dev\dev-login.ps1 -Reset                     # pm clear，回到正常登录页
+```
+
+多设备时用 `-Serial 449c98301422` 指定真机。脚本内置硬校验：
+origin 必须匹配 `^http://192\.168\.1\.27`，否则拒绝执行。
+
+### 自动化测试（Computer Use / adb）流程
+
+`dev-login.ps1` 是测试前置，不替代 `build-client.ps1`：它只负责注入已登录会话，
+让 Computer Use（配合 scrcpy 镜像）或 adb 从主界面开始操作，不会卡在登录页/验证码。
+
+1. `.\build-client.ps1 build` 构建 debug APK；
+2. `.\dev\dev-login.ps1 -Install` 安装并注入登录态（已安装可省略 `-Install`）；
+3. Computer Use 操作镜像窗口，或直接用 adb 做 UI 自动化；
+4. 测试结束执行 `.\dev\dev-login.ps1 -Reset` 清除登录态。
+
+等价手工命令（便于排障）：
+
+```powershell
+adb shell am force-stop com.verlintas.baic2
+adb shell am start -n com.verlintas.baic2/.MainActivity `
+  --es debugToken "<access_token>" --es debugUsername "<email>" --el debugExpireSeconds 2592000
+adb shell run-as com.verlintas.baic2 cat shared_prefs/float_account.xml   # 确认 username/expire_at
+```
+
+### 测试账号（密码统一 `1qaz2WSX`）
+
+| 邮箱 | 租户 | 产品广场 | 说明 |
+| --- | --- | --- | --- |
+| `ruixiwu@163.com` | 100100 | 好参谋 + AutoJs6 | 默认账号（标准版） |
+| `35969378@qq.com` | 100099 | 好参谋 | 单产品 |
+| `ricky.ruixiwu@gmail.com` | 100101 | 好参谋 + AutoJs6 + Moni | 专业版 |
+| `wuruixi@80topway.com` | 100001 | 四产品（含群控） | 旗舰版；测试库原有账号，未重建 |
+
+数据由 `d:/work/autojs6_Management/apps/server/prisma/seed-demo.cjs`
+（`npm run seed:demo` / `-Reset`）在测试库维护；重置数据库后先跑种子脚本再执行本流程。
+
+### 红线
+
+- 禁止把测试服务器地址打进 release 包（发版前确认 `server.env` 为空或 `prod`）。
+- token 只允许出现在本机 adb 命令行/临时日志中，提交与文档里保持掩码。
+- `debugToken` 注入仅限测试包；发现 origin 指向生产时必须立即停止并 `-Reset` 清理。
