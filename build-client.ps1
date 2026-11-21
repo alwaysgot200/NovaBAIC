@@ -1728,14 +1728,20 @@ function Invoke-CiLogin {
         return $false
     }
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Serial $serial -Install
-    if ($LASTEXITCODE -eq 0) { return $true }
+    # 子进程输出显式收回本进程再打印: 直接 & powershell.exe 时, 在重定向/自动化环境里
+    # 子进程写的是控制台句柄, 父脚本的日志文件可能收不到。
+    $devLog = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Serial $serial -Install 2>&1 | Out-String)
+    $devCode = $LASTEXITCODE
+    Write-Host $devLog
+    if ($devCode -eq 0) { return $true }
 
     # 模拟器上可能还是 release 包 (签名不同导致 install 失败), 卸掉重试一次
     Write-Host 'dev-login 失败: 若当前装的是 release 包, 卸载后重试 ...' -ForegroundColor Yellow
     & $Adb -s $serial uninstall $AppId 2>$null | Out-Null
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Serial $serial -Install
-    return ($LASTEXITCODE -eq 0)
+    $devLog = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Serial $serial -Install 2>&1 | Out-String)
+    $devCode = $LASTEXITCODE
+    Write-Host $devLog
+    return ($devCode -eq 0)
 }
 
 # ---------- 子菜单: 远程发布 / CI ----------
