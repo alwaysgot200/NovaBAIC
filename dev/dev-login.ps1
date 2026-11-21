@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    好参谋测试环境免登录：换取 token 并以 debugToken 注入会话（仅限 192.168.1.27）。
+    好参谋测试环境免登录：token 注入并以 debugToken 灌入会话（仅限 192.168.1.27）。
 
 .DESCRIPTION
     仅用于开发/功能测试。生产构建（SERVER_ORIGIN 为 https）下 App 会忽略 debugToken，
@@ -8,7 +8,8 @@
 
     流程：
       1. 读取 server-config.properties 的 server.origin.test（可用 -Origin 覆盖）；
-      2. POST <origin>/api/v1/auth/login（clientId=haocanmou）换取 access_token；
+      2. 调用 autojs6_Management 的 scripts/test-token.ps1，由测试服登录会话工厂
+         直接签发 token（clientId=haocanmou，不经过登录页、不关闭/识别验证码）；
       3. adb force-stop 后带 --es debugToken 冷启动 MainActivity，由
          AccountManager.debugInjectFromIntent 落盘会话并消费装包登录门；
       4. 读 float_account 偏好确认 username / expire_at 已写入。
@@ -21,7 +22,6 @@
 #>
 param(
     [string]$Email = 'ruixiwu@163.com',
-    [string]$Password = '1qaz2WSX',
     [string]$Origin = '',
     [string]$Serial = '',
     [switch]$Install,
@@ -82,31 +82,27 @@ if ($Install) {
     if ($LASTEXITCODE -ne 0) { throw 'adb install 失败' }
 }
 
-# ---------- 登录取 token ----------
-$body = @{
-    username  = $Email
-    password  = $Password
-    clientId  = 'haocanmou'
-    grantType = 'password'
-} | ConvertTo-Json
+# ---------- token 注入（服务端签发 JWT + Redis 会话，不走登录接口） ----------
+$MgmtRoot = $env:AUTOJS6_MGMT_ROOT
+if ([string]::IsNullOrWhiteSpace($MgmtRoot)) {
+    $MgmtRoot = 'd:\work\autojs6_Management'
+}
+$TokenScript = Join-Path $MgmtRoot 'scripts\test-token.ps1'
+if (-not (Test-Path $TokenScript)) {
+    throw "找不到 token 注入脚本：$TokenScript（可用 AUTOJS6_MGMT_ROOT 指定 autojs6_Management 路径）"
+}
 
-Write-Host "[dev-login] 登录 $Origin/api/v1/auth/login ($Email)" -ForegroundColor Cyan
+Write-Host "[dev-login] 注入 token ($Email, clientId=haocanmou)" -ForegroundColor Cyan
 try {
-    $resp = Invoke-RestMethod -Method Post -Uri "$Origin/api/v1/auth/login" `
-        -ContentType 'application/json' -Body $body
+    $tokenInfo = & $TokenScript -Email $Email -ClientId 'haocanmou' -Json | ConvertFrom-Json
 } catch {
-    $detail = $_.ErrorDetails.Message
-    if (-not $detail) { $detail = $_.Exception.Message }
-    throw "登录请求失败：$detail"
+    throw "token 签发失败：$($_.Exception.Message)"
 }
-if ($null -ne $resp.code -and [int]$resp.code -ne 200) {
-    throw "登录失败：code=$($resp.code) msg=$($resp.msg)"
-}
-$token = $resp.data.access_token
-if ([string]::IsNullOrWhiteSpace($token)) { throw '登录响应缺少 access_token' }
+$token = $tokenInfo.token
+if ([string]::IsNullOrWhiteSpace($token)) { throw 'token 签发失败：响应缺少 token' }
 
 $expireIn = 0
-if ($null -ne $resp.data.expire_in) { $expireIn = [long]$resp.data.expire_in }
+if ($null -ne $tokenInfo.expireIn) { $expireIn = [long]$tokenInfo.expireIn }
 if ($expireIn -le 0) { $expireIn = 30L * 24 * 60 * 60 }
 $expireAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + $expireIn
 

@@ -481,12 +481,15 @@ git mergetool / 手工解决
 
 ### 机制
 
-1. 测试服已关闭图形验证码（`sys_config` 的 `sys.account.captchaEnabled=false`），
-   `POST <origin>/api/v1/auth/login`（`clientId=haocanmou`、`grantType=password`）可直接换 token；
+1. 测试服**必须保持图形验证码开启**（`sys.account.captchaEnabled=true`），禁止关闭或识别验证码；
+   免登录统一走 token 注入：调用
+   `d:\work\autojs6_Management\scripts\test-token.ps1 -ClientId haocanmou -Json`
+   （可用 `AUTOJS6_MGMT_ROOT` 覆盖仓库根目录），由服务端登录会话工厂签发 JWT + Redis 会话，
+   不请求 `/auth/login`；
 2. `MainActivity` 冷启动时把 `debugToken/debugUsername/debugExpireSeconds` 交给
    `AccountManager.debugInjectFromIntent`：写入 `float_account` 偏好、消费装包登录门，
    等价于正常登录完成；
-3. 脚本 `dev/dev-login.ps1` 把「读取测试 origin → 登录取 token → adb 注入冷启动 → 校验会话」串成一条命令。
+3. 脚本 `dev/dev-login.ps1` 把「读取测试 origin → token 注入 → adb 注入冷启动 → 校验会话」串成一条命令。
 
 ### 用法
 
