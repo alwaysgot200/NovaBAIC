@@ -346,10 +346,11 @@ UI 文案不得承诺「永久存活」。国产 ROM 自启跳转表在 `KeepAli
 ## 7. Git 与上游合并协议
 
 - **分支**：开发永远在 `laocanmou`；不直接动本地 `main`（它是上游的镜像）。
-- **远程纪律（2026-11-22 固化）**：日常开发/测试的提交、`laocanmou` 分支与测试 tag 只推
-  `gitlab`（`http://192.168.1.101` 项目 #69），**禁止推 `origin`（GitHub）**；`origin`
-  仅在用户当次明确要求生产发版时接收 `v*` tag（触发 GitHub Release，供下载中心同步）。
-  GitHub 仅作发布与上游镜像，不做日常同步。
+- **远程纪律（2026-11-22 固化）**：日常开发/测试只推 `gitlab`（`http://192.168.1.101`
+  项目 #69），且自动化构建/部署只由 `vX.Y.Z` tag 触发——代码与测试 tag 推 `gitlab`，
+  普通分支推送不触发流水线。**禁止推 `origin`（GitHub）**——GitHub 只在正式生产部署前
+  同步推送一次（代码 + `v*` tag，触发 GitHub Release 供下载中心同步），日常提交不推，
+  避免 GitHub 历史过多过乱。
 - **提交信息**：Conventional Commits（`feat:`/`fix:`/`docs:`/`refactor:`…），
   中文描述，与上游历史风格一致；触碰白名单外上游文件加 `[upstream-touch]`。
 - **合并节奏**：上游发版后尽快合并，攒得越多越难合。
