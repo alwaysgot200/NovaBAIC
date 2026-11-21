@@ -24,6 +24,7 @@
     .\build-client.ps1 build            # 仅构建 Debug APK
     .\build-client.ps1 test             # 单元测试
     .\build-client.ps1 help             # 全部命令
+    .\build-client.ps1 ci -Commit -Install   # 发版并自动装到 1.100 模拟器
 #>
 param(
     [Parameter(Position = 0)]
@@ -37,7 +38,8 @@ param(
         'smoke', 'record', 'record-stop',
         'start-emu', 'kill-emu',
         'clean', 'rebuild', 'release', 'install-release',
-        'apk'
+        'apk',
+        'ci', 'ci-status', 'ci-download', 'ci-retag', 'ci-install', 'ci-login'
     )]
     [string] $Command = 'menu',
 
@@ -46,7 +48,21 @@ param(
     [string] $Device = '',
 
     # 部署后不附着 logcat
-    [switch] $NoLog
+    [switch] $NoLog,
+
+    # ---- GitLab CI 远程发版 (ci / ci-retag / ci-install 使用) ----
+
+    # 版本号 vX.Y.Z; ci 缺省自动取「已有最大补丁号 +1」
+    [string] $Version = '',
+
+    # ci: 允许把工作区全部改动提交进发版提交 (默认脏工作区直接拒绝)
+    [switch] $Commit,
+
+    # ci: 发版提交说明 (缺省 chore(release): <版本>)
+    [string] $ReleaseMessage = '',
+
+    # ci: 流水线通过后直接安装到 1.100 的模拟器
+    [switch] $Install
 )
 
 # ======================== 项目配置 ========================
@@ -67,6 +83,24 @@ $GradleExtraArgs = @('--console=plain')
 
 # 模拟器冷启动超时 (秒), 首次开机可能较慢
 $BootTimeoutSec = 300
+
+# ======================== GitLab CI 远程发布 ========================
+
+# 1.100 上的 GitLab + Docker Runner: 推送 vX.Y.Z tag 自动跑 verify -> build -> device,
+# 签名包作为 build 作业产物保留 30 天。GitLab 侧不存任何密钥。
+$GitLabHost = 'http://192.168.1.101'
+$GitLabProjectId = 69
+$GitLabRemote = 'gitlab'          # 本仓库指向 GitLab 的 remote 名
+$GitLabBranch = 'laocanmou'
+# PAT 只存本机 Secrets 仓 (ci/gitlab-pat.env, scope=api), 工程仓库不落任何密钥
+$GitLabTokenFile = 'D:\work\Secrets\ci\gitlab-pat.env'
+# 构建产物落本机 releases/, 已被 .gitignore 整目录忽略
+$ReleaseDir = Join-Path $ProjectDir 'releases'
+# 1.100 的模拟器 sidecar 只监听容器回环 5555, 本机经 SSH 隧道访问
+$RemoteEmulatorSshHost = 'moni-cibuild'
+$RemoteEmulatorLocalPort = 15555
+# 等流水线上限 (秒): 冷缓存 verify ~15 分钟, 留足余量
+$CiTimeoutSec = 2700
 
 # 保证 adb 输出 (exec-out 文本) 在 PS 5.1 下按 UTF-8 解码
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -1135,6 +1169,648 @@ function Invoke-RunWorkflow {
     return $true
 }
 
+# ======================== GitLab CI 远程发布 ========================
+
+# 发版闭环: 本机 ci -> 推送 laocanmou + vX.Y.Z tag -> 1.100 Runner 自动构建
+# -> 下载签名 APK 到 releases/<tag> -> (可选) 装进 1.100 模拟器。
+# 所有 GitLab 访问都走 REST API + 本机 PAT, 不依赖 gitlab 网页会话。
+
+# ---------- CI: 凭据 / API ----------
+
+function Get-GitLabToken {
+    if (-not (Test-Path $GitLabTokenFile)) {
+        Write-Host "未找到 GitLab PAT 文件: $GitLabTokenFile" -ForegroundColor Red
+        Write-Host '请创建 PAT (scope=api) 并写入: GITLAB_PAT=glpat-xxx' -ForegroundColor Yellow
+        return $null
+    }
+    $line = (Get-Content $GitLabTokenFile -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^\s*GITLAB_PAT\s*=' } | Select-Object -First 1)
+    if (-not $line) {
+        Write-Host "PAT 文件缺少 GITLAB_PAT= 行: $GitLabTokenFile" -ForegroundColor Red
+        return $null
+    }
+    $token = ($line -split '=', 2)[1].Trim()
+    if (-not $token) {
+        Write-Host "PAT 文件中的 GITLAB_PAT 为空: $GitLabTokenFile" -ForegroundColor Red
+        return $null
+    }
+    return $token
+}
+
+# 调 GitLab REST API; 失败返回 $null (调用方统一按失败处理, 不抛异常)
+function Invoke-GitLabApi {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [string] $Method = 'GET',
+        [hashtable] $Form
+    )
+
+    $token = Get-GitLabToken
+    if (-not $token) { return $null }
+    $uri = '{0}/api/v4{1}' -f $GitLabHost, $Path
+    $headers = @{ 'PRIVATE-TOKEN' = $token }
+    try {
+        if ($Form) {
+            return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -Body $Form `
+                -ContentType 'application/x-www-form-urlencoded' -TimeoutSec 30
+        }
+        return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -TimeoutSec 30
+    }
+    catch {
+        Write-Host "GitLab API 失败: $Method $Path" -ForegroundColor Red
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor DarkGray
+        return $null
+    }
+}
+
+# 取 job 日志尾部: 构建失败时本机直接看关键报错 (作业容器结束即删, 日志是唯一现场)
+function Get-GitLabJobTrace {
+    param(
+        [Parameter(Mandatory = $true)][int] $JobId,
+        [int] $Tail = 80
+    )
+    $token = Get-GitLabToken
+    if (-not $token) { return }
+    $uri = '{0}/api/v4/projects/{1}/jobs/{2}/trace' -f $GitLabHost, $GitLabProjectId, $JobId
+    try {
+        $resp = Invoke-WebRequest -Uri $uri -Headers @{ 'PRIVATE-TOKEN' = $token } `
+            -UseBasicParsing -TimeoutSec 30
+        $lines = @($resp.Content -split "`r?`n" | Where-Object { $_ -ne '' })
+        if ($lines.Count -gt $Tail) { $lines = $lines[($lines.Count - $Tail)..($lines.Count - 1)] }
+        Write-Host ("---- job #{0} 日志尾部 (最后 {1} 行) ----" -f $JobId, $Tail) -ForegroundColor DarkGray
+        $lines | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    }
+    catch {
+        Write-Host "读取 job #$JobId 日志失败: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# ---------- CI: git / 版本 ----------
+
+# 执行 git 并把输出直接打到控制台, 只把成功/失败 (bool) 作为返回值,
+# 避免 git 的文本输出污染调用方的 if 判断。
+function Invoke-Git {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]] $Arguments)
+    & git -C $ProjectDir @Arguments | Write-Host
+    return ($LASTEXITCODE -eq 0)
+}
+
+# 自动版本号: 取已有最大 vX.Y.Z 的补丁号 +1; 无 tag 从 v1.0.0 起步。
+# 调用前应先 git fetch <remote> --tags, 避免和远端已有 tag 撞号。
+function Get-NextReleaseVersion {
+    $max = $null
+    foreach ($t in @(& git -C $ProjectDir tag --list 'v*' 2>$null)) {
+        $s = ($t | Out-String).Trim()
+        if ($s -notmatch '^v(\d+)\.(\d+)\.(\d+)$') { continue }
+        $num = [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
+        if ($null -eq $max -or $num -gt $max.Num) {
+            $max = [pscustomobject]@{
+                Num   = $num
+                Major = [int]$Matches[1]
+                Minor = [int]$Matches[2]
+                Patch = [int]$Matches[3]
+            }
+        }
+    }
+    if ($null -eq $max) { return 'v1.0.0' }
+    if ($max.Patch -ge 99) { return ('v{0}.{1}.0' -f $max.Major, ($max.Minor + 1)) }
+    return ('v{0}.{1}.{2}' -f $max.Major, $max.Minor, ($max.Patch + 1))
+}
+
+# ---------- CI: 流水线 ----------
+
+# 按 ref 列流水线 (tag 触发流水线的 ref 就是 tag 名)
+function Get-CiPipelinesByRef {
+    param([Parameter(Mandatory = $true)][string] $Ref)
+    $list = Invoke-GitLabApi -Path ("/projects/{0}/pipelines?ref={1}&per_page=20" -f $GitLabProjectId, [uri]::EscapeDataString($Ref))
+    if (-not $list) { return }
+    @(@($list) | Where-Object { $_.ref -eq $Ref })
+}
+
+# 等 tag push 后新出现的流水线; 排除推送前已存在的 id, 重打 tag 时才不会抓到旧流水线。
+function Wait-NewCiPipeline {
+    param(
+        [Parameter(Mandatory = $true)][string] $Ref,
+        [int[]] $ExcludeIds = @(),
+        [int] $TimeoutSec = 180
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 5
+        foreach ($p in @(Get-CiPipelinesByRef -Ref $Ref)) {
+            if ($ExcludeIds -contains [int]$p.id) { continue }
+            return $p
+        }
+    }
+    return $null
+}
+
+function Wait-CiPipeline {
+    param(
+        [Parameter(Mandatory = $true)][int] $PipelineId,
+        [int] $TimeoutSec = $CiTimeoutSec
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $last = ''
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 10
+        $p = Invoke-GitLabApi -Path "/projects/$GitLabProjectId/pipelines/$PipelineId"
+        if (-not $p) { continue }
+        $status = "$($p.status)"
+        if ($status -ne $last) {
+            $last = $status
+            Write-Host ("  [{0}] pipeline #{1} -> {2}" -f (Get-Date -Format 'HH:mm:ss'), $PipelineId, $status) -ForegroundColor Cyan
+        }
+        if ($status -in @('success', 'failed', 'canceled', 'skipped')) { return $p }
+    }
+    Write-Host "等待流水线超时 (${TimeoutSec}s), 稍后用 ci-status 查看。" -ForegroundColor Yellow
+    return $null
+}
+
+# 打印流水线作业明细 (耗时/状态/失败原因), 失败作业自动附日志尾部
+function Show-CiJobs {
+    param([Parameter(Mandatory = $true)][int] $PipelineId)
+
+    $jobs = Invoke-GitLabApi -Path "/projects/$GitLabProjectId/pipelines/$PipelineId/jobs?per_page=100"
+    if (-not $jobs) { return }
+    Write-Host ("作业明细 (pipeline #{0}):" -f $PipelineId) -ForegroundColor Cyan
+    foreach ($j in @($jobs)) {
+        $dur = if ($j.duration) { [TimeSpan]::FromSeconds([double]$j.duration).ToString('mm\:ss') } else { '-' }
+        $color = switch ("$($j.status)") {
+            'success' { 'Green' }
+            'failed' { 'Red' }
+            default { 'Yellow' }
+        }
+        $extra = if ($j.failure_reason) { " ($($j.failure_reason))" } else { '' }
+        Write-Host ("  {0,-8} {1,-9} {2,7}{3}" -f $j.name, $j.status, $dur, $extra) -ForegroundColor $color
+    }
+    foreach ($j in @($jobs | Where-Object { $_.status -eq 'failed' })) {
+        Get-GitLabJobTrace -JobId $j.id -Tail 60
+    }
+}
+
+function Show-CiStatus {
+    param([int] $Limit = 8)
+
+    $pipelines = Invoke-GitLabApi -Path ("/projects/{0}/pipelines?per_page={1}" -f $GitLabProjectId, $Limit)
+    if (-not $pipelines) { return }
+    Write-Host ("最近 {0} 条流水线 ({1}, 项目 #{2}):" -f $Limit, $GitLabHost, $GitLabProjectId) -ForegroundColor Cyan
+    foreach ($p in @($pipelines)) {
+        $color = switch ("$($p.status)") {
+            'success' { 'Green' }
+            'failed' { 'Red' }
+            default { 'Yellow' }
+        }
+        $shortSha = if ($p.sha) { "$($p.sha)".Substring(0, [Math]::Min(8, "$($p.sha)".Length)) } else { '-' }
+        Write-Host ("  #{0,-5} {1,-9} {2,-12} {3} {4}" -f $p.id, $p.status, $p.ref, $shortSha, $p.created_at) -ForegroundColor $color
+    }
+    $latest = @($pipelines)[0]
+    if ($latest) {
+        Write-Host ''
+        Show-CiJobs -PipelineId $latest.id
+        Write-Host ("  详情: {0}" -f $latest.web_url) -ForegroundColor DarkGray
+    }
+}
+
+function Get-LatestSuccessfulPipeline {
+    $list = Invoke-GitLabApi -Path ("/projects/{0}/pipelines?status=success&per_page=1" -f $GitLabProjectId)
+    if (-not $list) { return $null }
+    return @($list)[0]
+}
+
+# 下载流水线里所有成功作业的产物到 releases/<tag>/, APK 平铺并校验 SHA256
+function Save-CiArtifacts {
+    param(
+        [Parameter(Mandatory = $true)][string] $Tag,
+        [Parameter(Mandatory = $true)][int] $PipelineId
+    )
+
+    $token = Get-GitLabToken
+    if (-not $token) { return $false }
+    $jobs = Invoke-GitLabApi -Path "/projects/$GitLabProjectId/pipelines/$PipelineId/jobs?per_page=100"
+    if (-not $jobs) { return $false }
+
+    $dir = Join-Path $ReleaseDir $Tag
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+    $saved = 0
+    foreach ($j in @($jobs)) {
+        if ($j.status -ne 'success') { continue }
+        if (-not $j.artifacts_file -or -not $j.artifacts_file.filename) { continue }
+
+        $jobDir = Join-Path $dir ('artifacts-' + $j.name)
+        if (Test-Path $jobDir) { Remove-Item $jobDir -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $jobDir | Out-Null
+
+        $zip = Join-Path $dir ('artifacts-' + $j.name + '.zip')
+        $uri = '{0}/api/v4/projects/{1}/jobs/{2}/artifacts' -f $GitLabHost, $GitLabProjectId, $j.id
+        try {
+            Invoke-WebRequest -Uri $uri -Headers @{ 'PRIVATE-TOKEN' = $token } `
+                -OutFile $zip -UseBasicParsing -TimeoutSec 300
+        }
+        catch {
+            Write-Host "下载作业 $($j.name) 产物失败: $($_.Exception.Message)" -ForegroundColor Red
+            continue
+        }
+        Expand-Archive -Path $zip -DestinationPath $jobDir -Force
+        Remove-Item $zip -Force
+        Write-Host "  已下载 $($j.name) 产物 -> $jobDir" -ForegroundColor Green
+        $saved++
+    }
+
+    if ($saved -eq 0) {
+        Write-Host '该流水线没有可下载的作业产物。' -ForegroundColor Yellow
+        return $false
+    }
+
+    # 平铺收口: APK 便于直接安装, mapping.txt 便于崩溃符号化
+    $apk = $null
+    $buildDir = Join-Path $dir 'artifacts-build'
+    if (Test-Path $buildDir) {
+        $apk = Get-ChildItem -Path $buildDir -Recurse -Filter '*.apk' -File | Select-Object -First 1
+    }
+    if (-not $apk) {
+        $apk = Get-ChildItem -Path $dir -Recurse -Filter '*.apk' -File | Select-Object -First 1
+    }
+    if ($apk) {
+        $dest = Join-Path $dir ('NovaBAIC-' + $Tag + '.apk')
+        if ($apk.FullName -ne $dest) { Copy-Item $apk.FullName $dest -Force }
+
+        $hash = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+        $shaFile = Get-ChildItem -Path $dir -Recurse -Filter '*.sha256' -File | Select-Object -First 1
+        if ($shaFile) {
+            $expect = ((Get-Content $shaFile.FullName -ErrorAction SilentlyContinue) -join ' ').Trim()
+            $expect = ($expect -split '\s+')[0].ToLower()
+            if ($expect -eq $hash) {
+                Write-Host "  SHA256 校验通过: $hash" -ForegroundColor Green
+            }
+            elseif ($expect) {
+                Write-Host "  SHA256 不一致: 期望 $expect, 实际 $hash" -ForegroundColor Red
+            }
+        }
+        $sizeMb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
+        Write-Host "  APK: $dest ($sizeMb MB)" -ForegroundColor Green
+    }
+
+    $mapping = Get-ChildItem -Path $dir -Recurse -Filter 'mapping.txt' -File | Select-Object -First 1
+    if ($mapping) { Copy-Item $mapping.FullName (Join-Path $dir 'mapping.txt') -Force }
+    return $true
+}
+
+# 等 tag 流水线跑完并下载产物 (发版 / 重打共用)
+function Wait-CiAndFetch {
+    param(
+        [Parameter(Mandatory = $true)][string] $Tag,
+        [int[]] $ExcludeIds = @(),
+        [switch] $InstallApk
+    )
+
+    $pipeline = Wait-NewCiPipeline -Ref $Tag -ExcludeIds $ExcludeIds
+    if (-not $pipeline) {
+        Write-Host "未等到 tag $Tag 的流水线, 请到 $GitLabHost 查看。" -ForegroundColor Yellow
+        return $false
+    }
+    Write-Host ("流水线 #{0} 已创建: {1}" -f $pipeline.id, $pipeline.web_url) -ForegroundColor Cyan
+
+    $final = Wait-CiPipeline -PipelineId $pipeline.id
+    if (-not $final) { return $false }
+    if ($final.status -ne 'success') {
+        Write-Host ("流水线 #{0} 结束状态: {1}, 未生成 APK。" -f $pipeline.id, $final.status) -ForegroundColor Red
+        Show-CiJobs -PipelineId $pipeline.id
+        return $false
+    }
+
+    Write-Host '流水线全部通过, 下载产物 ...' -ForegroundColor Green
+    $ok = Save-CiArtifacts -Tag $Tag -PipelineId $pipeline.id
+    if ($ok -and $InstallApk) { Install-ReleaseApk -Tag $Tag | Out-Null }
+    return $ok
+}
+
+# ---------- CI: 发版 / 重打 ----------
+
+function Invoke-CiRelease {
+    param(
+        [string] $Tag,
+        [string] $Message,
+        [switch] $CommitAll,
+        [switch] $InstallApk
+    )
+
+    $branch = ((& git -C $ProjectDir rev-parse --abbrev-ref HEAD 2>$null) -join '').Trim()
+    if ($branch -ne $GitLabBranch) {
+        Write-Host "当前分支为 $branch, 发版必须在 $GitLabBranch 上执行。" -ForegroundColor Red
+        return $false
+    }
+
+    # 先同步远端 tag, 自动版本号才不会撞上别处刚发的版本
+    Invoke-Git fetch $GitLabRemote --tags | Out-Null
+
+    if (-not $Tag) { $Tag = Get-NextReleaseVersion }
+    if ($Tag -notmatch '^v\d+\.\d+\.\d+$') {
+        Write-Host "版本号必须形如 v1.0.2 (实际: $Tag)" -ForegroundColor Red
+        return $false
+    }
+
+    $dirty = @(& git -C $ProjectDir status --porcelain 2>$null | Where-Object { $_ -ne '' })
+    if ($dirty.Count -gt 0) {
+        Write-Host "工作区有 $($dirty.Count) 项未提交改动:" -ForegroundColor Yellow
+        $dirty | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+        if (-not $CommitAll) {
+            Write-Host '已中止: 确认这些改动都属于本次发版后, 重新执行并允许提交 (ci -Commit / 菜单确认)。' -ForegroundColor Yellow
+            return $false
+        }
+    }
+
+    # 本地编译门禁: 编译不过就别推 tag 白跑一轮 CI
+    if (-not (Invoke-KotlinCheck)) { return $false }
+
+    if ($dirty.Count -gt 0) {
+        if (-not $Message) { $Message = "chore(release): $Tag" }
+        if (-not (Invoke-Git add -A)) { Write-Host 'git add 失败。' -ForegroundColor Red; return $false }
+        if (-not (Invoke-Git commit -m $Message)) { Write-Host 'git commit 失败。' -ForegroundColor Red; return $false }
+        Write-Host "已提交: $Message" -ForegroundColor Green
+    }
+
+    Write-Host "推送分支 $GitLabBranch -> $GitLabRemote ..." -ForegroundColor Cyan
+    if (-not (Invoke-Git push $GitLabRemote "HEAD:$GitLabBranch")) {
+        Write-Host '推送分支失败。' -ForegroundColor Red
+        return $false
+    }
+
+    $remoteTag = @(& git -C $ProjectDir ls-remote --tags $GitLabRemote "refs/tags/$Tag" 2>$null | Where-Object { $_ -ne '' })
+    if ($remoteTag.Count -gt 0) {
+        Write-Host "远端已存在 tag $Tag; 要重打请用 ci-retag -Version $Tag。" -ForegroundColor Red
+        return $false
+    }
+
+    # 记录推送前该 ref 的流水线 id, 之后只认新出现的那条
+    $prevIds = @(Get-CiPipelinesByRef -Ref $Tag | ForEach-Object { [int]$_.id })
+    if (-not (Invoke-Git tag $Tag)) { Write-Host "创建 tag $Tag 失败。" -ForegroundColor Red; return $false }
+    if (-not (Invoke-Git push $GitLabRemote $Tag)) {
+        Write-Host '推送 tag 失败。' -ForegroundColor Red
+        return $false
+    }
+    Write-Host "已推送 tag $Tag, 等待 GitLab 创建流水线 ..." -ForegroundColor Green
+    return (Wait-CiAndFetch -Tag $Tag -ExcludeIds $prevIds -InstallApk:$InstallApk)
+}
+
+# 重打出错的 tag: 删远端 tag -> 当前 HEAD 重打 -> 重推 -> 等 CI。
+# 典型用途: 代码没问题但 CI 环境性失败 (网络/缓存), 或 tag 打错了提交。
+function Invoke-CiRetag {
+    param([Parameter(Mandatory = $true)][string] $Tag)
+
+    if ($Tag -notmatch '^v\d+\.\d+\.\d+$') {
+        Write-Host "版本号必须形如 v1.0.2 (实际: $Tag)" -ForegroundColor Red
+        return $false
+    }
+    $branch = ((& git -C $ProjectDir rev-parse --abbrev-ref HEAD 2>$null) -join '').Trim()
+    if ($branch -ne $GitLabBranch) {
+        Write-Host "当前分支为 $branch, 重打 tag 必须在 $GitLabBranch 上执行。" -ForegroundColor Red
+        return $false
+    }
+    $dirty = @(& git -C $ProjectDir status --porcelain 2>$null | Where-Object { $_ -ne '' })
+    if ($dirty.Count -gt 0) {
+        Write-Host '工作区有未提交改动: 重打 tag 只会发布已提交内容, 已中止。' -ForegroundColor Yellow
+        return $false
+    }
+
+    # tag 必须指向 laocanmou tip (CI 会校验), 先把本地提交推上去
+    Write-Host "推送分支 $GitLabBranch ..." -ForegroundColor Cyan
+    if (-not (Invoke-Git push $GitLabRemote "HEAD:$GitLabBranch")) {
+        Write-Host '推送分支失败。' -ForegroundColor Red
+        return $false
+    }
+
+    $prevIds = @(Get-CiPipelinesByRef -Ref $Tag | ForEach-Object { [int]$_.id })
+    Write-Host "删除远端 tag $Tag ..." -ForegroundColor Cyan
+    Invoke-Git push $GitLabRemote ":refs/tags/$Tag" | Out-Null
+    Invoke-Git tag -d $Tag | Out-Null
+    if (-not (Invoke-Git tag $Tag)) { Write-Host "创建 tag $Tag 失败。" -ForegroundColor Red; return $false }
+    if (-not (Invoke-Git push $GitLabRemote $Tag)) {
+        Write-Host '推送 tag 失败。' -ForegroundColor Red
+        return $false
+    }
+    Write-Host "已重推 tag $Tag, 等待 GitLab 创建流水线 ..." -ForegroundColor Green
+    return (Wait-CiAndFetch -Tag $Tag -ExcludeIds $prevIds)
+}
+
+# ---------- CI: 1.100 模拟器 ----------
+
+# 1.100 的模拟器 ADB 只监听容器回环 (5555), 本机经 SSH 本地转发访问。
+# 隧道进程 hidden 启动, PID 记录在 %TEMP%\baic2-ci-emu-tunnel.pid 便于手工收尾。
+function Initialize-RemoteEmulator {
+    param(
+        [string] $SshHost = $RemoteEmulatorSshHost,
+        [int] $LocalPort = $RemoteEmulatorLocalPort
+    )
+
+    $serial = '127.0.0.1:' + $LocalPort
+    if (@(Get-AdbDeviceSerials) -contains $serial) {
+        $booted = ((& $Adb -s $serial shell getprop sys.boot_completed 2>$null) -join '').Trim()
+        if ($booted -eq '1') {
+            Write-Host "远程模拟器已在线: $serial" -ForegroundColor Green
+            return $serial
+        }
+    }
+
+    $ssh = Get-Command ssh.exe -ErrorAction SilentlyContinue
+    if (-not $ssh) { $ssh = Get-Command ssh -ErrorAction SilentlyContinue }
+    if (-not $ssh) {
+        Write-Host '未找到 ssh 客户端, 无法建立到 1.100 的模拟器隧道。' -ForegroundColor Red
+        return $null
+    }
+
+    Write-Host "建立 SSH 隧道: 127.0.0.1:$LocalPort -> $SshHost : 127.0.0.1:5555 ..." -ForegroundColor Cyan
+    # BatchMode: 只走密钥不弹密码; ExitOnForwardFailure: 端口被占用时立即失败而不是静默
+    $sshArgs = @(
+        '-N',
+        '-o', 'BatchMode=yes',
+        '-o', 'ExitOnForwardFailure=yes',
+        '-o', 'ServerAliveInterval=30',
+        '-L', "127.0.0.1:${LocalPort}:127.0.0.1:5555",
+        $SshHost
+    )
+    $proc = Start-Process -FilePath $ssh.Source -ArgumentList $sshArgs -WindowStyle Hidden -PassThru
+    $pidFile = Join-Path $env:TEMP 'baic2-ci-emu-tunnel.pid'
+    Set-Content -Path $pidFile -Value $proc.Id -Encoding ASCII
+
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 2
+        & $Adb connect $serial 2>$null | Out-Null
+        if (@(Get-AdbDeviceSerials) -contains $serial) { break }
+        if ($proc.HasExited) { break }
+    }
+    if (-not (@(Get-AdbDeviceSerials) -contains $serial)) {
+        $state = if ($proc.HasExited) { "ssh 已退出, 退出码 $($proc.ExitCode)" } else { 'ssh 仍在运行但端口未通' }
+        Write-Host "adb 未能连接 $serial ($state)" -ForegroundColor Red
+        Write-Host "请确认 $SshHost 可免密登录, 且 1.100 上的模拟器 sidecar 正在运行。" -ForegroundColor Yellow
+        if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+        return $null
+    }
+
+    & $Adb -s $serial wait-for-device | Out-Null
+    $deadline = (Get-Date).AddSeconds(120)
+    while ((Get-Date) -lt $deadline) {
+        $booted = ((& $Adb -s $serial shell getprop sys.boot_completed 2>$null) -join '').Trim()
+        if ($booted -eq '1') {
+            Write-Host "远程模拟器启动完成: $serial" -ForegroundColor Green
+            return $serial
+        }
+        Start-Sleep -Seconds 2
+    }
+    Write-Host '远程模拟器未在时限内开机完成。' -ForegroundColor Red
+    return $null
+}
+
+# 安装 releases/ 下的签名包到 1.100 模拟器; 未指定 Tag 时取最新一个
+function Install-ReleaseApk {
+    param([string] $Tag)
+
+    $apk = $null
+    if ($Tag) {
+        $candidate = Join-Path (Join-Path $ReleaseDir $Tag) ('NovaBAIC-' + $Tag + '.apk')
+        if (Test-Path $candidate) { $apk = $candidate }
+    }
+    if (-not $apk) {
+        $latest = Get-ChildItem -Path $ReleaseDir -Recurse -Filter 'NovaBAIC-*.apk' -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($latest) { $apk = $latest.FullName }
+    }
+    if (-not $apk) {
+        Write-Host "releases/ 下没有 APK, 请先执行 ci 或 ci-download。" -ForegroundColor Yellow
+        return $false
+    }
+
+    $serial = Initialize-RemoteEmulator
+    if (-not $serial) { return $false }
+
+    Write-Host ("安装 {0} -> {1}" -f (Split-Path $apk -Leaf), $serial) -ForegroundColor Cyan
+    $out = (& $Adb -s $serial install -r $apk 2>&1 | Out-String)
+    if ($out -match 'Success') {
+        Write-Host '安装成功。' -ForegroundColor Green
+        return $true
+    }
+    # debug 包与 release 包签名不同, 覆盖安装会 UPDATE_INCOMPATIBLE: 卸旧重装
+    if ($out -match 'INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match') {
+        Write-Host '签名不一致 (当前装的是 debug 包), 卸载旧包后重装 ...' -ForegroundColor Yellow
+        & $Adb -s $serial uninstall $AppId 2>$null | Out-Null
+        $out = (& $Adb -s $serial install $apk 2>&1 | Out-String)
+        if ($out -match 'Success') {
+            Write-Host '安装成功 (已替换旧包)。' -ForegroundColor Green
+            return $true
+        }
+    }
+    Write-Host '安装失败:' -ForegroundColor Red
+    Write-Host $out
+    return $false
+}
+
+# 远程模拟器免登录调试: 本地 debug 包 -> 1.100 模拟器, 再用 dev-login 注入测试账号。
+# release 包会忽略 debugToken, 所以这里必须走 debug 构建。
+function Invoke-CiLogin {
+    $serial = Initialize-RemoteEmulator
+    if (-not $serial) { return $false }
+
+    if (-not (Invoke-KotlinCheck)) { return $false }
+    if (-not (Invoke-Gradle ':app:assembleDebug')) {
+        Write-Host 'debug 构建失败, 无法注入免登录。' -ForegroundColor Red
+        return $false
+    }
+
+    $script = Join-Path $ProjectDir 'dev\dev-login.ps1'
+    if (-not (Test-Path $script)) {
+        Write-Host "未找到 $script" -ForegroundColor Red
+        return $false
+    }
+
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Serial $serial -Install
+    if ($LASTEXITCODE -eq 0) { return $true }
+
+    # 模拟器上可能还是 release 包 (签名不同导致 install 失败), 卸掉重试一次
+    Write-Host 'dev-login 失败: 若当前装的是 release 包, 卸载后重试 ...' -ForegroundColor Yellow
+    & $Adb -s $serial uninstall $AppId 2>$null | Out-Null
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Serial $serial -Install
+    return ($LASTEXITCODE -eq 0)
+}
+
+# ---------- 子菜单: 远程发布 / CI ----------
+
+function Show-CiMenu {
+    while ($true) {
+        Write-Header
+        Write-Host ' -- 远程发布 / CI (GitLab 1.100: tag 触发构建) --' -ForegroundColor Cyan
+        Write-Host ("    {0}  项目 #{1}  分支 {2}" -f $GitLabHost, $GitLabProjectId, $GitLabBranch) -ForegroundColor DarkGray
+        Write-Host ' 1) 发版: 提交改动 -> 推送分支 -> 打 tag -> 等 CI -> 下载 APK'
+        Write-Host ' 2) 查看流水线状态 (作业耗时; 失败自动打印日志尾部)'
+        Write-Host ' 3) 下载最近一次成功构建的产物到 releases/'
+        Write-Host ' 4) 重打 tag 并重跑 (删远端 tag -> 重打当前 HEAD -> 推送)'
+        Write-Host ' 5) 连接 1.100 模拟器并安装最新 Release APK'
+        Write-Host ' 6) 远程模拟器免登录调试 (本地 debug 包 + dev-login)'
+        Write-Host ' 0) 返回主菜单'
+        Write-Host '========================================='
+        $sel = Read-Host '选择 (0 返回)'
+        if ($null -eq $sel) { return }  # stdin EOF, 避免空转死循环
+        switch ($sel) {
+            '1' {
+                Invoke-Git fetch $GitLabRemote --tags | Out-Null
+                $next = Get-NextReleaseVersion
+                $ver = Read-Host "版本号 (回车 = 自动 $next)"
+                if ($ver -eq '') { $ver = $next }
+                $msg = Read-Host "提交说明 (回车 = chore(release): $ver)"
+                if ($msg -eq '') { $msg = "chore(release): $ver" }
+                $dirty = @(& git -C $ProjectDir status --porcelain 2>$null | Where-Object { $_ -ne '' })
+                if ($dirty.Count -gt 0) {
+                    Write-Host "待提交改动 ($($dirty.Count) 项):" -ForegroundColor Yellow
+                    $dirty | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+                }
+                else {
+                    Write-Host '工作区干净, 本次直接对当前提交打 tag。' -ForegroundColor DarkGray
+                }
+                $confirm = Read-Host "将提交全部改动, 推送 $GitLabBranch 并打 tag $ver, 确认? (y/N)"
+                if ($confirm -in @('y', 'Y')) {
+                    Invoke-CiRelease -Tag $ver -Message $msg -CommitAll | Out-Null
+                }
+                else {
+                    Write-Host '已取消。' -ForegroundColor Yellow
+                }
+            }
+            '2' { Show-CiStatus }
+            '3' {
+                $p = Get-LatestSuccessfulPipeline
+                if (-not $p) {
+                    Write-Host '还没有成功的流水线。' -ForegroundColor Yellow
+                }
+                else {
+                    $tag = "$($p.ref)"
+                    if ($tag -notmatch '^v\d+\.\d+\.\d+$') { $tag = "pipeline-$($p.id)" }
+                    Save-CiArtifacts -Tag $tag -PipelineId $p.id | Out-Null
+                }
+            }
+            '4' {
+                $latestTag = ((& git -C $ProjectDir describe --tags --abbrev=0 2>$null) -join '').Trim()
+                $ver = Read-Host "要重打的 tag (回车 = $latestTag)"
+                if ($ver -eq '') { $ver = $latestTag }
+                $confirm = Read-Host "将删除远端 tag $ver 并重打当前 HEAD, 确认? (y/N)"
+                if ($confirm -in @('y', 'Y')) {
+                    Invoke-CiRetag -Tag $ver | Out-Null
+                }
+                else {
+                    Write-Host '已取消。' -ForegroundColor Yellow
+                }
+            }
+            '5' { Install-ReleaseApk | Out-Null }
+            '6' { Invoke-CiLogin | Out-Null }
+            '0' { return }
+            default { Write-Host "无效选择: $sel" -ForegroundColor Yellow }
+        }
+        if ($sel -eq '0') { break }
+        Pause-ForMenu
+    }
+}
+
 # ======================== 菜单动作 ========================
 
 function Do-BuildDebug { Invoke-Gradle ':app:assembleDebug' }
@@ -1330,6 +2006,7 @@ function Show-MainMenu {
         Write-Host ' 4) 单元测试 (:app:testDebugUnitTest)'
         Write-Host ' 5) 设备 (adb reverse / 模拟器 / 停止 / 清数据 / 授权)'
         Write-Host ' 6) 高级 (clean / 全量重建 / Release / APK 目录)'
+        Write-Host ' 7) 远程发布 / CI (GitLab 1.100: 提交推送 tag -> 自动构建 -> 下载 APK)'
         Write-Host ' 0) 退出'
         Write-Host '========================================='
         $choice = Read-Host '输入数字并回车 (0 退出)'
@@ -1355,12 +2032,13 @@ function Show-MainMenu {
             '4' { if (Invoke-KotlinCheck) { Do-Test } }
             '5' { Show-DeviceMenu }
             '6' { Show-AdvancedMenu }
+            '7' { Show-CiMenu }
             '0' { break }
             default { Write-Host "无效选择: $choice" -ForegroundColor Yellow }
         }
 
         if ($choice -eq '0') { break }
-        if ($choice -in @('5', '6')) { continue }
+        if ($choice -in @('5', '6', '7')) { continue }
         Pause-ForMenu
     }
 }
@@ -1394,6 +2072,18 @@ function Show-Help {
   install-release       安装 Release (需签名凭据, 缺失时终止)
   apk                   打开 APK 输出目录
   menu / help           交互菜单 / 本帮助
+
+远程发布 / CI (GitLab http://192.168.1.101 项目 #69, 分支 laocanmou):
+  ci                    发版闭环: 推送分支 -> 打 tag -> 等 CI -> 下载产物到 releases/<tag>
+  ci -Version v1.0.2    指定版本 (缺省 = 已有最大补丁号 +1)
+  ci -Commit            允许把工作区全部改动提交进发版提交 (默认脏工作区拒绝)
+  ci -ReleaseMessage .. 发版提交说明 (缺省 chore(release): <版本>)
+  ci -Install           流水线通过后直接装进 1.100 的模拟器
+  ci-status             最近流水线 + 作业耗时; 失败作业自动打印日志尾部
+  ci-download           下载最近一次成功流水线的产物到 releases/
+  ci-retag -Version ..  删远端 tag -> 重打当前 HEAD -> 重推 (触发重跑)
+  ci-install            连接 1.100 模拟器 (SSH 隧道) 并安装 releases/ 最新 APK
+  ci-login              本地 debug 包 + dev/dev-login.ps1 注入到 1.100 模拟器
 
 开发环境 DeepSeek 密钥:
   在 local.properties (已被 gitignore) 写入:
@@ -1482,6 +2172,30 @@ function Invoke-CommandLine {
             if (-not (Invoke-Gradle ':app:installRelease')) { exit 1 }
         }
         'apk' { Do-OpenApkDir }
+        'ci' {
+            if (-not (Invoke-CiRelease -Tag $Version -Message $ReleaseMessage -CommitAll:$Commit -InstallApk:$Install)) { exit 1 }
+        }
+        'ci-status' { Show-CiStatus }
+        'ci-download' {
+            $p = Get-LatestSuccessfulPipeline
+            if (-not $p) { Write-Host '还没有成功的流水线。' -ForegroundColor Yellow; exit 1 }
+            $tag = "$($p.ref)"
+            if ($tag -notmatch '^v\d+\.\d+\.\d+$') { $tag = "pipeline-$($p.id)" }
+            if (-not (Save-CiArtifacts -Tag $tag -PipelineId $p.id)) { exit 1 }
+        }
+        'ci-retag' {
+            if (-not $Version) {
+                Write-Host 'ci-retag 需要 -Version vX.Y.Z (要重打的 tag)。' -ForegroundColor Red
+                exit 1
+            }
+            if (-not (Invoke-CiRetag -Tag $Version)) { exit 1 }
+        }
+        'ci-install' {
+            if (-not (Install-ReleaseApk -Tag $Version)) { exit 1 }
+        }
+        'ci-login' {
+            if (-not (Invoke-CiLogin)) { exit 1 }
+        }
     }
 }
 

@@ -54,3 +54,6 @@ keystore.properties
 # 构建日志：统一写到 logs/（整目录不入库）；根目录历史 build_*.log 同样不再跟踪
 /logs/
 /build_*.log
+
+# 远程 CI 构建产物（APK / 校验和 / mapping / 测试截图），只在本机留档，不受 git 控制
+/releases/

@@ -390,6 +390,30 @@ git mergetool / 手工解决
    `git push origin vX.Y.Z`。
 5. 发版前看一眼最新 tag 仍是好习惯：`git describe --tags --abbrev=0`。
 
+### 7.2 远程构建与发版（GitLab CI / 1.100，2026-11-21 定版）
+
+本机一条命令闭环：**改代码 → 发版 → 1.100 自动构建/测试 → 本机下载产物 → 装模拟器 → 免登录调试**。
+
+```powershell
+.\build-client.ps1 ci -Commit                  # 提交全部改动 → 推送 laocanmou → 自动 tag vX.Y.Z → 等 CI → 下载到 releases/
+.\build-client.ps1 ci -Version v1.0.2 -Commit  # 指定版本
+.\build-client.ps1 ci -Commit -Install         # 流水线通过后直接装进 1.100 模拟器
+.\build-client.ps1 ci-status                   # 最近流水线 + 作业耗时, 失败作业自动打印日志尾部
+.\build-client.ps1 ci-download                 # 只下载最近一次成功产物
+.\build-client.ps1 ci-retag -Version v1.0.2    # 删远端 tag → 重打当前 HEAD → 重推
+.\build-client.ps1 ci-login                    # 本地 debug 包 + dev/dev-login.ps1 注入 1.100 模拟器
+```
+
+- GitLab `http://192.168.1.101` 项目 **#69**，分支 `laocanmou`；tag 必须指向分支 tip（verify 作业强制校验）。
+- 签名密钥不进 CI 变量：build 作业用 `CI_JOB_TOKEN` 稀疏克隆私有 Secrets 仓；PAT 只存本机
+  `d:\work\Secrets\ci\gitlab-pat.env`（scope=api），工程仓库零密钥。
+- 产物只落本机 `releases/vX.Y.Z/`（`.gitignore` 整目录忽略）；CI 侧 build 产物保留 30 天。
+- 模拟器在 1.100 宿主常驻（KVM + ARM 翻译），作业容器走 docker 桥网关 `:5555`；本机走
+  SSH 隧道 `127.0.0.1:15555`（`ci-install` / `ci-login` 自动建立）。
+- 免登录只能用 debug 构建（release 包忽略 `debugToken`）。
+- 完整踩坑清单与排障手册见
+  [`docs/2026-11-21-GitLab-CI-远程构建最佳实践.md`](docs/2026-11-21-GitLab-CI-远程构建最佳实践.md)。
+
 ---
 
 ## 8. 历史教训（已踩过的坑，别再踩）
