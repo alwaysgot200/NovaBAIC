@@ -87,6 +87,7 @@ import androidx.compose.ui.unit.dp
 import com.verlintas.baic2.R
 import com.verlintas.baic2.floatball.AdvisorPage
 import com.verlintas.baic2.floatball.DeleteConfirmDialog
+import com.verlintas.baic2.floatball.community.CommunityActivity
 import com.verlintas.rpa.model.RpaAction
 import com.verlintas.rpa.model.RpaCapabilities
 import com.verlintas.rpa.model.RpaLine
@@ -143,6 +144,7 @@ internal fun RpaLibraryScreen(
     var query by remember { mutableStateOf("") }
     var searchOpen by remember { mutableStateOf(false) }
     var addMenuOpen by remember { mutableStateOf(false) }
+    var communityMenuOpen by remember { mutableStateOf(false) }
     val filtered = remember(scripts, query) { filterRpaScripts(scripts, query) }
     val running = runState as? RpaRunController.State.Running
     val finished = runState as? RpaRunController.State.Finished
@@ -198,6 +200,31 @@ internal fun RpaLibraryScreen(
             title = stringResource(R.string.float_rpa_title),
             onBack = onBack,
             actions = {
+                // 社区入口（多产品方案 §4.8）：脚本市场 / 论坛共用一个下拉，避免挤占顶栏
+                Box {
+                    TextButton(onClick = { communityMenuOpen = true }) {
+                        Text(stringResource(R.string.float_rpa_community))
+                    }
+                    DropdownMenu(
+                        expanded = communityMenuOpen,
+                        onDismissRequest = { communityMenuOpen = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.float_rpa_community_market)) },
+                            onClick = {
+                                communityMenuOpen = false
+                                context.startActivity(CommunityActivity.marketIntent(context))
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.float_rpa_community_forum)) },
+                            onClick = {
+                                communityMenuOpen = false
+                                context.startActivity(CommunityActivity.forumIntent(context))
+                            },
+                        )
+                    }
+                }
                 TextButton(
                     onClick = { importLauncher.launch(IMPORT_MIME) },
                     contentPadding = PaddingValues(horizontal = 8.dp),

@@ -1246,6 +1246,11 @@
 
     <!-- RPA 自动化：模式 / 线路 / 动作目录 -->
     <string name="float_rpa_title">RPA 自动化</string>
+    <string name="float_rpa_community">社区</string>
+    <string name="float_rpa_community_market">RPA 脚本市场</string>
+    <string name="float_rpa_community_forum">好参谋论坛</string>
+    <string name="float_community_market_title">RPA 脚本市场</string>
+    <string name="float_community_forum_title">好参谋论坛</string>
     <string name="float_rpa_tool_design">RPA 设计</string>
     <string name="float_rpa_tool_design_desc">脚本库、拖拽编排、运行</string>
     <string name="float_rpa_tool_quickfind">以图找图</string>

@@ -1155,6 +1155,11 @@
 
     <!-- RPA automation: modes, lines, actions, validation -->
     <string name="float_rpa_title">RPA automation</string>
+    <string name="float_rpa_community">Community</string>
+    <string name="float_rpa_community_market">RPA script market</string>
+    <string name="float_rpa_community_forum">好参谋 forum</string>
+    <string name="float_community_market_title">RPA script market</string>
+    <string name="float_community_forum_title">好参谋 forum</string>
     <string name="float_rpa_tool_design">RPA design</string>
     <string name="float_rpa_tool_design_desc">Script library, drag-and-drop editing, and runs</string>
     <string name="float_rpa_tool_quickfind">Image search</string>

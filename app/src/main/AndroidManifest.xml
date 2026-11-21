@@ -164,6 +164,12 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:label="@string/float_recharge_title" />
+        <!-- 好参谋社区（多产品方案 §4.8）：RPA 脚本市场 / 好参谋论坛，WebView 承载共享 SPA。 -->
+        <activity
+            android:name=".floatball.community.CommunityActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
+            android:label="@string/float_community_market_title" />
 
         <activity
             android:name=".floatball.AdvisorProfileActivity"
