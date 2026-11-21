@@ -1,0 +1,28 @@
+FROM baic2-android-build:1
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 无头模拟器运行库（swiftshader 软渲染，不需要宿主 GPU）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libpulse0 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 \
+        libxi6 libxtst6 libxrandr2 libxinerama1 libnss3 libgl1 libgbm1 \
+        libxkbcommon0 libvulkan1 libasound2t64 procps \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN sdkmanager "emulator" "system-images;android-36;google_apis;x86_64" >/dev/null
+
+# 720x1280 @320dpi，与本地 Galaxy_Intel_API_36 对齐
+RUN echo no | avdmanager create avd -n baic2_api36 \
+        -k "system-images;android-36;google_apis;x86_64" -d pixel_5 --force \
+    && printf 'hw.lcd.width=720\nhw.lcd.height=1280\nhw.lcd.density=320\nhw.ramSize=4096\nhw.keyboard=yes\n' \
+        >> /root/.android/avd/baic2_api36.avd/config.ini
+
+ENV ANDROID_AVD_HOME=/root/.android/avd
+
+EXPOSE 5555
+
+CMD ["/opt/android-sdk/emulator/emulator", "-avd", "baic2_api36", \
+     "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot", \
+     "-gpu", "swiftshader_indirect", "-accel", "on", \
+     "-memory", "4096", "-cores", "4", "-port", "5555"]

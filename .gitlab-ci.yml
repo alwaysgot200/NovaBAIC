@@ -1,0 +1,141 @@
+# GitLab CI：标签驱动的 Android 构建与设备测试（1.100 / moni-100 Docker Runner）
+#
+# 触发方式与 GitHub 发布线一致：推送 vX.Y.Z 标签。手动 web 触发只跑校验与设备冒烟，
+# 不产出签名包（版本号唯一事实来源仍是 tag）。
+#
+# 设备测试使用宿主机上常驻的模拟器 sidecar（topway 启动，带 /dev/kvm），
+# 作业容器通过 docker 桥网关的 5555 端口连它 —— 不需要改 Runner 配置、不需要 root。
+
+stages: [verify, build, device]
+
+default:
+  image: baic2-android-build:1
+  tags: ["moni-100"]
+  interruptible: false
+
+variables:
+  ANDROID_HOME: /opt/android-sdk
+  ANDROID_SDK_ROOT: /opt/android-sdk
+  GIT_SUBMODULE_STRATEGY: recursive
+  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.parallel=true"
+
+# ---- 质量门：标签校验 + 仓库三检查 + 单测 + lint ----
+verify:
+  stage: verify
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  script:
+    - set -euo pipefail
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        TAG_COMMIT="$(git rev-list -n1 "$CI_COMMIT_TAG")"
+        TIP_COMMIT="$(git ls-remote "$CI_REPOSITORY_URL" refs/heads/laocanmou | awk '{print $1}')"
+        echo "标签 $CI_COMMIT_TAG -> $TAG_COMMIT；laocanmou tip -> $TIP_COMMIT"
+        if [ -z "$TIP_COMMIT" ] || [ "$TAG_COMMIT" != "$TIP_COMMIT" ]; then
+          echo "标签没有指向 laocanmou 最新提交，拒绝发布。"
+          exit 1
+        fi
+      fi
+    - tools/check-license-headers.sh
+    - tools/check-strings-sync.sh
+    - python3 tools/check-tool-schemas.py
+    - ./gradlew test :app:lintRelease --parallel
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - "app/build/reports/lint-results-*.html"
+      - "*/build/reports/tests/**"
+
+# ---- 打包线：tag 派生版本 + 签名 + 成品校验 ----
+build:
+  stage: build
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+  script:
+    - set -euo pipefail
+    - |
+      V="${CI_COMMIT_TAG#v}"; BASE="${V%%-*}"
+      if ! echo "$BASE" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "标签 $CI_COMMIT_TAG 必须形如 v1.0.1"; exit 1
+      fi
+      IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+      if [ "$MINOR" -gt 99 ] || [ "$PATCH" -gt 99 ]; then
+        echo "次版本/补丁号超过 99 会破坏 versionCode 单调性"; exit 1
+      fi
+      VER_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+      echo "发布 $CI_COMMIT_TAG -> versionName=$V, versionCode=$VER_CODE"
+      printf 'BAIC_VERSION_NAME=%s\nBAIC_VERSION_CODE=%s\n' "$V" "$VER_CODE" > version.env
+    - . ./version.env
+    # 签名与敏感值来自私有 Secrets 仓库；CI 里不保存任何密钥变量
+    - git clone --depth 1 --filter=blob:none --sparse "http://gitlab-ci-token:${CI_JOB_TOKEN}@192.168.1.101/wuruixi/Secrets.git" secrets-store
+    - (cd secrets-store && git sparse-checkout set ci)
+    - |
+      SECRETS_FILE="secrets-store/ci/baic2-release.env"
+      test -f "$SECRETS_FILE" || { echo "Secrets 仓库缺少 $SECRETS_FILE"; exit 1; }
+      grep -E '^[A-Z0-9_]+=' "$SECRETS_FILE" > signing.env
+      for KEY in BAIC2_KEYSTORE_BASE64 BAIC2_KEYSTORE_PASSWORD BAIC2_KEY_ALIAS BAIC2_KEY_PASSWORD; do
+        grep -q "^$KEY=" signing.env || { echo "签名信息缺少 $KEY"; exit 1; }
+      done
+      set -a; . ./signing.env; set +a
+      mkdir -p ci-keystore
+      printf '%s' "$BAIC2_KEYSTORE_BASE64" | base64 -d > ci-keystore/baic2-release.keystore
+    - ./gradlew :app:assembleRelease :app:assembleDebug -Pbaic.versionName="$BAIC_VERSION_NAME" -Pbaic.versionCode="$BAIC_VERSION_CODE" --parallel
+    - export BAIC2_KEYSTORE_PATH="$CI_PROJECT_DIR/ci-keystore/baic2-release.keystore"
+    - |
+      set -euo pipefail
+      APK="$(ls app/build/outputs/apk/release/*.apk | head -n1)"
+      APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n1)"
+      AAPT2="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -n1)"
+      "$APKSIGNER" verify --verbose "$APK"
+      APK_VERSION="$("$AAPT2" dump badging "$APK" | sed -n "s/.* versionName='\([^']*\)'.*/\1/p" | head -n1)"
+      echo "成品 versionName=$APK_VERSION，标签=$CI_COMMIT_TAG"
+      [ "v$APK_VERSION" = "$CI_COMMIT_TAG" ] || { echo "APK 版本与标签不一致"; exit 1; }
+      (cd app/build/outputs/apk/release && sha256sum ./*.apk > app-release.apk.sha256)
+    - rm -rf secrets-store signing.env ci-keystore
+  artifacts:
+    expire_in: 30 days
+    paths:
+      - app/build/outputs/apk/release/*.apk
+      - app/build/outputs/apk/release/*.sha256
+      - app/build/outputs/apk/debug/*.apk
+      - app/build/outputs/mapping/release/mapping.txt
+
+# ---- 设备线：常驻模拟器 + instrumented 测试 + 启动冒烟 ----
+device:
+  stage: device
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  needs: []
+  timeout: 60m
+  script:
+    - set -euo pipefail
+    - ADB="$ANDROID_HOME/platform-tools/adb"
+    - GW="$(ip route | awk '/default/ {print $3}')"
+    - TARGET="$GW:5555"
+    - echo "连接模拟器 $TARGET"
+    - "$ADB" connect "$TARGET"
+    - |
+      for i in $(seq 1 120); do
+        BOOT="$("$ADB" -s "$TARGET" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+        [ "$BOOT" = "1" ] && break
+        sleep 3
+      done
+      [ "$BOOT" = "1" ] || { echo "模拟器未在时限内启动完成"; exit 1; }
+    - export ANDROID_SERIAL="$TARGET"
+    - "$ADB" -s "$TARGET" shell wm dismiss-keyguard || true
+    - "$ADB" -s "$TARGET" shell input keyevent 82 || true
+    - "$ADB" -s "$TARGET" uninstall com.verlintas.baic2 || true
+    - ./gradlew :app:assembleDebug --parallel
+    - ./gradlew :app:connectedDebugAndroidTest --parallel || TEST_RC=$?
+    - bash tools/ci-smoke.sh app/build/outputs/apk/debug/app-debug.apk ci-out
+    - test "${TEST_RC:-0}" = "0"
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - app/build/reports/androidTests/**
+      - app/build/outputs/androidTest-results/**
+      - ci-out/**

@@ -1,0 +1,33 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 国内构建：Ubuntu 归档与 Android SDK 均走腾讯/阿里镜像（实测 8-11MB/s，官方源 0.8MB/s）
+RUN sed -i 's@//archive.ubuntu.com/ubuntu@//mirrors.aliyun.com/ubuntu@g; s@//security.ubuntu.com/ubuntu@//mirrors.aliyun.com/ubuntu@g' \
+        /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        openjdk-21-jdk-headless ca-certificates curl unzip git python3 iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV ANDROID_SDK_ROOT=/opt/android-sdk \
+    ANDROID_HOME=/opt/android-sdk \
+    SDK_TEST_BASE_URL=https://mirrors.cloud.tencent.com/AndroidSDK/
+
+RUN mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools" \
+    && cd /tmp \
+    && curl -fsSLO https://mirrors.cloud.tencent.com/AndroidSDK/commandlinetools-linux-13114758_latest.zip \
+    && unzip -q commandlinetools-linux-13114758_latest.zip -d "$ANDROID_SDK_ROOT/cmdline-tools" \
+    && mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest" \
+    && rm -f commandlinetools-linux-13114758_latest.zip
+
+ENV PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH
+
+# compileSdk 37 属于 preview 通道（repository2-3），必须 --channel=3
+RUN yes | sdkmanager --licenses >/dev/null \
+    && sdkmanager --channel=3 \
+        "platform-tools" \
+        "platforms;android-37.0" \
+        "build-tools;37.0.0" >/dev/null
+
+RUN java -version 2>&1 | head -1 && sdkmanager --version
