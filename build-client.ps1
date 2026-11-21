@@ -424,7 +424,9 @@ function Invoke-Gradle {
     Set-ProxyEnv
     Push-Location $ProjectDir
     try {
-        & .\gradlew.bat @Arguments @GradleExtraArgs
+        # 输出直接打到控制台, 只把成功/失败 (bool) 作为返回值:
+        # 否则 gradle 的文本输出会让调用方的 if (-not (Invoke-Gradle ...)) 恒为假 (门禁失效)。
+        & .\gradlew.bat @Arguments @GradleExtraArgs | Write-Host
         return ($LASTEXITCODE -eq 0)
     }
     finally {
