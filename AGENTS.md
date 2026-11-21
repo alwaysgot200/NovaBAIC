@@ -346,6 +346,10 @@ UI 文案不得承诺「永久存活」。国产 ROM 自启跳转表在 `KeepAli
 ## 7. Git 与上游合并协议
 
 - **分支**：开发永远在 `laocanmou`；不直接动本地 `main`（它是上游的镜像）。
+- **远程纪律（2026-11-22 固化）**：日常开发/测试的提交、`laocanmou` 分支与测试 tag 只推
+  `gitlab`（`http://192.168.1.101` 项目 #69），**禁止推 `origin`（GitHub）**；`origin`
+  仅在用户当次明确要求生产发版时接收 `v*` tag（触发 GitHub Release，供下载中心同步）。
+  GitHub 仅作发布与上游镜像，不做日常同步。
 - **提交信息**：Conventional Commits（`feat:`/`fix:`/`docs:`/`refactor:`…），
   中文描述，与上游历史风格一致；触碰白名单外上游文件加 `[upstream-touch]`。
 - **合并节奏**：上游发版后尽快合并，攒得越多越难合。
@@ -375,8 +379,10 @@ git mergetool / 手工解决
 1. **发版 = 一步**：在 laocanmou 最新提交上打 tag 并推送（tag 必须指向 laocanmou
    tip，否则 CI 拒绝）：
    ```bash
-   git push origin laocanmou && git tag v0.3.2 && git push origin v0.3.2
+   git push gitlab laocanmou && git tag v0.3.2 && git push gitlab v0.3.2
    ```
+   GitLab 上的是**测试构建**（§7.2 自动下载）；生产 Release 须在用户当次明确指令后，
+   再把同一 tag 推到 `origin`（GitHub）触发发布。
 2. **派生公式**（CI 内执行；本地发版构建可用 `-Pbaic.versionName/-Pbaic.versionCode`
    覆盖）：`versionName` = tag 去 `v` 前缀（预发布 tag 保留后缀，如 `0.3.2-rc1`）；
    `versionCode` = 主版本×10000 + 次版本×100 + 补丁号（v0.3.2 → 302）。
@@ -386,8 +392,8 @@ git mergetool / 手工解决
    的冲突裁决口径：`build.gradle.kts` 版本行若撞上游改动，保留我们的
    `providers.gradleProperty` 写法即可。
 4. **打错的 tag**：删远端重打即可触发重跑：
-   `git push origin :refs/tags/vX.Y.Z`，然后在 laocanmou tip 上重新
-   `git push origin vX.Y.Z`。
+   `git push gitlab :refs/tags/vX.Y.Z`，然后在 laocanmou tip 上重新
+   `git push gitlab vX.Y.Z`；若该 tag 已推到 `origin`，需在明确发版指令下同步删除重推。
 5. 发版前看一眼最新 tag 仍是好习惯：`git describe --tags --abbrev=0`。
 
 ### 7.2 远程构建与发版（GitLab CI / 1.100，2026-11-21 定版）
