@@ -101,10 +101,12 @@ build:
     - rm -rf secrets-store signing.env ci-keystore
   artifacts:
     expire_in: 30 days
+    # 只归档签名包 + 混淆映射（压缩后约 28MB）。debug APK 有 145MB，
+    # 加上 release 会触发 GitLab 的 100MB artifacts 上传上限（413），
+    # 设备线自己会构建 debug 包，这里不再重复归档。
     paths:
       - app/build/outputs/apk/release/*.apk
       - app/build/outputs/apk/release/*.sha256
-      - app/build/outputs/apk/debug/*.apk
       - app/build/outputs/mapping/release/mapping.txt
 
 # ---- 设备线：常驻模拟器 + instrumented 测试 + 启动冒烟 ----
