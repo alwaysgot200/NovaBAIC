@@ -13,6 +13,9 @@ RUN apt-get update \
 RUN sdkmanager "emulator" "system-images;android-36;google_apis;x86_64" >/dev/null
 
 # 720x1280 @320dpi，与本地 Galaxy_Intel_API_36 对齐
+# 注意：-port 指定的是控制台端口，ADB 端口 = 控制台+1；因此必须用 5554 才能让
+# ADB 落在 5555（容器映射端口）。用 5555 会让 ADB 跑到 5556 且 emulator 告警
+# "Requested adb port (5556) is an even number"。
 RUN echo no | avdmanager create avd -n baic2_api36 \
         -k "system-images;android-36;google_apis;x86_64" -d pixel_5 --force \
     && printf 'hw.lcd.width=720\nhw.lcd.height=1280\nhw.lcd.density=320\nhw.ramSize=4096\nhw.keyboard=yes\n' \
@@ -20,9 +23,13 @@ RUN echo no | avdmanager create avd -n baic2_api36 \
 
 ENV ANDROID_AVD_HOME=/root/.android/avd
 
-EXPOSE 5555
+# emulator 的 console/adb 端口只绑 127.0.0.1（安全设计），Docker 端口映射连的是
+# 容器 IP，因此必须用 socat 在 0.0.0.0:5580 转发到 127.0.0.1:5555（adb 端口）。
+# 宿主侧仍发布为 5555，CI 侧命令不用感知这层差异。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends socat \
+    && rm -rf /var/lib/apt/lists/*
 
-CMD ["/opt/android-sdk/emulator/emulator", "-avd", "baic2_api36", \
-     "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot", \
-     "-gpu", "swiftshader_indirect", "-accel", "on", \
-     "-memory", "4096", "-cores", "4", "-port", "5555"]
+EXPOSE 5580
+
+CMD ["sh", "-c", "/opt/android-sdk/emulator/emulator -avd baic2_api36 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on -memory 4096 -cores 4 -port 5554 & exec socat TCP-LISTEN:5580,fork,reuseaddr TCP:127.0.0.1:5555"]

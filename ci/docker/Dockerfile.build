@@ -24,10 +24,13 @@ RUN mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools" \
 ENV PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH
 
 # compileSdk 37 属于 preview 通道（repository2-3），必须 --channel=3
+# build-tools 36.0.0 是 AGP 9.4.1 的默认版本，缺少时会尝试自动安装；
+# 镜像内预装，避免 CI 作业因 SDK 目录权限/网络再下载。
 RUN yes | sdkmanager --licenses >/dev/null \
     && sdkmanager --channel=3 \
         "platform-tools" \
         "platforms;android-37.0" \
-        "build-tools;37.0.0" >/dev/null
+        "build-tools;37.0.0" \
+        "build-tools;36.0.0" >/dev/null
 
 RUN java -version 2>&1 | head -1 && sdkmanager --version
