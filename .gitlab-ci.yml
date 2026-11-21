@@ -20,6 +20,9 @@ variables:
   # 且 vendor/assists 不是 Gradle 模块、构建走 Maven AAR，
   # 三检查也不扫描 vendor，这里不拉 submodule。
   GIT_SUBMODULE_STRATEGY: none
+  # Docker Runner 已把宿主机 /cache 绑定进作业容器；Gradle 依赖/wrapper 分发
+  # 缓存放这里才能跨流水线复用（否则每个容器都要重下 1GB+，网络差的链路会超时）。
+  GRADLE_USER_HOME: /cache/gradle
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.parallel=true"
 
 # ---- 质量门：标签校验 + 仓库三检查 + 单测 + lint ----
