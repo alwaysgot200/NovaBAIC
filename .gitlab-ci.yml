@@ -115,7 +115,7 @@ device:
     - GW="$(ip route | awk '/default/ {print $3}')"
     - TARGET="$GW:5555"
     - echo "连接模拟器 $TARGET"
-    - "$ADB" connect "$TARGET"
+    - '"$ADB" connect "$TARGET"'
     - |
       for i in $(seq 1 120); do
         BOOT="$("$ADB" -s "$TARGET" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
@@ -124,9 +124,9 @@ device:
       done
       [ "$BOOT" = "1" ] || { echo "模拟器未在时限内启动完成"; exit 1; }
     - export ANDROID_SERIAL="$TARGET"
-    - "$ADB" -s "$TARGET" shell wm dismiss-keyguard || true
-    - "$ADB" -s "$TARGET" shell input keyevent 82 || true
-    - "$ADB" -s "$TARGET" uninstall com.verlintas.baic2 || true
+    - '"$ADB" -s "$TARGET" shell wm dismiss-keyguard || true'
+    - '"$ADB" -s "$TARGET" shell input keyevent 82 || true'
+    - '"$ADB" -s "$TARGET" uninstall com.verlintas.baic2 || true'
     - ./gradlew :app:assembleDebug --parallel
     - ./gradlew :app:connectedDebugAndroidTest --parallel || TEST_RC=$?
     - bash tools/ci-smoke.sh app/build/outputs/apk/debug/app-debug.apk ci-out
