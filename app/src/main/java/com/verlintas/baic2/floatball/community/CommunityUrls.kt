@@ -35,6 +35,18 @@ internal object CommunityUrls {
 
     fun forum(origin: String): String = build(origin, "forum")
 
+    /** SSO ticket 的站内跳转目标（不含站点根）。 */
+    fun target(isForum: Boolean): String =
+        "/admin/market/${if (isForum) "forum" else "shop"}?$PRODUCT_QUERY"
+
+    /** ticket 放 URL fragment（不进 nginx 访问日志），Web 兑换后落到 target。 */
+    fun sso(origin: String, ticket: String): String =
+        "${origin.trimEnd('/')}/admin/sso#ticket=${encode(ticket)}"
+
     private fun build(origin: String, page: String): String =
         "${origin.trimEnd('/')}/admin/market/$page?$PRODUCT_QUERY"
+
+    /** fragment 值百分号编码；ticket 正常为十六进制，异常字符也不破坏 URL。 */
+    private fun encode(raw: String): String =
+        java.net.URLEncoder.encode(raw, "UTF-8").replace("+", "%20")
 }

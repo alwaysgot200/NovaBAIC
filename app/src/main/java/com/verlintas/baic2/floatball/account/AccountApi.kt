@@ -246,6 +246,37 @@ class AccountApi @Inject constructor(
     }
 
     /**
+     * 申请 Web 单点登录一次性 ticket（`POST /api/v1/auth/web-ticket`）。
+     *
+     * 需登录态；`target` 只允许 `/admin/` 站内路径，由服务端校验（多产品方案 §4.11）。
+     * ticket 60 秒内有效且只能兑换一次，WebView 用 `#ticket=` 打开并换取正常会话。
+     */
+    suspend fun requestWebTicket(accessToken: String, target: String): String =
+        withContext(Dispatchers.IO) {
+            val payload = buildJsonObject {
+                put("target", target)
+                put("clientId", CLIENT_ID)
+            }
+            val request = Request.Builder()
+                .url("${origin()}/api/v1/auth/web-ticket")
+                .header("Authorization", "Bearer $accessToken")
+                .post(payload.toString().toRequestBody(JSON_MEDIA))
+                .build()
+            try {
+                client.newCall(request).execute().use { response ->
+                    val data = envelope(response.code, response.body?.string().orEmpty())
+                    data.jsonObject["ticket"]?.jsonPrimitive?.content
+                        ?.takeIf { it.isNotBlank() }
+                        ?: throw AccountException(REASON_BAD_RESPONSE)
+                }
+            } catch (e: AccountException) {
+                throw e
+            } catch (e: Exception) {
+                throw AccountException(REASON_NETWORK, cause = e)
+            }
+        }
+
+    /**
      * 注册好参谋账号（`POST /api/v1/auth/register-company`）。
      *
      * 只提交产品注册必需字段：邮箱（即登录账号）、手机号 + 短信验证码、密码、确认密码、

@@ -47,4 +47,24 @@ class CommunityUrlsTest {
             CommunityUrls.market("http://192.168.1.27/"),
         )
     }
+
+    @Test
+    fun ssoTargetMatchesPage() {
+        assertEquals(
+            "/admin/market/forum?product=haocanmou&source=client",
+            CommunityUrls.target(isForum = true),
+        )
+        assertEquals(
+            "/admin/market/shop?product=haocanmou&source=client",
+            CommunityUrls.target(isForum = false),
+        )
+    }
+
+    @Test
+    fun ssoUrlKeepsTicketInFragment() {
+        assertEquals(
+            "http://192.168.1.27/admin/sso#ticket=0123456789abcdef0123456789abcdef",
+            CommunityUrls.sso("http://192.168.1.27", "0123456789abcdef0123456789abcdef"),
+        )
+    }
 }

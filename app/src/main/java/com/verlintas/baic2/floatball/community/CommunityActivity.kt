@@ -29,11 +29,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -48,6 +55,8 @@ import com.verlintas.baic2.core.model.ThemeMode
 import com.verlintas.baic2.designsystem.Baic2Theme
 import com.verlintas.baic2.floatball.AdvisorPage
 import com.verlintas.baic2.floatball.account.AccountApi
+import com.verlintas.baic2.floatball.account.AccountManager
+import com.verlintas.baic2.floatball.account.AccountPrefs
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.Locale
 import javax.inject.Inject
@@ -56,7 +65,7 @@ import javax.inject.Inject
  * 好参谋社区（多产品方案 §4.8）：RPA 脚本市场 / 好参谋论坛。
  *
  * WebView 承载共享市场/论坛 SPA，固定带 `product=haocanmou&source=client`
- * （见 [CommunityUrls]）；游客可浏览，写操作在页面内登录完成（SSO 为后续阶段）。
+ * （见 [CommunityUrls]）；已登录时用一次性 ticket 免登录进入，未登录可游客浏览。
  * 主题包装与 [com.verlintas.baic2.floatball.account.RechargeActivity] 同构。
  */
 @AndroidEntryPoint
@@ -64,6 +73,12 @@ class CommunityActivity : ComponentActivity() {
 
     @Inject
     lateinit var settingsRepository: SettingsRepository
+
+    @Inject
+    lateinit var accountManager: AccountManager
+
+    @Inject
+    lateinit var accountApi: AccountApi
 
     override fun attachBaseContext(newBase: Context) {
         val language = AppLocaleStore.readFrom(newBase)
@@ -95,7 +110,13 @@ class CommunityActivity : ComponentActivity() {
                 }
             }
             Baic2Theme(darkTheme = darkTheme, accent = accent) {
-                CommunityScreen(isForum = isForum, onBack = { finish() })
+                val session by accountManager.session.collectAsStateWithLifecycle()
+                CommunityScreen(
+                    isForum = isForum,
+                    session = session?.takeIf { it.expireAtMs > System.currentTimeMillis() },
+                    accountApi = accountApi,
+                    onBack = { finish() },
+                )
             }
         }
     }
@@ -115,15 +136,41 @@ class CommunityActivity : ComponentActivity() {
     }
 }
 
-/** 社区 WebView 页：仅浏览共享 SPA，会话由页面自身管理。 */
+/**
+ * 社区 WebView 页。
+ *
+ * 已登录：先用原生会话申请一次性 ticket，打开 `/admin/sso#ticket=...` 免登录进入；
+ * 未登录或取票失败：回退普通公开 URL，游客可浏览。ticket 只在 fragment 中，
+ * Web 兑换一次后失效（多产品方案 §4.11）。
+ */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun CommunityScreen(isForum: Boolean, onBack: () -> Unit) {
-    val url = if (isForum) {
+private fun CommunityScreen(
+    isForum: Boolean,
+    session: AccountPrefs.Session?,
+    accountApi: AccountApi,
+    onBack: () -> Unit,
+) {
+    val publicUrl = if (isForum) {
         CommunityUrls.forum(AccountApi.SERVER_ORIGIN)
     } else {
         CommunityUrls.market(AccountApi.SERVER_ORIGIN)
     }
+    var url by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(isForum, session?.accessToken) {
+        val ticketUrl = session?.let { current ->
+            runCatching {
+                val ticket = accountApi.requestWebTicket(
+                    current.accessToken,
+                    CommunityUrls.target(isForum),
+                )
+                CommunityUrls.sso(AccountApi.SERVER_ORIGIN, ticket)
+            }.getOrNull()
+        }
+        url = ticketUrl ?: publicUrl
+    }
+
     AdvisorPage(
         title = stringResource(
             if (isForum) R.string.float_community_forum_title
@@ -131,21 +178,36 @@ private fun CommunityScreen(isForum: Boolean, onBack: () -> Unit) {
         ),
         onBack = onBack,
     ) { innerPadding ->
-        AndroidView(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.useWideViewPort = true
-                    settings.loadWithOverviewMode = true
-                    webViewClient = WebViewClient()
-                    loadUrl(url)
-                }
-            },
-        )
+        val currentUrl = url
+        if (currentUrl == null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator()
+            }
+        } else {
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
+                        webViewClient = WebViewClient()
+                        loadUrl(currentUrl)
+                    }
+                },
+                update = { webView ->
+                    if (webView.url != currentUrl) webView.loadUrl(currentUrl)
+                },
+            )
+        }
     }
 }
 
