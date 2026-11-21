@@ -57,10 +57,23 @@ enum class RpaExportFormat(val fileExtension: String) {
  * - id 全部做文件名白名单化（防路径穿越）；
  * - 所有读写串行化：编辑器保存与运行服务读盘可能并发，绝不允许读到写了一半的文件。
  */
-class RpaScriptStore(root: File) {
+class RpaScriptStore private constructor(
+    private val fixedRoot: File,
+    private val rootProvider: (() -> File)?,
+) {
 
-    val scriptsDir: File = File(root, "scripts")
-    val templatesDir: File = File(root, "templates")
+    /** 固定根（单机脚本库 / 测试）。 */
+    constructor(root: File) : this(root, null)
+
+    /**
+     * 动态根（多账号）：每次访问都经 [rootProvider] 取当前用户目录，
+     * 登录/登出后无需重建 store（宿主只保留一个单例实例）。
+     */
+    constructor(rootProvider: () -> File) : this(rootProvider(), rootProvider)
+
+    val root: File get() = rootProvider?.invoke() ?: fixedRoot
+    val scriptsDir: File get() = File(root, "scripts")
+    val templatesDir: File get() = File(root, "templates")
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -69,6 +82,11 @@ class RpaScriptStore(root: File) {
     }
 
     init {
+        ensureDirs()
+    }
+
+    /** 根可能随账号切换：每个入口都补建一次目录，避免首次写盘失败。 */
+    private fun ensureDirs() {
         runCatching { scriptsDir.mkdirs() }
         runCatching { templatesDir.mkdirs() }
     }
@@ -78,6 +96,7 @@ class RpaScriptStore(root: File) {
      */
     @Synchronized
     fun listReport(): ScriptListReport {
+        ensureDirs()
         val files = runCatching {
             scriptsDir.listFiles { file -> file.isFile && file.extension == "json" }
         }.getOrDefault(emptyArray()) ?: emptyArray()

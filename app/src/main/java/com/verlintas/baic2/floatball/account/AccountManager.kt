@@ -18,9 +18,12 @@
 
 package com.verlintas.baic2.floatball.account
 
+import android.content.Context
 import com.verlintas.baic2.core.data.repository.AgentRepository
 import com.verlintas.baic2.core.model.Agent
 import com.verlintas.baic2.core.model.ProviderId
+import com.verlintas.baic2.floatball.rpa.RpaUserScope
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +52,7 @@ class AccountManager @Inject constructor(
     private val api: AccountApi,
     private val agentRepository: AgentRepository,
     private val json: Json,
+    @ApplicationContext private val context: Context,
 ) {
 
     private val _session = MutableStateFlow(prefs.loadSession())
@@ -56,6 +60,25 @@ class AccountManager @Inject constructor(
 
     /** 测试注入/网关落盘用（单例级，不随 Activity 生命周期）。 */
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        val current = _session.value
+        if (current != null && current.userId > 0) {
+            RpaUserScope.switchTo(context, current.userId)
+        } else if (current != null) {
+            // 旧版本升级：会话里还没有 userId，后台补一次 /getInfo 再切用户库。
+            ioScope.launch { refreshAccountInfo(current) }
+        }
+    }
+
+    /** 旧会话补齐 userId/tenantId；失败（断网/过期）保持原样，不阻断使用。 */
+    private suspend fun refreshAccountInfo(current: AccountPrefs.Session) {
+        val info = runCatching { api.getInfo(current.accessToken) }.getOrNull() ?: return
+        val updated = current.copy(userId = info.userId, tenantId = info.tenantId ?: current.tenantId)
+        prefs.saveSession(updated)
+        _session.value = updated
+        RpaUserScope.switchTo(context, info.userId)
+    }
 
     val isLoggedIn: Boolean get() = _session.value != null
 
@@ -68,16 +91,22 @@ class AccountManager @Inject constructor(
      */
     suspend fun login(username: String, password: String, code: String?, uuid: String?) {
         val result = api.login(username, password, code, uuid)
+        // 登录后立即取 userId：本机 RPA 库按用户分区（多产品方案 §4.10.4），
+        // 拿不到 userId 不允许继续，避免把两个账号写进同一个库。
+        val info = api.getInfo(result.accessToken)
         val session = AccountPrefs.Session(
             username = username,
             accessToken = result.accessToken,
             refreshToken = result.refreshToken,
             expireAtMs = System.currentTimeMillis() + result.expireInSeconds * 1_000L,
+            userId = info.userId,
+            tenantId = info.tenantId,
         )
         prefs.saveSession(session)
         // 换号登录：清掉上一账号的离线快照，首次拉取前不展示他人余额。
         prefs.clearSnapshots()
         _session.value = session
+        RpaUserScope.switchTo(context, info.userId)
     }
 
     /** 退出登录：会话与卡密一起清空（换号不得继承上一账号的卡密额度）。 */
@@ -86,6 +115,7 @@ class AccountManager @Inject constructor(
         prefs.clearCardKey()
         prefs.clearSnapshots()
         _session.value = null
+        RpaUserScope.switchTo(context, 0L)
     }
 
     /**
@@ -95,6 +125,7 @@ class AccountManager @Inject constructor(
     fun expireSession() {
         prefs.clearSession()
         _session.value = null
+        RpaUserScope.switchTo(context, 0L)
     }
 
     /**

@@ -40,7 +40,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -130,6 +133,12 @@ class RpaActivity : ComponentActivity() {
     lateinit var chromeGate: RpaChromeGate
 
     @Inject
+    lateinit var accountManager: com.verlintas.baic2.floatball.account.AccountManager
+
+    @Inject
+    lateinit var cloudClient: RpaCloudClient
+
+    @Inject
     lateinit var settingsRepository: SettingsRepository
 
     override fun attachBaseContext(newBase: Context) {
@@ -167,6 +176,8 @@ class RpaActivity : ComponentActivity() {
                 RpaApp(
                     device = device,
                     store = store,
+                    accountManager = accountManager,
+                    cloudClient = cloudClient,
                     runController = runController,
                     pickCoordinator = pickCoordinator,
                     chromeGate = chromeGate,
@@ -246,6 +257,8 @@ private data class DeleteJumpRequest(val stepId: String, val referrers: List<Rpa
 private fun RpaApp(
     device: RpaAndroidDevice,
     store: RpaScriptStore,
+    accountManager: com.verlintas.baic2.floatball.account.AccountManager,
+    cloudClient: RpaCloudClient,
     runController: RpaRunController,
     pickCoordinator: RpaPickCoordinator,
     chromeGate: RpaChromeGate,
@@ -284,6 +297,12 @@ private fun RpaApp(
     // 以图找图页暂存的来源弹框步骤：返回时回到该步骤弹框。
     var visionSlot by remember { mutableStateOf<StepDialogSlot?>(null) }
     var panelImportDraft by remember { mutableStateOf<RpaImportDraft?>(null) }
+    // 「我的 RPA」云端库（多产品方案 §4.10.4）：登录后按 userId 拉取，安装走既有导入链路。
+    var cloudVisible by remember { mutableStateOf(false) }
+    var cloudLoading by remember { mutableStateOf(false) }
+    var cloudItems by remember { mutableStateOf<List<RpaCloudClient.Item>>(emptyList()) }
+    var cloudError by remember { mutableStateOf<String?>(null) }
+    var cloudInstalling by remember { mutableStateOf<Long?>(null) }
     val runState by runController.state.collectAsStateWithLifecycle()
     val runEvents by runController.events.collectAsStateWithLifecycle()
     val runStartFailed = stringResource(R.string.float_rpa_run_start_failed)
@@ -315,6 +334,59 @@ private fun RpaApp(
         val report = withContext(Dispatchers.IO) { store.listReport() }
         scripts = report.scripts
         brokenScripts = report.failed.size
+    }
+
+    /** 拉取「我的 RPA」；未登录直接给登录提示，不发请求。 */
+    suspend fun refreshCloudLibrary() {
+        val token = accountManager.session.value?.accessToken
+        if (token.isNullOrBlank()) {
+            cloudItems = emptyList()
+            cloudError = context.getString(R.string.float_rpa_cloud_not_logged_in)
+            return
+        }
+        cloudLoading = true
+        cloudError = null
+        runCatching { withContext(Dispatchers.IO) { cloudClient.list(token) } }
+            .onSuccess { cloudItems = it }
+            .onFailure {
+                cloudError = it.message ?: context.getString(R.string.float_rpa_cloud_failed)
+            }
+        cloudLoading = false
+    }
+
+    /** 安装库条目：下载字节 → `RpaScriptStore.importBytes`（与本地 .rpa 导入同一口径）。 */
+    suspend fun installCloudItem(item: RpaCloudClient.Item) {
+        val scriptId = item.scriptId ?: return
+        val token = accountManager.session.value?.accessToken
+        if (token.isNullOrBlank()) {
+            Toast.makeText(context, R.string.float_rpa_cloud_not_logged_in, Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        if (cloudInstalling != null) return
+        cloudInstalling = item.id
+        val result = runCatching {
+            val bytes = withContext(Dispatchers.IO) { cloudClient.download(token, scriptId) }
+            withContext(Dispatchers.IO) { store.importBytes(bytes) }.getOrThrow()
+        }
+        cloudInstalling = null
+        result.onSuccess { saved ->
+            refreshScripts()
+            Toast.makeText(
+                context,
+                context.getString(R.string.float_rpa_cloud_install_done, saved.name),
+                Toast.LENGTH_SHORT,
+            ).show()
+        }.onFailure { failure ->
+            Toast.makeText(
+                context,
+                context.getString(
+                    R.string.float_rpa_cloud_install_failed,
+                    failure.message.orEmpty(),
+                ),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     /**
@@ -884,6 +956,11 @@ private fun RpaApp(
         device.readinessChanges.collect { refreshCapabilities() }
     }
 
+    // 登录态恢复完成后预取「我的 RPA」；未登录保持空态，不发请求。
+    LaunchedEffect(Unit) {
+        if (accountManager.session.value != null) refreshCloudLibrary()
+    }
+
     BackHandler(enabled = screen != RpaScreen.LIBRARY) {
         // §九面板收纳：返回键先把浮窗面板收成圆球，再走各页既有返回口径。
         panelController?.onCollapse()
@@ -905,6 +982,10 @@ private fun RpaApp(
             onRefreshCapabilities = { refreshCapabilities() },
             onOpenShizuku = onOpenShizuku,
             onOpenAccessibilitySettings = openAccessibilitySettings,
+            onOpenCloud = {
+                cloudVisible = true
+                scope.launch { refreshCloudLibrary() }
+            },
             onOpen = { target -> openProperty(target) },
             onCreate = { name, mode, pkg ->
                 scope.launch {
@@ -1138,6 +1219,123 @@ private fun RpaApp(
             onOpenAccessibilitySettings = openAccessibilitySettings,
             onOpenShizuku = onOpenShizuku,
         )
+    }
+
+    if (cloudVisible) {
+        CloudLibraryDialog(
+            loading = cloudLoading,
+            error = cloudError,
+            items = cloudItems,
+            installedNames = scripts.map { it.name }.toSet(),
+            installingId = cloudInstalling,
+            onDismiss = { cloudVisible = false },
+            onRefresh = { scope.launch { refreshCloudLibrary() } },
+            onInstall = { item -> scope.launch { installCloudItem(item) } },
+        )
+    }
+}
+
+/** 「我的 RPA」：服务端 user_market_library 的展示与按需安装（论坛附件不入库）。 */
+@Composable
+private fun CloudLibraryDialog(
+    loading: Boolean,
+    error: String?,
+    items: List<RpaCloudClient.Item>,
+    installedNames: Set<String>,
+    installingId: Long?,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onInstall: (RpaCloudClient.Item) -> Unit,
+) {
+    InkDialogShell(title = stringResource(R.string.float_rpa_cloud_title), onDismiss = onDismiss) {
+        Text(
+            text = stringResource(R.string.float_rpa_cloud_desc),
+            style = InkTextStyles.Summary,
+            color = InkDialog.OnSurfaceMuted,
+        )
+        Spacer(Modifier.height(8.dp))
+        InkActionButton(text = stringResource(R.string.float_rpa_cloud_refresh), onClick = onRefresh)
+        InkDivider()
+        when {
+            loading -> Text(
+                text = stringResource(R.string.float_rpa_cloud_loading),
+                style = InkTextStyles.Summary,
+                color = InkDialog.OnSurfaceMuted,
+            )
+
+            error != null -> Text(
+                text = stringResource(R.string.float_rpa_cloud_failed_detail, error),
+                style = InkTextStyles.Summary,
+                color = MaterialTheme.colorScheme.error,
+            )
+
+            items.isEmpty() -> Text(
+                text = stringResource(R.string.float_rpa_cloud_empty),
+                style = InkTextStyles.Summary,
+                color = InkDialog.OnSurfaceDisabled,
+            )
+
+            else -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                items.forEach { item ->
+                    CloudLibraryRow(
+                        item = item,
+                        installed = installedNames.contains(item.title),
+                        installing = installingId == item.id,
+                        onInstall = { onInstall(item) },
+                    )
+                    InkDivider()
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        InkActionButton(text = stringResource(R.string.float_rpa_panel_close), onClick = onDismiss)
+    }
+}
+
+@Composable
+private fun CloudLibraryRow(
+    item: RpaCloudClient.Item,
+    installed: Boolean,
+    installing: Boolean,
+    onInstall: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(text = item.title, style = InkTextStyles.Body, color = InkDialog.OnSurface)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = stringResource(
+                R.string.float_rpa_cloud_meta,
+                item.packageType,
+                item.installedVersion ?: "-",
+                item.latestVersion ?: "-",
+            ),
+            style = InkTextStyles.Summary,
+            color = InkDialog.OnSurfaceMuted,
+        )
+        Spacer(Modifier.height(6.dp))
+        val actionable = item.available && item.licensed &&
+            item.packageType != "PLUGIN" && !installed && !installing
+        if (actionable) {
+            InkActionButton(
+                text = stringResource(R.string.float_rpa_cloud_install),
+                primary = true,
+                onClick = onInstall,
+            )
+        } else {
+            val label = when {
+                installing -> stringResource(R.string.float_rpa_cloud_installing)
+                installed -> stringResource(R.string.float_rpa_cloud_installed)
+                !item.available -> stringResource(R.string.float_rpa_cloud_unavailable)
+                !item.licensed -> stringResource(R.string.float_rpa_cloud_unlicensed)
+                else -> stringResource(R.string.float_rpa_cloud_client_only)
+            }
+            Text(text = label, style = InkTextStyles.Badge, color = InkDialog.OnSurfaceMuted)
+        }
     }
 }
 

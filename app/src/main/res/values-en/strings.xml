@@ -1156,6 +1156,24 @@
     <!-- RPA automation: modes, lines, actions, validation -->
     <string name="float_rpa_title">RPA automation</string>
     <string name="float_rpa_community">Community</string>
+    <string name="float_rpa_cloud_entry">My RPA</string>
+    <string name="float_rpa_cloud_title">My RPA</string>
+    <string name="float_rpa_cloud_desc">Restore RPA scripts you installed from the market. Plugins and forum attachments are never added to the local library.</string>
+    <string name="float_rpa_cloud_refresh">Refresh</string>
+    <string name="float_rpa_cloud_loading">Loading your library…</string>
+    <string name="float_rpa_cloud_empty">Your library is empty. Browse the RPA script market.</string>
+    <string name="float_rpa_cloud_install">Install</string>
+    <string name="float_rpa_cloud_installing">Installing…</string>
+    <string name="float_rpa_cloud_installed">Installed</string>
+    <string name="float_rpa_cloud_unavailable">Removed</string>
+    <string name="float_rpa_cloud_unlicensed">Purchase required</string>
+    <string name="float_rpa_cloud_client_only">This type cannot be installed here</string>
+    <string name="float_rpa_cloud_meta">%1$s · installed %2$s · latest %3$s</string>
+    <string name="float_rpa_cloud_failed">Could not load your library; try again later</string>
+    <string name="float_rpa_cloud_failed_detail">Could not load your library: %1$s</string>
+    <string name="float_rpa_cloud_not_logged_in">Sign in to view My RPA</string>
+    <string name="float_rpa_cloud_install_done">Installed: %1$s</string>
+    <string name="float_rpa_cloud_install_failed">Install failed: %1$s</string>
     <string name="float_rpa_community_market">RPA script market</string>
     <string name="float_rpa_community_forum">好参谋 forum</string>
     <string name="float_community_market_title">RPA script market</string>

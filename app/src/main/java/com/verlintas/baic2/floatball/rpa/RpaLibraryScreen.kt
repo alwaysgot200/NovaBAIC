@@ -123,6 +123,7 @@ internal fun RpaLibraryScreen(
     onRefreshCapabilities: () -> Unit,
     onOpenShizuku: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenCloud: () -> Unit,
     onOpen: (RpaScript) -> Unit,
     onCreate: (name: String, mode: RpaMode, appPackage: String) -> Unit,
     onRun: (RpaScript) -> Unit,
@@ -209,6 +210,13 @@ internal fun RpaLibraryScreen(
                         expanded = communityMenuOpen,
                         onDismissRequest = { communityMenuOpen = false },
                     ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.float_rpa_cloud_entry)) },
+                            onClick = {
+                                communityMenuOpen = false
+                                onOpenCloud()
+                            },
+                        )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.float_rpa_community_market)) },
                             onClick = {

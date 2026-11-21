@@ -38,12 +38,18 @@ class AccountPrefs @Inject constructor(
     private val cipher: SecretCipher,
 ) {
 
-    /** 登录会话；[expireAtMs] 到点即失效。 */
+    /**
+     * 登录会话；[expireAtMs] 到点即失效。
+     * [userId] 由登录后的 `/getInfo` 回填（多产品方案 §4.10：本机库按用户分区）；
+     * 旧版本升级遗留的会话没有该字段，读到 0，由 [AccountManager] 后台补齐。
+     */
     data class Session(
         val username: String,
         val accessToken: String,
         val refreshToken: String?,
         val expireAtMs: Long,
+        val userId: Long = 0L,
+        val tenantId: String? = null,
     )
 
     private val prefs = context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
@@ -58,6 +64,8 @@ class AccountPrefs @Inject constructor(
             accessToken = token,
             refreshToken = decrypt(KEY_REFRESH_TOKEN),
             expireAtMs = expireAtMs,
+            userId = prefs.getLong(KEY_USER_ID, 0L),
+            tenantId = prefs.getString(KEY_TENANT_ID, null)?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -67,6 +75,8 @@ class AccountPrefs @Inject constructor(
             .putString(KEY_ACCESS_TOKEN, cipher.encrypt(session.accessToken))
             .putString(KEY_REFRESH_TOKEN, session.refreshToken?.let(cipher::encrypt))
             .putLong(KEY_EXPIRE_AT, session.expireAtMs)
+            .putLong(KEY_USER_ID, session.userId)
+            .putString(KEY_TENANT_ID, session.tenantId)
             .apply()
     }
 
@@ -76,6 +86,8 @@ class AccountPrefs @Inject constructor(
             .remove(KEY_ACCESS_TOKEN)
             .remove(KEY_REFRESH_TOKEN)
             .remove(KEY_EXPIRE_AT)
+            .remove(KEY_USER_ID)
+            .remove(KEY_TENANT_ID)
             .apply()
     }
 
@@ -133,6 +145,8 @@ class AccountPrefs @Inject constructor(
         const val KEY_ACCESS_TOKEN = "access_token"
         const val KEY_REFRESH_TOKEN = "refresh_token"
         const val KEY_EXPIRE_AT = "expire_at_ms"
+        const val KEY_USER_ID = "user_id"
+        const val KEY_TENANT_ID = "tenant_id"
         const val KEY_CARD_KEY = "card_key"
         const val KEY_WALLET_SNAPSHOT = "wallet_snapshot"
         const val KEY_CARDS_SNAPSHOT = "cards_snapshot"

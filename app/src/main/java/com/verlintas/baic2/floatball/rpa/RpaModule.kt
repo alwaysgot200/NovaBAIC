@@ -20,22 +20,30 @@
 package com.verlintas.baic2.floatball.rpa
 
 import android.content.Context
+import com.verlintas.baic2.floatball.account.AccountManager
 import com.verlintas.rpa.store.RpaScriptStore
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import java.io.File
 import javax.inject.Singleton
 
-/** RPA 存储根：`filesDir/rpa`（scripts JSON + templates PNG），独立于 Room 库。 */
+/**
+ * RPA 存储根：登录后为 `filesDir/rpa/users/<userId>`（scripts JSON + templates PNG），
+ * 未登录兜底旧 `filesDir/rpa`；根由 [RpaUserScope] 动态提供，换号无需重建单例。
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object RpaModule {
 
     @Provides
     @Singleton
-    fun provideRpaScriptStore(@ApplicationContext context: Context): RpaScriptStore =
-        RpaScriptStore(File(context.filesDir, "rpa"))
+    fun provideRpaScriptStore(
+        @ApplicationContext context: Context,
+        account: AccountManager,
+    ): RpaScriptStore {
+        RpaUserScope.switchTo(context, account.session.value?.userId ?: 0L)
+        return RpaScriptStore { RpaUserScope.root(context) }
+    }
 }

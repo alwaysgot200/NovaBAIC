@@ -77,6 +77,12 @@ class AccountApi @Inject constructor(
     )
 
     /**
+     * 当前登录人（`GET /api/v1/getInfo`，非 Result 信封）。
+     * [userId] 用于本机 RPA 库分区（多产品方案 §4.10.4）；旧会话升级后靠它补齐。
+     */
+    data class AccountInfo(val userId: Long, val tenantId: String?)
+
+    /**
      * 注册结果（`POST /api/v1/auth/register-company`）。
      * 服务端统一要求邮箱验证：[activationRequired] 恒为 true，
      * [mailSent] 表示本轮验证邮件是否发出，[message] 为服务端成功文案。
@@ -236,6 +242,40 @@ class AccountApi @Inject constructor(
                     refreshToken = obj["refresh_token"]?.jsonPrimitive?.content,
                     expireInSeconds = obj["expire_in"]?.jsonPrimitive?.content?.toLongOrNull() ?: 3_600L,
                     refreshExpireInSeconds = obj["refresh_expire_in"]?.jsonPrimitive?.content?.toLongOrNull(),
+                )
+            }
+        } catch (e: AccountException) {
+            throw e
+        } catch (e: Exception) {
+            throw AccountException(REASON_NETWORK, cause = e)
+        }
+    }
+
+    /** 当前登录人资料（`GET /api/v1/getInfo`，返回体无 `data` 信封）。 */
+    suspend fun getInfo(accessToken: String): AccountInfo = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("${origin()}/api/v1/getInfo")
+            .header("Authorization", "Bearer $accessToken")
+            .get()
+            .build()
+        try {
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw AccountException(REASON_NETWORK)
+                val root = json.parseToJsonElement(body).jsonObject
+                val code = root["code"]?.jsonPrimitive?.content?.toIntOrNull()
+                if (code != null && code != 200) {
+                    throw AccountException(REASON_BAD_RESPONSE, root["msg"]?.jsonPrimitive?.content)
+                }
+                // 兼容直接返回 user 与 Result 信封两种形态（服务端历史实现差异）。
+                val user = root["user"]?.jsonObject
+                    ?: root["data"]?.jsonObject?.get("user")?.jsonObject
+                    ?: throw AccountException(REASON_BAD_RESPONSE)
+                val userId = user["userId"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+                if (userId <= 0) throw AccountException(REASON_BAD_RESPONSE)
+                AccountInfo(
+                    userId = userId,
+                    tenantId = user["tenantId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() },
                 )
             }
         } catch (e: AccountException) {
