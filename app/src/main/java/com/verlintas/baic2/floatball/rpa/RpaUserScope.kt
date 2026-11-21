@@ -20,6 +20,7 @@
 package com.verlintas.baic2.floatball.rpa
 
 import android.content.Context
+import android.util.Log
 import java.io.File
 
 /**
@@ -35,6 +36,7 @@ object RpaUserScope {
 
     private const val LEGACY_DIR = "rpa"
     private const val USERS_DIR = "users"
+    private const val TAG = "RpaUserScope"
 
     @Volatile
     private var userId: Long = 0L
@@ -46,8 +48,9 @@ object RpaUserScope {
     @Synchronized
     fun switchTo(context: Context, newUserId: Long) {
         val safe = newUserId.coerceAtLeast(0L)
-        if (safe > 0) {
-            migrateLegacy(context.applicationContext, safe)
+        if (safe > 0 && !migrateLegacy(context.applicationContext, safe)) {
+            // 迁移没走完不打断登录：旧库原样保留（moveDir 失败不删源目录），只留痕排查。
+            Log.w(TAG, "rpa legacy migration incomplete, source library kept")
         }
         userId = safe
     }
@@ -59,37 +62,48 @@ object RpaUserScope {
         return if (current > 0) File(File(legacy, USERS_DIR), current.toString()) else legacy
     }
 
-    private fun migrateLegacy(context: Context, targetUserId: Long) {
+    private fun migrateLegacy(context: Context, targetUserId: Long): Boolean {
         val legacy = File(context.filesDir, LEGACY_DIR)
         val target = File(File(legacy, USERS_DIR), targetUserId.toString())
-        if (target.exists()) return
+        if (target.exists()) return true
         val scripts = File(legacy, "scripts")
         val templates = File(legacy, "templates")
         val hasScripts = scripts.listFiles()?.isNotEmpty() == true
         val hasTemplates = templates.listFiles()?.isNotEmpty() == true
         if (!hasScripts && !hasTemplates) {
             runCatching { target.mkdirs() }
-            return
+            return true
         }
         runCatching { target.mkdirs() }
-        moveDir(scripts, File(target, "scripts"))
-        moveDir(templates, File(target, "templates"))
+        // 两个目录互相独立：各自失败都不丢数据，任一失败整体按失败上报。
+        val scriptsMoved = moveDir(scripts, File(target, "scripts"))
+        val templatesMoved = moveDir(templates, File(target, "templates"))
+        return scriptsMoved && templatesMoved
     }
 
-    private fun moveDir(from: File, to: File) {
-        if (!from.isDirectory) return
-        if (!to.exists() && from.renameTo(to)) return
+    /**
+     * 目录迁移（重命名失败后的复制回退）：**全部**子项复制成功才删除 [from]；
+     * 任一子项失败立即中止并返回 false——[from] 与已拷贝进 [to] 的内容原样保留，
+     * 宁可留一份重复也不丢脚本（存储满/IO 失败时曾把没拷走的旧目录删掉）。
+     */
+    private fun moveDir(from: File, to: File): Boolean {
+        if (!from.isDirectory) return true
+        if (!to.exists() && from.renameTo(to)) return true
         runCatching { to.mkdirs() }
-        from.listFiles()?.forEach { child ->
+        // 列不出子项 = 读取失败，同样不许删旧目录。
+        val children = from.listFiles() ?: return false
+        for (child in children) {
             val dest = File(to, child.name)
-            runCatching {
+            val copied = runCatching {
                 if (child.isDirectory) {
                     child.copyRecursively(dest, overwrite = true)
                 } else {
                     child.copyTo(dest, overwrite = true)
                 }
-            }
+            }.isSuccess
+            if (!copied) return false
         }
         runCatching { from.deleteRecursively() }
+        return true
     }
 }

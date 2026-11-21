@@ -1174,6 +1174,7 @@
     <string name="float_rpa_cloud_not_logged_in">Sign in to view My RPA</string>
     <string name="float_rpa_cloud_install_done">Installed: %1$s</string>
     <string name="float_rpa_cloud_install_failed">Install failed: %1$s</string>
+    <string name="float_rpa_cloud_busy">Another script is installing; please wait</string>
     <string name="float_rpa_community_market">RPA script market</string>
     <string name="float_rpa_community_forum">好参谋 forum</string>
     <string name="float_community_market_title">RPA script market</string>

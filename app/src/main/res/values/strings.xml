@@ -1265,6 +1265,7 @@
     <string name="float_rpa_cloud_not_logged_in">请先登录后再查看我的 RPA</string>
     <string name="float_rpa_cloud_install_done">已安装：%1$s</string>
     <string name="float_rpa_cloud_install_failed">安装失败：%1$s</string>
+    <string name="float_rpa_cloud_busy">正在安装其他脚本，请稍候</string>
     <string name="float_rpa_community_market">RPA 脚本市场</string>
     <string name="float_rpa_community_forum">好参谋论坛</string>
     <string name="float_community_market_title">RPA 脚本市场</string>

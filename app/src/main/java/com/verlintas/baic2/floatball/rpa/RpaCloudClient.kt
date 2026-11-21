@@ -28,10 +28,10 @@ import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -85,7 +85,10 @@ class RpaCloudClient @Inject constructor(
                         root["msg"]?.jsonPrimitive?.contentOrNull ?: "服务端拒绝了请求",
                     )
                 }
-                val data = root["data"]?.jsonArray ?: return@withContext emptyList()
+                // data 缺失/非数组 = 协议异常，必须报错；只有合法空数组才算空库，
+                // 不允许把「协议坏了」糊弄成「库里没东西」。
+                val data = root["data"] as? JsonArray
+                    ?: throw RpaCloudException("响应格式不正确")
                 data.mapNotNull { element ->
                     val obj = element as? JsonObject ?: return@mapNotNull null
                     Item(

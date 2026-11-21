@@ -303,6 +303,8 @@ private fun RpaApp(
     var cloudItems by remember { mutableStateOf<List<RpaCloudClient.Item>>(emptyList()) }
     var cloudError by remember { mutableStateOf<String?>(null) }
     var cloudInstalling by remember { mutableStateOf<Long?>(null) }
+    // 云端安装来源映射：「已安装」判定与去重按 scriptId（M7）。
+    val cloudSources = remember { RpaCloudSourceIndex(context) }
     val runState by runController.state.collectAsStateWithLifecycle()
     val runEvents by runController.events.collectAsStateWithLifecycle()
     val runStartFailed = stringResource(R.string.float_rpa_run_start_failed)
@@ -338,12 +340,14 @@ private fun RpaApp(
 
     /** 拉取「我的 RPA」；未登录直接给登录提示，不发请求。 */
     suspend fun refreshCloudLibrary() {
-        val token = accountManager.session.value?.accessToken
-        if (token.isNullOrBlank()) {
+        val session = accountManager.session.value
+        // userId 缺失（未登录/注入未回填）同样不进云库（§4.10.4），提示重新登录。
+        if (session == null || session.userId <= 0L || session.accessToken.isBlank()) {
             cloudItems = emptyList()
             cloudError = context.getString(R.string.float_rpa_cloud_not_logged_in)
             return
         }
+        val token = session.accessToken
         cloudLoading = true
         cloudError = null
         runCatching { withContext(Dispatchers.IO) { cloudClient.list(token) } }
@@ -354,16 +358,38 @@ private fun RpaApp(
         cloudLoading = false
     }
 
+    /**
+     * 「已安装」判定（M7，按 scriptId）：有来源记录时以本机 id 为准——改名/重名不误判，
+     * 本地删除后可重装；旧脚本无记录时回退标题匹配（兼容升级前安装的脚本）。
+     */
+    fun isCloudItemInstalled(item: RpaCloudClient.Item): Boolean {
+        val localId = item.scriptId?.let { cloudSources.localIdFor(it) }
+        return if (localId != null) {
+            scripts.any { it.id == localId }
+        } else {
+            scripts.any { it.name == item.title }
+        }
+    }
+
     /** 安装库条目：下载字节 → `RpaScriptStore.importBytes`（与本地 .rpa 导入同一口径）。 */
     suspend fun installCloudItem(item: RpaCloudClient.Item) {
         val scriptId = item.scriptId ?: return
-        val token = accountManager.session.value?.accessToken
-        if (token.isNullOrBlank()) {
+        val session = accountManager.session.value
+        // userId 缺失不进下载流程（§4.10.4）：提示重新登录，禁止 userId=0 装进共享 legacy 库。
+        if (session == null || session.userId <= 0L || session.accessToken.isBlank()) {
             Toast.makeText(context, R.string.float_rpa_cloud_not_logged_in, Toast.LENGTH_SHORT)
                 .show()
             return
         }
-        if (cloudInstalling != null) return
+        if (cloudInstalling != null) {
+            Toast.makeText(context, R.string.float_rpa_cloud_busy, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (isCloudItemInstalled(item)) {
+            Toast.makeText(context, R.string.float_rpa_cloud_installed, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val token = session.accessToken
         cloudInstalling = item.id
         val result = runCatching {
             val bytes = withContext(Dispatchers.IO) { cloudClient.download(token, scriptId) }
@@ -371,6 +397,8 @@ private fun RpaApp(
         }
         cloudInstalling = null
         result.onSuccess { saved ->
+            // 记录来源 scriptId → 本机 id：后续按 scriptId 判已安装/去重。
+            cloudSources.record(scriptId, saved.id)
             refreshScripts()
             Toast.makeText(
                 context,
@@ -983,8 +1011,18 @@ private fun RpaApp(
             onOpenShizuku = onOpenShizuku,
             onOpenAccessibilitySettings = openAccessibilitySettings,
             onOpenCloud = {
-                cloudVisible = true
-                scope.launch { refreshCloudLibrary() }
+                // 云库按 userId 分区（§4.10.4）：拿不到 userId（未登录/注入未回填）
+                // 一律不进云库，提示重新登录，禁止 userId=0 进入下载流程。
+                if ((accountManager.session.value?.userId ?: 0L) <= 0L) {
+                    Toast.makeText(
+                        context,
+                        R.string.float_rpa_cloud_not_logged_in,
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                } else {
+                    cloudVisible = true
+                    scope.launch { refreshCloudLibrary() }
+                }
             },
             onOpen = { target -> openProperty(target) },
             onCreate = { name, mode, pkg ->
@@ -1226,7 +1264,7 @@ private fun RpaApp(
             loading = cloudLoading,
             error = cloudError,
             items = cloudItems,
-            installedNames = scripts.map { it.name }.toSet(),
+            isInstalled = { item -> isCloudItemInstalled(item) },
             installingId = cloudInstalling,
             onDismiss = { cloudVisible = false },
             onRefresh = { scope.launch { refreshCloudLibrary() } },
@@ -1241,7 +1279,7 @@ private fun CloudLibraryDialog(
     loading: Boolean,
     error: String?,
     items: List<RpaCloudClient.Item>,
-    installedNames: Set<String>,
+    isInstalled: (RpaCloudClient.Item) -> Boolean,
     installingId: Long?,
     onDismiss: () -> Unit,
     onRefresh: () -> Unit,
@@ -1284,7 +1322,7 @@ private fun CloudLibraryDialog(
                 items.forEach { item ->
                     CloudLibraryRow(
                         item = item,
-                        installed = installedNames.contains(item.title),
+                        installed = isInstalled(item),
                         installing = installingId == item.id,
                         onInstall = { onInstall(item) },
                     )
@@ -1318,7 +1356,9 @@ private fun CloudLibraryRow(
             color = InkDialog.OnSurfaceMuted,
         )
         Spacer(Modifier.height(6.dp))
-        val actionable = item.available && item.licensed &&
+        // 没有 scriptId 的条目装不进本机库（安装链路按 scriptId 去重），
+        // 不给「点了没反应」的安装按钮，按「不支持安装」提示。
+        val actionable = item.available && item.licensed && item.scriptId != null &&
             item.packageType != "PLUGIN" && !installed && !installing
         if (actionable) {
             InkActionButton(

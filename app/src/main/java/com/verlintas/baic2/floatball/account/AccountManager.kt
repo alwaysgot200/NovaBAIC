@@ -283,6 +283,11 @@ class AccountManager @Inject constructor(
         )
         prefs.saveSession(session)
         _session.value = session
+        // RPA 库按 userId 分区（多产品方案 §4.10.4）：注入会话不带 userId，先与
+        // 退出登录同口径切回共享 legacy 库，再补一次 /getInfo 回填 userId 并切到
+        // 该用户库——与正式登录一致，避免多账号共用 legacy 目录。
+        RpaUserScope.switchTo(context, 0L)
+        ioScope.launch { refreshAccountInfo(session) }
         // 自动化测试一并注入卡密与模型（等价于用户绑定卡密后的网关落盘），
         // 读不到卡密或默认 Agent 缺失时静默跳过，不阻断登录注入本身。
         intent.getStringExtra("debugCardKey")?.takeIf { it.isNotBlank() }?.let { cardKey ->
