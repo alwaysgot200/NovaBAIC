@@ -23,7 +23,9 @@ variables:
   # Docker Runner 已把宿主机 /cache 绑定进作业容器；Gradle 依赖/wrapper 分发
   # 缓存放这里才能跨流水线复用（否则每个容器都要重下 1GB+，网络差的链路会超时）。
   GRADLE_USER_HOME: /cache/gradle
-  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.parallel=true"
+  # 内存/并行策略统一由仓库 gradle.properties 提供（-Xmx2g -XX:MaxMetaspaceSize=512m），
+  # 这里不再覆盖 org.gradle.jvmargs：GRADLE_OPTS 按空格切分，多参数会被拆到启动器 JVM 上。
+  GRADLE_OPTS: "-Dorg.gradle.parallel=true"
 
 # ---- 质量门：标签校验 + 仓库三检查 + 单测 + lint ----
 verify:
